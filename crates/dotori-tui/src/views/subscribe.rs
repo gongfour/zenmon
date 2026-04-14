@@ -1,0 +1,74 @@
+use crate::app::App;
+use dotori_core::types::MessagePayload;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::Frame;
+
+pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
+    let [status_area, messages_area] =
+        Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
+
+    let status_text = if app.sub_paused {
+        Line::from(vec![
+            Span::styled(
+                " PAUSED ",
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+            ),
+            Span::raw(format!("  {} messages buffered  ", app.sub_messages.len())),
+            Span::styled(
+                "Space:resume  j/k:scroll",
+                Style::default().fg(Color::Gray),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                " LIVE ",
+                Style::default().fg(Color::Black).bg(Color::Green),
+            ),
+            Span::raw(format!("  {} messages  ", app.sub_messages.len())),
+            Span::styled("Space:pause", Style::default().fg(Color::Gray)),
+        ])
+    };
+    let status = Paragraph::new(status_text)
+        .block(Block::default().borders(Borders::ALL).title(" Subscribe "));
+    frame.render_widget(status, status_area);
+
+    let scroll = app.sub_scroll as usize;
+    let items: Vec<ListItem> = app
+        .sub_messages
+        .iter()
+        .skip(scroll)
+        .take(messages_area.height as usize)
+        .map(|msg| {
+            let payload_str = match &msg.payload {
+                MessagePayload::Json(v) => {
+                    serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
+                }
+                other => format!("{}", other),
+            };
+            let ts = msg.timestamp.as_deref().unwrap_or("");
+            let line = Line::from(vec![
+                Span::styled(
+                    &msg.key_expr,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!(" [{}]", ts), Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(payload_str, Style::default().fg(Color::White)),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Messages "),
+    );
+    frame.render_widget(list, messages_area);
+}

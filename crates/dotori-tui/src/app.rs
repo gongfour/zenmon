@@ -1,0 +1,278 @@
+use crate::event::AppEvent;
+use crate::views;
+use crossterm::event::{KeyCode, KeyEvent};
+use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders, Tabs};
+use ratatui::Frame;
+use std::collections::VecDeque;
+
+const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Subscribe", "Query", "Nodes"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveView {
+    Dashboard,
+    Topics,
+    Subscribe,
+    Query,
+    Nodes,
+}
+
+impl ActiveView {
+    pub fn index(&self) -> usize {
+        match self {
+            ActiveView::Dashboard => 0,
+            ActiveView::Topics => 1,
+            ActiveView::Subscribe => 2,
+            ActiveView::Query => 3,
+            ActiveView::Nodes => 4,
+        }
+    }
+}
+
+pub struct App {
+    pub active_view: ActiveView,
+    pub should_quit: bool,
+    pub connection_info: String,
+
+    pub topics: Vec<TopicInfo>,
+    pub nodes: Vec<NodeInfo>,
+    pub recent_messages: VecDeque<ZenohMessage>,
+
+    pub sub_messages: VecDeque<ZenohMessage>,
+    pub sub_paused: bool,
+    pub sub_scroll: u16,
+
+    pub topic_filter: String,
+    pub topic_selected: usize,
+    pub topics_filtering: bool,
+
+    pub query_input: String,
+    pub query_results: Vec<ZenohMessage>,
+    pub query_history: Vec<String>,
+    pub query_editing: bool,
+    pub pending_query: Option<String>,
+
+    pub node_selected: usize,
+}
+
+impl App {
+    pub fn new(connection_info: String) -> Self {
+        Self {
+            active_view: ActiveView::Dashboard,
+            should_quit: false,
+            connection_info,
+            topics: Vec::new(),
+            nodes: Vec::new(),
+            recent_messages: VecDeque::with_capacity(100),
+            sub_messages: VecDeque::with_capacity(500),
+            sub_paused: false,
+            sub_scroll: 0,
+            topic_filter: String::new(),
+            topic_selected: 0,
+            topics_filtering: false,
+            query_input: String::new(),
+            query_results: Vec::new(),
+            query_history: Vec::new(),
+            query_editing: false,
+            pending_query: None,
+            node_selected: 0,
+        }
+    }
+
+    pub fn handle_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Key(key) => self.handle_key(key),
+            AppEvent::Zenoh(msg) => self.handle_zenoh_message(msg),
+            AppEvent::Tick => {}
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
+        if !self.is_text_input_active() {
+            match key.code {
+                KeyCode::Char('q') => {
+                    self.should_quit = true;
+                    return;
+                }
+                KeyCode::Char('1') => self.active_view = ActiveView::Dashboard,
+                KeyCode::Char('2') => self.active_view = ActiveView::Topics,
+                KeyCode::Char('3') => self.active_view = ActiveView::Subscribe,
+                KeyCode::Char('4') => self.active_view = ActiveView::Query,
+                KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
+                KeyCode::Esc => {
+                    self.active_view = ActiveView::Dashboard;
+                }
+                _ => self.handle_view_key(key),
+            }
+        } else {
+            self.handle_text_input_key(key);
+        }
+    }
+
+    fn is_text_input_active(&self) -> bool {
+        self.topics_filtering || self.query_editing
+    }
+
+    fn handle_text_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.topics_filtering = false;
+                self.query_editing = false;
+            }
+            KeyCode::Enter => {
+                if self.query_editing {
+                    self.query_editing = false;
+                    if !self.query_input.is_empty() {
+                        self.query_history.push(self.query_input.clone());
+                        self.pending_query = Some(self.query_input.clone());
+                    }
+                }
+                if self.topics_filtering {
+                    self.topics_filtering = false;
+                }
+            }
+            KeyCode::Char(c) => {
+                if self.topics_filtering {
+                    self.topic_filter.push(c);
+                } else if self.query_editing {
+                    self.query_input.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if self.topics_filtering {
+                    self.topic_filter.pop();
+                } else if self.query_editing {
+                    self.query_input.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_view_key(&mut self, key: KeyEvent) {
+        match self.active_view {
+            ActiveView::Topics => match key.code {
+                KeyCode::Char('/') => self.topics_filtering = true,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.topic_selected = self.topic_selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = self.filtered_topics().len().saturating_sub(1);
+                    if self.topic_selected < max {
+                        self.topic_selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    self.active_view = ActiveView::Subscribe;
+                }
+                _ => {}
+            },
+            ActiveView::Subscribe => match key.code {
+                KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.sub_scroll = self.sub_scroll.saturating_add(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.sub_scroll = self.sub_scroll.saturating_sub(1);
+                }
+                _ => {}
+            },
+            ActiveView::Query => match key.code {
+                KeyCode::Char('/') | KeyCode::Char('i') => self.query_editing = true,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if let Some(prev) = self.query_history.last() {
+                        self.query_input = prev.clone();
+                    }
+                }
+                _ => {}
+            },
+            ActiveView::Nodes => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.node_selected = self.node_selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = self.nodes.len().saturating_sub(1);
+                    if self.node_selected < max {
+                        self.node_selected += 1;
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn handle_zenoh_message(&mut self, msg: ZenohMessage) {
+        self.recent_messages.push_front(msg.clone());
+        if self.recent_messages.len() > 100 {
+            self.recent_messages.pop_back();
+        }
+
+        if !self.sub_paused {
+            self.sub_messages.push_front(msg);
+            if self.sub_messages.len() > 500 {
+                self.sub_messages.pop_back();
+            }
+        }
+    }
+
+    pub fn filtered_topics(&self) -> Vec<&TopicInfo> {
+        if self.topic_filter.is_empty() {
+            self.topics.iter().collect()
+        } else {
+            self.topics
+                .iter()
+                .filter(|t| t.key_expr.contains(&self.topic_filter))
+                .collect()
+        }
+    }
+
+    pub fn render(&mut self, frame: &mut Frame) {
+        let [tabs_area, content_area, status_area] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+
+        let tabs = Tabs::new(
+            TAB_TITLES
+                .iter()
+                .enumerate()
+                .map(|(i, t)| format!("[{}] {}", i + 1, t)),
+        )
+        .block(Block::default().borders(Borders::ALL).title(" dotori "))
+        .select(self.active_view.index())
+        .style(Style::default().fg(Color::White))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )
+        .divider("  ");
+        frame.render_widget(tabs, tabs_area);
+
+        match self.active_view {
+            ActiveView::Dashboard => views::dashboard::render(self, frame, content_area),
+            ActiveView::Topics => views::topics::render(self, frame, content_area),
+            ActiveView::Subscribe => views::subscribe::render(self, frame, content_area),
+            ActiveView::Query => views::query::render(self, frame, content_area),
+            ActiveView::Nodes => views::nodes::render(self, frame, content_area),
+        }
+
+        let status = Line::from(format!(
+            " {} | {} | q:quit  1-5:switch view  /:filter",
+            self.connection_info,
+            if self.is_text_input_active() {
+                "INPUT MODE (Esc to cancel)"
+            } else {
+                "NORMAL"
+            }
+        ))
+        .style(Style::default().fg(Color::Black).bg(Color::Cyan));
+        frame.render_widget(status, status_area);
+    }
+}
