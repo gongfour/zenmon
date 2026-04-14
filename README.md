@@ -109,9 +109,34 @@ crates/
 - [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) — Terminal UI
 - [clap](https://clap.rs/) — CLI argument parsing
 
-## TODO
+## Roadmap
 
-- [ ] `dotori pub --rate <HZ>` — repeated publish at fixed frequency for testing/simulation
+### Phase 1 — Network Visibility
+1. [ ] `dotori scout` — discover all Zenoh nodes on the network (ZID, type, locators)
+2. [ ] `dotori info` — show current session info, connected peers/routers, locators
+3. [ ] Topic Hz/throughput — display message rate (msgs/sec) per topic in TUI Topics view
+
+### Phase 2 — Message Metadata
+4. [ ] Encoding display — show payload encoding (`application/json`, `text/plain`, etc.) in sub/TUI
+5. [ ] QoS display — show Priority, Reliability, Congestion control per message (`--qos` flag)
+6. [ ] HLC timestamp parsing — human-readable time + source node ID instead of raw HLC
+
+### Phase 3 — Liveliness & Events
+7. [ ] Liveliness subscription — real-time node online/offline detection in TUI Nodes view
+8. [ ] Transport events — connect/disconnect notifications in TUI
+9. [ ] Pub matching — show whether subscribers exist when publishing
+
+### Phase 4 — Debugging Utilities
+10. [ ] `dotori keyexpr test <A> <B>` — test intersection/inclusion between key expressions
+11. [ ] `dotori pub --rate <HZ>` — repeated publish at fixed frequency for testing
+12. [ ] `dotori pub --congestion block|drop` — congestion control mode selection
+13. [ ] DELETE message display — color-code PUT vs DELETE, filter by kind
+
+### Phase 5 — Advanced Inspection
+14. [ ] Admin space explorer — browse `@/**` for router/plugin/storage state
+15. [ ] Storage/history query — fetch historical data from zenoh storage backends
+16. [ ] Downsampling display — show rate-limiting configuration from router
+17. [ ] Advanced pub/sub miss detection — detect dropped messages via `zenoh-ext`
 
 ## License
 
