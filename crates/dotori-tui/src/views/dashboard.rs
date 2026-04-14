@@ -1,4 +1,4 @@
-use crate::app::App;
+use crate::app::{App, ConnectionState};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -13,10 +13,20 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(body_area);
 
+    let (conn_str, conn_color) = match &app.connection_state {
+        ConnectionState::Connected(zid) => (format!("Connected ({})", &zid[..zid.len().min(16)]), Color::Green),
+        ConnectionState::Connecting => ("Connecting...".to_string(), Color::Yellow),
+        ConnectionState::Disconnected(reason) => (format!("Disconnected — {}", reason), Color::Red),
+    };
+
     let info_text = vec![
         Line::from(vec![
-            Span::styled("Connection: ", Style::default().fg(Color::Gray)),
-            Span::styled(&app.connection_info, Style::default().fg(Color::Green)),
+            Span::styled("Status: ", Style::default().fg(Color::Gray)),
+            Span::styled(conn_str, Style::default().fg(conn_color)),
+        ]),
+        Line::from(vec![
+            Span::styled("Endpoint: ", Style::default().fg(Color::Gray)),
+            Span::styled(&app.endpoint, Style::default().fg(Color::White)),
         ]),
         Line::from(vec![
             Span::styled("Topics: ", Style::default().fg(Color::Gray)),

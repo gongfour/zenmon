@@ -210,8 +210,7 @@ async fn main() -> Result<()> {
         }
 
         Command::Tui { refresh } => {
-            let session = dotori_core::session::open_session(&config).await?;
-            dotori_tui::run(session, refresh).await?;
+            dotori_tui::run(config, refresh).await?;
         }
     }
 

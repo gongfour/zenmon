@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Tabs};
 use ratatui::Frame;
 use std::collections::VecDeque;
@@ -32,10 +32,18 @@ impl ActiveView {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionState {
+    Disconnected(String),
+    Connecting,
+    Connected(String),
+}
+
 pub struct App {
     pub active_view: ActiveView,
     pub should_quit: bool,
-    pub connection_info: String,
+    pub connection_state: ConnectionState,
+    pub endpoint: String,
 
     pub topics: Vec<TopicInfo>,
     pub nodes: Vec<NodeInfo>,
@@ -59,11 +67,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(connection_info: String) -> Self {
+    pub fn new(endpoint: String) -> Self {
         Self {
             active_view: ActiveView::Dashboard,
             should_quit: false,
-            connection_info,
+            connection_state: ConnectionState::Connecting,
+            endpoint,
             topics: Vec::new(),
             nodes: Vec::new(),
             recent_messages: VecDeque::with_capacity(100),
@@ -80,6 +89,10 @@ impl App {
             pending_query: None,
             node_selected: 0,
         }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        matches!(self.connection_state, ConnectionState::Connected(_))
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
@@ -263,16 +276,40 @@ impl App {
             ActiveView::Nodes => views::nodes::render(self, frame, content_area),
         }
 
-        let status = Line::from(format!(
-            " {} | {} | q:quit  1-5:switch view  /:filter",
-            self.connection_info,
-            if self.is_text_input_active() {
-                "INPUT MODE (Esc to cancel)"
-            } else {
-                "NORMAL"
-            }
-        ))
-        .style(Style::default().fg(Color::Black).bg(Color::Cyan));
+        // Status bar with connection state
+        let (conn_text, conn_style) = match &self.connection_state {
+            ConnectionState::Connected(zid) => (
+                format!(" Connected zid:{} ", &zid[..zid.len().min(16)]),
+                Style::default().fg(Color::Black).bg(Color::Green),
+            ),
+            ConnectionState::Connecting => (
+                " Connecting... ".to_string(),
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+            ),
+            ConnectionState::Disconnected(reason) => (
+                format!(" Disconnected: {} ", reason),
+                Style::default().fg(Color::White).bg(Color::Red),
+            ),
+        };
+
+        let mode_text = if self.is_text_input_active() {
+            " INPUT "
+        } else {
+            " NORMAL "
+        };
+
+        let status = Line::from(vec![
+            Span::styled(conn_text, conn_style),
+            Span::styled(
+                format!(" {} ", self.endpoint),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(mode_text, Style::default().fg(Color::Cyan)),
+            Span::styled(
+                " q:quit  1-5:view  /:filter ",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
         frame.render_widget(status, status_area);
     }
 }
