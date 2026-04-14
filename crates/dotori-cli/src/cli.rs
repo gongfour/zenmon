@@ -72,6 +72,15 @@ pub enum Command {
         watch: bool,
     },
 
+    /// Publish a message to a key expression
+    Pub {
+        /// Key expression to publish to
+        key_expr: String,
+
+        /// JSON payload to publish
+        value: String,
+    },
+
     /// Launch interactive TUI dashboard
     Tui {
         /// UI refresh interval in milliseconds

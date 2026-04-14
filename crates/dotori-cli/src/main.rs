@@ -196,6 +196,19 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
+        Command::Pub { key_expr, value } => {
+            let session = dotori_core::session::open_session(&config).await?;
+            session
+                .put(&key_expr, value.clone())
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            eprintln!("Published to '{}': {}", key_expr, value);
+            session
+                .close()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+
         Command::Tui { refresh } => {
             let session = dotori_core::session::open_session(&config).await?;
             dotori_tui::run(session, refresh).await?;
