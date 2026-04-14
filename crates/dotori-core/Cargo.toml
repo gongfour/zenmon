@@ -1,0 +1,12 @@
+[package]
+name = "dotori-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zenoh.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+color-eyre.workspace = true
