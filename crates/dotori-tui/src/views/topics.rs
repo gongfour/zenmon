@@ -138,9 +138,15 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 }
             }
 
+            let scroll_hint = if app.topic_detail_scroll > 0 {
+                format!(" Latest Value (Shift+J/K scroll, line {}) ", app.topic_detail_scroll)
+            } else {
+                " Latest Value (Shift+J/K scroll) ".to_string()
+            };
             let detail = Paragraph::new(lines)
-                .block(Block::default().borders(Borders::ALL).title(" Latest Value "))
-                .wrap(Wrap { trim: false });
+                .block(Block::default().borders(Borders::ALL).title(scroll_hint))
+                .wrap(Wrap { trim: false })
+                .scroll((app.topic_detail_scroll, 0));
             frame.render_widget(detail, detail_area);
         } else {
             let detail = Paragraph::new(Line::from(Span::styled(

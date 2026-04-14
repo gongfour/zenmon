@@ -66,6 +66,7 @@ pub struct App {
     pub topic_filter: String,
     pub topic_selected: usize,
     pub topics_filtering: bool,
+    pub topic_detail_scroll: u16,
 
     pub query_input: String,
     pub query_results: Vec<ZenohMessage>,
@@ -94,6 +95,7 @@ impl App {
             topic_filter: String::new(),
             topic_selected: 0,
             topics_filtering: false,
+            topic_detail_scroll: 0,
             query_input: String::new(),
             query_results: Vec::new(),
             query_history: Vec::new(),
@@ -180,18 +182,28 @@ impl App {
 
     fn handle_view_key(&mut self, key: KeyEvent) {
         match self.active_view {
-            ActiveView::Topics => match key.code {
-                KeyCode::Char('/') => self.topics_filtering = true,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.topic_selected = self.topic_selected.saturating_sub(1);
+            ActiveView::Topics => match (key.modifiers, key.code) {
+                (_, KeyCode::Char('/')) => self.topics_filtering = true,
+                // Shift+J/K or Ctrl+D/U: scroll detail panel
+                (m, KeyCode::Char('J')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
+                    self.topic_detail_scroll = self.topic_detail_scroll.saturating_add(3);
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                (m, KeyCode::Char('K')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
+                    self.topic_detail_scroll = self.topic_detail_scroll.saturating_sub(3);
+                }
+                // j/k: navigate topic list (reset detail scroll)
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                    self.topic_selected = self.topic_selected.saturating_sub(1);
+                    self.topic_detail_scroll = 0;
+                }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
                     let max = self.filtered_topics().len().saturating_sub(1);
                     if self.topic_selected < max {
                         self.topic_selected += 1;
                     }
+                    self.topic_detail_scroll = 0;
                 }
-                KeyCode::Enter => {
+                (_, KeyCode::Enter) => {
                     self.active_view = ActiveView::Subscribe;
                 }
                 _ => {}
