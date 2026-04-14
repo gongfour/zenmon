@@ -25,28 +25,9 @@ pub async fn get(
             Ok(sample) => {
                 let key = sample.key_expr().as_str().to_string();
                 let kind = format!("{}", sample.kind());
-
-                let payload_bytes = sample.payload().to_bytes();
-                let msg_payload =
-                    match serde_json::from_slice::<serde_json::Value>(&payload_bytes) {
-                        Ok(json) => MessagePayload::Json(json),
-                        Err(_) => MessagePayload::Raw {
-                            bytes_len: payload_bytes.len(),
-                        },
-                    };
-
+                let msg_payload = MessagePayload::from_zbytes(sample.payload());
                 let timestamp = sample.timestamp().map(|ts| ts.to_string());
-
-                let attachment = sample.attachment().map(|att| {
-                    let att_bytes = att.to_bytes();
-                    match serde_json::from_slice::<serde_json::Value>(&att_bytes) {
-                        Ok(json) => MessagePayload::Json(json),
-                        Err(_) => match att.try_to_string() {
-                            Ok(s) => MessagePayload::Json(serde_json::Value::String(s.into_owned())),
-                            Err(_) => MessagePayload::Raw { bytes_len: att_bytes.len() },
-                        },
-                    }
-                });
+                let attachment = sample.attachment().map(|att| MessagePayload::from_zbytes(&att));
 
                 results.push(ZenohMessage {
                     key_expr: key,

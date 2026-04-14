@@ -35,6 +35,32 @@ impl std::fmt::Display for MessagePayload {
     }
 }
 
+impl MessagePayload {
+    /// Parse ZBytes into MessagePayload: try JSON first, then string, then raw bytes.
+    pub fn from_zbytes(zbytes: &zenoh::bytes::ZBytes) -> Self {
+        // Try string first (most reliable for cross-language payloads)
+        match zbytes.try_to_string() {
+            Ok(s) => {
+                // Try parsing the string as JSON
+                match serde_json::from_str::<serde_json::Value>(&s) {
+                    Ok(json) => MessagePayload::Json(json),
+                    Err(_) => MessagePayload::Json(serde_json::Value::String(s.into_owned())),
+                }
+            }
+            Err(_) => {
+                // Not valid UTF-8 — try raw bytes as JSON, fallback to raw
+                let bytes = zbytes.to_bytes();
+                match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    Ok(json) => MessagePayload::Json(json),
+                    Err(_) => MessagePayload::Raw {
+                        bytes_len: bytes.len(),
+                    },
+                }
+            }
+        }
+    }
+}
+
 /// Information about a discovered Zenoh node/session.
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeInfo {
