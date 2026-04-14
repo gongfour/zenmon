@@ -109,6 +109,10 @@ crates/
 - [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) — Terminal UI
 - [clap](https://clap.rs/) — CLI argument parsing
 
+## TODO
+
+- [ ] `dotori pub --rate <HZ>` — repeated publish at fixed frequency for testing/simulation
+
 ## License
 
 MIT
