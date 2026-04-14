@@ -39,6 +39,14 @@ pub enum ConnectionState {
     Connected(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryStatus {
+    Idle,
+    Running,
+    Done(usize),
+    Error(String),
+}
+
 pub struct App {
     pub active_view: ActiveView,
     pub should_quit: bool,
@@ -62,6 +70,7 @@ pub struct App {
     pub query_history: Vec<String>,
     pub query_editing: bool,
     pub pending_query: Option<String>,
+    pub query_status: QueryStatus,
 
     pub node_selected: usize,
 }
@@ -87,6 +96,7 @@ impl App {
             query_history: Vec::new(),
             query_editing: false,
             pending_query: None,
+            query_status: QueryStatus::Idle,
             node_selected: 0,
         }
     }

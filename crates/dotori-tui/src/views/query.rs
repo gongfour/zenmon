@@ -1,4 +1,4 @@
-use crate::app::App;
+use crate::app::{App, QueryStatus};
 use dotori_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -7,8 +7,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    let [input_area, results_area, history_area] = Layout::vertical([
+    let [input_area, status_area, results_area, history_area] = Layout::vertical([
         Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(6),
     ])
@@ -33,6 +34,27 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .style(input_style)
         .block(Block::default().borders(Borders::ALL).title(" Query "));
     frame.render_widget(input, input_area);
+
+    // Query status line
+    let status_line = match &app.query_status {
+        QueryStatus::Idle => Line::from(Span::styled(
+            " Ready — enter a key expression to query",
+            Style::default().fg(Color::DarkGray),
+        )),
+        QueryStatus::Running => Line::from(Span::styled(
+            " Querying...",
+            Style::default().fg(Color::Yellow),
+        )),
+        QueryStatus::Done(count) => Line::from(Span::styled(
+            format!(" {} result(s) returned", count),
+            Style::default().fg(Color::Green),
+        )),
+        QueryStatus::Error(e) => Line::from(Span::styled(
+            format!(" Error: {}", e),
+            Style::default().fg(Color::Red),
+        )),
+    };
+    frame.render_widget(status_line, status_area);
 
     let result_items: Vec<ListItem> = app
         .query_results

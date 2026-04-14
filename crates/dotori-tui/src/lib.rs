@@ -2,7 +2,7 @@ pub mod app;
 pub mod event;
 pub mod views;
 
-use app::{App, ConnectionState};
+use app::{App, ConnectionState, QueryStatus};
 use color_eyre::Result;
 use dotori_core::config::DotoriConfig;
 use dotori_core::types::ZenohMessage;
@@ -19,8 +19,8 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
     let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel::<ZenohMessage>();
 
-    // Channel for background reconnection results
     let (conn_tx, mut conn_rx) = mpsc::unbounded_channel::<ConnectResult>();
+    let (query_tx, mut query_rx) = mpsc::unbounded_channel::<QueryResult>();
 
     // Try initial connection in background (non-blocking)
     spawn_connect(config.clone(), conn_tx.clone());
@@ -37,6 +37,8 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
         &zenoh_tx,
         &conn_tx,
         &mut conn_rx,
+        &query_tx,
+        &mut query_rx,
     )
     .await;
 
@@ -52,6 +54,11 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
 enum ConnectResult {
     Connected(Session),
     Failed(String),
+}
+
+enum QueryResult {
+    Ok(Vec<ZenohMessage>),
+    Err(String),
 }
 
 fn spawn_connect(config: DotoriConfig, tx: mpsc::UnboundedSender<ConnectResult>) {
@@ -77,6 +84,8 @@ async fn run_loop(
     zenoh_tx: &mpsc::UnboundedSender<ZenohMessage>,
     conn_tx: &mpsc::UnboundedSender<ConnectResult>,
     conn_rx: &mut mpsc::UnboundedReceiver<ConnectResult>,
+    query_tx: &mpsc::UnboundedSender<QueryResult>,
+    query_rx: &mut mpsc::UnboundedReceiver<QueryResult>,
 ) -> Result<()> {
     let mut refresh_interval = tokio::time::interval(std::time::Duration::from_secs(5));
     let mut reconnect_pending = true; // initial connect is in flight
@@ -84,26 +93,42 @@ async fn run_loop(
     loop {
         terminal.draw(|frame| app.render(frame))?;
 
-        // Execute pending query if connected
+        // Dispatch pending query in background (non-blocking)
         if let Some(key_expr) = app.pending_query.take() {
             if let Some(s) = session.lock().await.as_ref() {
-                match dotori_core::query::get(
-                    s,
-                    &key_expr,
-                    None,
-                    std::time::Duration::from_secs(5),
-                )
-                .await
-                {
-                    Ok(results) => app.query_results = results,
-                    Err(e) => tracing::warn!(error = %e, "Query failed"),
-                }
+                app.query_status = QueryStatus::Running;
+                let s = s.clone();
+                let tx = query_tx.clone();
+                let ke = key_expr.clone();
+                tokio::spawn(async move {
+                    match dotori_core::query::get(
+                        &s, &ke, None, std::time::Duration::from_secs(5),
+                    ).await {
+                        Ok(results) => { let _ = tx.send(QueryResult::Ok(results)); }
+                        Err(e) => { let _ = tx.send(QueryResult::Err(format!("{}", e))); }
+                    }
+                });
+            } else {
+                app.query_status = QueryStatus::Error("Not connected".to_string());
             }
         }
 
         tokio::select! {
             event = events.next() => {
                 app.handle_event(event?);
+            }
+            // Handle background query result
+            Some(result) = query_rx.recv() => {
+                match result {
+                    QueryResult::Ok(results) => {
+                        let count = results.len();
+                        app.query_results = results;
+                        app.query_status = QueryStatus::Done(count);
+                    }
+                    QueryResult::Err(e) => {
+                        app.query_status = QueryStatus::Error(e);
+                    }
+                }
             }
             // Handle background connection result (non-blocking)
             Some(result) = conn_rx.recv() => {
