@@ -16,39 +16,29 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
 
-    // Try to connect, but don't fail if we can't
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
-
-    match dotori_core::session::open_session(&config).await {
-        Ok(s) => {
-            app.connection_state =
-                ConnectionState::Connected(format!("{}", s.zid()));
-            app.topics = dotori_core::discover::discover(&s, "**")
-                .await
-                .unwrap_or_default();
-            app.nodes = dotori_core::registry::list_nodes(&s)
-                .await
-                .unwrap_or_default();
-            *session.lock().await = Some(s);
-        }
-        Err(e) => {
-            let reason = format!("{}", e).chars().take(60).collect::<String>();
-            app.connection_state = ConnectionState::Disconnected(reason);
-        }
-    }
-
-    // Set up Zenoh message channel
     let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel::<ZenohMessage>();
 
-    // Start subscriber if connected
-    if let Some(s) = session.lock().await.as_ref() {
-        let _ = dotori_core::subscriber::subscribe(s, "**", zenoh_tx.clone()).await;
-    }
+    // Channel for background reconnection results
+    let (conn_tx, mut conn_rx) = mpsc::unbounded_channel::<ConnectResult>();
+
+    // Try initial connection in background (non-blocking)
+    spawn_connect(config.clone(), conn_tx.clone());
 
     let mut terminal = ratatui::init();
     let mut events = EventHandler::new(tick_rate_ms, zenoh_rx);
 
-    let result = run_loop(&mut terminal, &mut app, &mut events, &session, &config, &zenoh_tx).await;
+    let result = run_loop(
+        &mut terminal,
+        &mut app,
+        &mut events,
+        &session,
+        &config,
+        &zenoh_tx,
+        &conn_tx,
+        &mut conn_rx,
+    )
+    .await;
 
     ratatui::restore();
 
@@ -59,6 +49,25 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     result
 }
 
+enum ConnectResult {
+    Connected(Session),
+    Failed(String),
+}
+
+fn spawn_connect(config: DotoriConfig, tx: mpsc::UnboundedSender<ConnectResult>) {
+    tokio::spawn(async move {
+        match dotori_core::session::open_session(&config).await {
+            Ok(s) => {
+                let _ = tx.send(ConnectResult::Connected(s));
+            }
+            Err(e) => {
+                let reason = format!("{}", e).chars().take(60).collect::<String>();
+                let _ = tx.send(ConnectResult::Failed(reason));
+            }
+        }
+    });
+}
+
 async fn run_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
@@ -66,8 +75,11 @@ async fn run_loop(
     session: &Arc<Mutex<Option<Session>>>,
     config: &DotoriConfig,
     zenoh_tx: &mpsc::UnboundedSender<ZenohMessage>,
+    conn_tx: &mpsc::UnboundedSender<ConnectResult>,
+    conn_rx: &mut mpsc::UnboundedReceiver<ConnectResult>,
 ) -> Result<()> {
     let mut refresh_interval = tokio::time::interval(std::time::Duration::from_secs(5));
+    let mut reconnect_pending = true; // initial connect is in flight
 
     loop {
         terminal.draw(|frame| app.render(frame))?;
@@ -93,25 +105,29 @@ async fn run_loop(
             event = events.next() => {
                 app.handle_event(event?);
             }
-            _ = refresh_interval.tick() => {
-                // If disconnected, try to reconnect
-                if !app.is_connected() {
-                    app.connection_state = ConnectionState::Connecting;
-                    match dotori_core::session::open_session(config).await {
-                        Ok(s) => {
-                            app.connection_state = ConnectionState::Connected(format!("{}", s.zid()));
-                            app.topics = dotori_core::discover::discover(&s, "**").await.unwrap_or_default();
-                            app.nodes = dotori_core::registry::list_nodes(&s).await.unwrap_or_default();
-                            let _ = dotori_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
-                            *session.lock().await = Some(s);
-                        }
-                        Err(e) => {
-                            let reason = format!("{}", e).chars().take(60).collect::<String>();
-                            app.connection_state = ConnectionState::Disconnected(reason);
-                        }
+            // Handle background connection result (non-blocking)
+            Some(result) = conn_rx.recv() => {
+                reconnect_pending = false;
+                match result {
+                    ConnectResult::Connected(s) => {
+                        app.connection_state = ConnectionState::Connected(format!("{}", s.zid()));
+                        app.topics = dotori_core::discover::discover(&s, "**").await.unwrap_or_default();
+                        app.nodes = dotori_core::registry::list_nodes(&s).await.unwrap_or_default();
+                        let _ = dotori_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
+                        *session.lock().await = Some(s);
                     }
+                    ConnectResult::Failed(reason) => {
+                        app.connection_state = ConnectionState::Disconnected(reason);
+                    }
+                }
+            }
+            _ = refresh_interval.tick() => {
+                if !app.is_connected() && !reconnect_pending {
+                    // Spawn reconnect in background — doesn't block the event loop
+                    app.connection_state = ConnectionState::Connecting;
+                    reconnect_pending = true;
+                    spawn_connect(config.clone(), conn_tx.clone());
                 } else if let Some(s) = session.lock().await.as_ref() {
-                    // Refresh topics and nodes
                     if let Ok(topics) = dotori_core::discover::discover(s, "**").await {
                         app.topics = topics;
                     }
