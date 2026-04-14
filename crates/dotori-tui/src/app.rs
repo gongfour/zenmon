@@ -7,7 +7,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Tabs};
 use ratatui::Frame;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 
 const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Subscribe", "Query", "Nodes"];
 
@@ -54,6 +55,7 @@ pub struct App {
     pub endpoint: String,
 
     pub topics: Vec<TopicInfo>,
+    pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
     pub nodes: Vec<NodeInfo>,
     pub recent_messages: VecDeque<ZenohMessage>,
 
@@ -83,6 +85,7 @@ impl App {
             connection_state: ConnectionState::Connecting,
             endpoint,
             topics: Vec::new(),
+            topic_latest: HashMap::new(),
             nodes: Vec::new(),
             recent_messages: VecDeque::with_capacity(100),
             sub_messages: VecDeque::with_capacity(500),
@@ -236,6 +239,10 @@ impl App {
             });
             self.topics.sort_by(|a, b| a.key_expr.cmp(&b.key_expr));
         }
+
+        // Store latest value per topic
+        self.topic_latest
+            .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
 
         self.recent_messages.push_front(msg.clone());
         if self.recent_messages.len() > 100 {
