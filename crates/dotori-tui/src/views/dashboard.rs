@@ -57,7 +57,7 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .iter()
         .take(50)
         .map(|msg| {
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     &msg.key_expr,
                     Style::default()
@@ -66,7 +66,11 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 ),
                 Span::raw(" | "),
                 Span::styled(format!("{}", msg.payload), Style::default().fg(Color::White)),
-            ]);
+            ];
+            if let Some(att) = &msg.attachment {
+                spans.push(Span::styled(format!(" att:{}", att), Style::default().fg(Color::Magenta)));
+            }
+            let line = Line::from(spans);
             ListItem::new(line)
         })
         .collect();

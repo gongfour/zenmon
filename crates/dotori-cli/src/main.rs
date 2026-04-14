@@ -149,7 +149,10 @@ async fn main() -> Result<()> {
                 println!("No replies for '{}'", key_expr);
             } else {
                 for msg in &results {
-                    println!("{} | {}", msg.key_expr, msg.payload);
+                    let att_str = msg.attachment.as_ref()
+                        .map(|a| format!(" [att: {}]", a))
+                        .unwrap_or_default();
+                    println!("{} | {}{}", msg.key_expr, msg.payload, att_str);
                 }
                 println!("\n{} reply(ies)", results.len());
             }
@@ -214,13 +217,20 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
-        Command::Pub { key_expr, value } => {
+        Command::Pub { key_expr, value, att } => {
             let session = dotori_core::session::open_session(&config).await?;
-            session
-                .put(&key_expr, value.clone())
+            let mut builder = session.put(&key_expr, value.clone());
+            if let Some(ref att_json) = att {
+                builder = builder.attachment(att_json.as_bytes());
+            }
+            builder
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            eprintln!("Published to '{}': {}", key_expr, value);
+            if let Some(ref att_json) = att {
+                eprintln!("Published to '{}': {} [att: {}]", key_expr, value, att_json);
+            } else {
+                eprintln!("Published to '{}': {}", key_expr, value);
+            }
             session
                 .close()
                 .await

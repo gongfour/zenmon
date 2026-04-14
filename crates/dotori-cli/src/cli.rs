@@ -79,6 +79,10 @@ pub enum Command {
 
         /// JSON payload to publish
         value: String,
+
+        /// JSON attachment metadata (e.g. '{"request_id":"001","client_id":"dotori"}')
+        #[arg(long)]
+        att: Option<String>,
     },
 
     /// Launch interactive TUI dashboard
