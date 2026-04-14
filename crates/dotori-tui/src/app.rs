@@ -219,6 +219,14 @@ impl App {
     }
 
     fn handle_zenoh_message(&mut self, msg: ZenohMessage) {
+        // Auto-collect topic from received message
+        if !self.topics.iter().any(|t| t.key_expr == msg.key_expr) {
+            self.topics.push(TopicInfo {
+                key_expr: msg.key_expr.clone(),
+            });
+            self.topics.sort_by(|a, b| a.key_expr.cmp(&b.key_expr));
+        }
+
         self.recent_messages.push_front(msg.clone());
         if self.recent_messages.len() > 100 {
             self.recent_messages.pop_back();

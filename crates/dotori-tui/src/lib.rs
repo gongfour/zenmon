@@ -111,7 +111,6 @@ async fn run_loop(
                 match result {
                     ConnectResult::Connected(s) => {
                         app.connection_state = ConnectionState::Connected(format!("{}", s.zid()));
-                        app.topics = dotori_core::discover::discover(&s, "**").await.unwrap_or_default();
                         app.nodes = dotori_core::registry::list_nodes(&s).await.unwrap_or_default();
                         let _ = dotori_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
                         *session.lock().await = Some(s);
@@ -128,9 +127,6 @@ async fn run_loop(
                     reconnect_pending = true;
                     spawn_connect(config.clone(), conn_tx.clone());
                 } else if let Some(s) = session.lock().await.as_ref() {
-                    if let Ok(topics) = dotori_core::discover::discover(s, "**").await {
-                        app.topics = topics;
-                    }
                     if let Ok(nodes) = dotori_core::registry::list_nodes(s).await {
                         app.nodes = nodes;
                     }
