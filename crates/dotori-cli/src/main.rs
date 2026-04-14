@@ -28,14 +28,28 @@ fn build_config(cli: &Cli) -> DotoriConfig {
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "dotori=info,zenoh=warn".into()),
-        )
-        .init();
 
     let cli = Cli::parse();
+    let is_tui = matches!(cli.command, Command::Tui { .. });
+
+    // TUI mode: suppress all logs to avoid corrupting the terminal display
+    // CLI mode: show logs on stderr as normal
+    if is_tui {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "off".into()),
+            )
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "dotori=info,zenoh=warn".into()),
+            )
+            .init();
+    }
+
     let config = build_config(&cli);
 
     match cli.command {
