@@ -106,10 +106,14 @@ async fn main() -> Result<()> {
                                 format!("{}", msg.payload)
                             };
 
+                            let att_str = msg.attachment.as_ref()
+                                .map(|a| format!(" [att: {}]", a))
+                                .unwrap_or_default();
+
                             if timestamp {
-                                println!("[{}] {} | {}", ts, msg.key_expr, payload_str);
+                                println!("[{}] {} | {}{}", ts, msg.key_expr, payload_str, att_str);
                             } else {
-                                println!("{} | {}", msg.key_expr, payload_str);
+                                println!("{} | {}{}", msg.key_expr, payload_str, att_str);
                             }
                         }
                     }

@@ -14,6 +14,8 @@ pub struct ZenohMessage {
     pub payload: MessagePayload,
     pub timestamp: Option<String>,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<MessagePayload>,
 }
 
 /// Payload of a message — either parsed JSON or raw bytes info.
