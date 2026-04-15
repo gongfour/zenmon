@@ -97,7 +97,7 @@ pub struct App {
 
     pub sub_messages: VecDeque<ZenohMessage>,
     pub sub_paused: bool,
-    pub sub_scroll: u16,
+    pub sub_selected: usize,
 
     pub topic_filter: String,
     pub topic_selected: usize,
@@ -134,7 +134,7 @@ impl App {
             recent_messages: VecDeque::with_capacity(100),
             sub_messages: VecDeque::with_capacity(500),
             sub_paused: false,
-            sub_scroll: 0,
+            sub_selected: 0,
             topic_filter: String::new(),
             topic_selected: 0,
             topics_filtering: false,
@@ -296,10 +296,13 @@ impl App {
             ActiveView::Subscribe => match key.code {
                 KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
                 KeyCode::Up | KeyCode::Char('k') => {
-                    self.sub_scroll = self.sub_scroll.saturating_add(1);
+                    self.sub_selected = self.sub_selected.saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.sub_scroll = self.sub_scroll.saturating_sub(1);
+                    let max = self.sub_messages.len().saturating_sub(1);
+                    if self.sub_selected < max {
+                        self.sub_selected += 1;
+                    }
                 }
                 _ => {}
             },
@@ -354,6 +357,13 @@ impl App {
             self.sub_messages.push_front(msg);
             if self.sub_messages.len() > 500 {
                 self.sub_messages.pop_back();
+            }
+            // Cursor follows its message when a new one pushes the list.
+            if self.sub_selected > 0 && self.sub_selected < self.sub_messages.len() {
+                self.sub_selected += 1;
+            }
+            if self.sub_selected >= self.sub_messages.len() && !self.sub_messages.is_empty() {
+                self.sub_selected = self.sub_messages.len() - 1;
             }
         }
     }
@@ -516,5 +526,39 @@ mod tests {
         // scroll_offset 4, total 20, first_item_row 6
         assert_eq!(list_hit(rect, 6, 4, 20, 6), Some(4));
         assert_eq!(list_hit(rect, 9, 4, 20, 6), Some(7));
+    }
+
+    #[test]
+    fn sub_selected_zero_stays_on_new_message() {
+        let mut app = App::new("test".into());
+        app.sub_selected = 0;
+        let msg = ZenohMessage {
+            key_expr: "a".into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(msg);
+        assert_eq!(app.sub_selected, 0, "cursor at top should stay at top");
+    }
+
+    #[test]
+    fn sub_selected_nonzero_follows_message_through_shift() {
+        let mut app = App::new("test".into());
+        let make = |k: &str| ZenohMessage {
+            key_expr: k.into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(make("a"));
+        app.handle_zenoh_message(make("b"));
+        app.handle_zenoh_message(make("c"));
+        // push_front: sub_messages = [c, b, a], sub_selected still 0
+        app.sub_selected = 1; // pointing at "b"
+        app.handle_zenoh_message(make("d")); // now [d, c, b, a], "b" shifted to index 2
+        assert_eq!(app.sub_selected, 2, "cursor follows 'b' to new index 2");
     }
 }

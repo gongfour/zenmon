@@ -3,10 +3,10 @@ use dotori_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
+pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [status_area, messages_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
@@ -36,12 +36,9 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Subscribe "));
     frame.render_widget(status, status_area);
 
-    let scroll = app.sub_scroll as usize;
     let items: Vec<ListItem> = app
         .sub_messages
         .iter()
-        .skip(scroll)
-        .take(messages_area.height as usize)
         .map(|msg| {
             let payload_str = match &msg.payload {
                 MessagePayload::Json(v) => {
@@ -69,10 +66,14 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Messages "),
-    );
-    frame.render_widget(list, messages_area);
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Messages "))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let mut state = ListState::default().with_selected(Some(app.sub_selected));
+    frame.render_stateful_widget(list, messages_area, &mut state);
 }
