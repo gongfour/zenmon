@@ -123,6 +123,9 @@ pub struct App {
     pub list_rect: Option<ratatui::layout::Rect>,
     pub list_first_item_row: u16,
     pub list_scroll_offset: usize,
+
+    pub toast: Option<(String, std::time::Instant)>,
+    pub toast_is_error: bool,
 }
 
 impl App {
@@ -160,11 +163,23 @@ impl App {
             list_rect: None,
             list_first_item_row: 0,
             list_scroll_offset: 0,
+            toast: None,
+            toast_is_error: false,
         }
     }
 
     pub fn is_connected(&self) -> bool {
         matches!(self.connection_state, ConnectionState::Connected(_))
+    }
+
+    pub fn set_toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some((msg.into(), std::time::Instant::now()));
+        self.toast_is_error = false;
+    }
+
+    pub fn set_error_toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some((msg.into(), std::time::Instant::now()));
+        self.toast_is_error = true;
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
@@ -538,10 +553,26 @@ impl App {
             ),
         };
 
-        let mode_text = if self.is_text_input_active() {
-            " INPUT "
+        let toast_expired = self
+            .toast
+            .as_ref()
+            .map(|(_, t)| t.elapsed().as_secs() >= 2)
+            .unwrap_or(true);
+        if toast_expired {
+            self.toast = None;
+        }
+
+        let middle_span = if let Some((msg, _)) = &self.toast {
+            let style = if self.toast_is_error {
+                Style::default().fg(Color::White).bg(Color::Red)
+            } else {
+                Style::default().fg(Color::Black).bg(Color::Green)
+            };
+            Span::styled(format!(" {} ", msg), style)
+        } else if self.is_text_input_active() {
+            Span::styled(" INPUT ", Style::default().fg(Color::Cyan))
         } else {
-            " NORMAL "
+            Span::styled(" NORMAL ", Style::default().fg(Color::Cyan))
         };
 
         let status = Line::from(vec![
@@ -550,9 +581,9 @@ impl App {
                 format!(" {} ", self.endpoint),
                 Style::default().fg(Color::Gray),
             ),
-            Span::styled(mode_text, Style::default().fg(Color::Cyan)),
+            middle_span,
             Span::styled(
-                " q:quit  1-5:view  /:filter ",
+                " q:quit  1-5:view  /:filter  y:copy ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
