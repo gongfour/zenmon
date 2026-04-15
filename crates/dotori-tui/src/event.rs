@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
-use dotori_core::types::ZenohMessage;
+use dotori_core::types::{NodeInfo, ZenohMessage};
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 
@@ -10,9 +10,13 @@ pub enum AppEvent {
     Mouse(MouseEvent),
     Zenoh(ZenohMessage),
     Tick,
+    AdminNodes(Vec<NodeInfo>),
+    ScoutStarted,
+    ScoutNodes(Vec<NodeInfo>),
 }
 
 pub struct EventHandler {
+    tx: mpsc::UnboundedSender<AppEvent>,
     rx: mpsc::UnboundedReceiver<AppEvent>,
     _task: tokio::task::JoinHandle<()>,
 }
@@ -32,6 +36,7 @@ impl EventHandler {
         });
 
         let tick_delay = std::time::Duration::from_millis(tick_rate_ms);
+        let key_tx = tx.clone();
         let task = tokio::spawn(async move {
             let mut reader = EventStream::new();
             let mut tick_interval = tokio::time::interval(tick_delay);
@@ -47,13 +52,13 @@ impl EventHandler {
                                 match evt {
                                     crossterm::event::Event::Key(key) => {
                                         if key.kind == KeyEventKind::Press
-                                            && tx.send(AppEvent::Key(key)).is_err()
+                                            && key_tx.send(AppEvent::Key(key)).is_err()
                                         {
                                             break;
                                         }
                                     }
                                     crossterm::event::Event::Mouse(m) => {
-                                        if tx.send(AppEvent::Mouse(m)).is_err() {
+                                        if key_tx.send(AppEvent::Mouse(m)).is_err() {
                                             break;
                                         }
                                     }
@@ -65,7 +70,7 @@ impl EventHandler {
                         }
                     },
                     _ = tick => {
-                        if tx.send(AppEvent::Tick).is_err() {
+                        if key_tx.send(AppEvent::Tick).is_err() {
                             break;
                         }
                     },
@@ -73,7 +78,11 @@ impl EventHandler {
             }
         });
 
-        Self { rx, _task: task }
+        Self { tx, rx, _task: task }
+    }
+
+    pub fn sender(&self) -> mpsc::UnboundedSender<AppEvent> {
+        self.tx.clone()
     }
 
     pub async fn next(&mut self) -> Result<AppEvent> {

@@ -1,6 +1,7 @@
 use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use dotori_core::merge::merge_nodes;
 use dotori_core::types::{MessagePayload, NodeInfo, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -8,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 /// Return the tab index hit by a click at `(col, row)`, or `None`.
 pub(crate) fn tab_hit(rects: &[Option<Rect>; 5], col: u16, row: u16) -> Option<usize> {
@@ -54,13 +55,13 @@ fn payload_to_string(p: &MessagePayload) -> String {
     }
 }
 
-const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Subscribe", "Query", "Nodes"];
+const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Stream", "Query", "Nodes"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveView {
     Dashboard,
     Topics,
-    Subscribe,
+    Stream,
     Query,
     Nodes,
 }
@@ -70,7 +71,7 @@ impl ActiveView {
         match self {
             ActiveView::Dashboard => 0,
             ActiveView::Topics => 1,
-            ActiveView::Subscribe => 2,
+            ActiveView::Stream => 2,
             ActiveView::Query => 3,
             ActiveView::Nodes => 4,
         }
@@ -101,6 +102,8 @@ pub struct App {
 
     pub topics: Vec<TopicInfo>,
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
+    pub admin_nodes: Vec<NodeInfo>,
+    pub scout_nodes: Vec<NodeInfo>,
     pub nodes: Vec<NodeInfo>,
     pub recent_messages: VecDeque<ZenohMessage>,
 
@@ -128,6 +131,9 @@ pub struct App {
     pub query_selected: usize,
 
     pub node_selected: usize,
+    pub scout_in_progress: bool,
+    pub last_scout_at: Option<SystemTime>,
+    pub pending_scout_request: bool,
 
     pub list_rect: Option<ratatui::layout::Rect>,
     pub list_first_item_row: u16,
@@ -147,6 +153,8 @@ impl App {
             tab_rects: [None; 5],
             topics: Vec::new(),
             topic_latest: HashMap::new(),
+            admin_nodes: Vec::new(),
+            scout_nodes: Vec::new(),
             nodes: Vec::new(),
             recent_messages: VecDeque::with_capacity(100),
             sub_messages: VecDeque::with_capacity(500),
@@ -169,6 +177,9 @@ impl App {
             query_status: QueryStatus::Idle,
             query_selected: 0,
             node_selected: 0,
+            scout_in_progress: false,
+            last_scout_at: None,
+            pending_scout_request: false,
             list_rect: None,
             list_first_item_row: 0,
             list_scroll_offset: 0,
@@ -207,9 +218,34 @@ impl App {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Mouse(m) => self.handle_mouse(m),
             AppEvent::Zenoh(msg) => self.handle_zenoh_message(msg),
-            AppEvent::Tick => {
-                self.update_hz();
+            AppEvent::Tick => self.update_hz(),
+            AppEvent::AdminNodes(nodes) => self.handle_admin_nodes(nodes),
+            AppEvent::ScoutStarted => {
+                self.scout_in_progress = true;
             }
+            AppEvent::ScoutNodes(nodes) => self.handle_scout_nodes(nodes),
+        }
+    }
+
+    fn handle_admin_nodes(&mut self, nodes: Vec<NodeInfo>) {
+        self.admin_nodes = nodes;
+        self.nodes = merge_nodes(&self.admin_nodes, &self.scout_nodes);
+        self.clamp_node_selection();
+    }
+
+    fn handle_scout_nodes(&mut self, nodes: Vec<NodeInfo>) {
+        self.scout_nodes = nodes;
+        self.last_scout_at = Some(SystemTime::now());
+        self.scout_in_progress = false;
+        self.nodes = merge_nodes(&self.admin_nodes, &self.scout_nodes);
+        self.clamp_node_selection();
+    }
+
+    fn clamp_node_selection(&mut self) {
+        if self.nodes.is_empty() {
+            self.node_selected = 0;
+        } else if self.node_selected >= self.nodes.len() {
+            self.node_selected = self.nodes.len() - 1;
         }
     }
 
@@ -222,7 +258,7 @@ impl App {
                 }
                 KeyCode::Char('1') => self.active_view = ActiveView::Dashboard,
                 KeyCode::Char('2') => self.active_view = ActiveView::Topics,
-                KeyCode::Char('3') => self.active_view = ActiveView::Subscribe,
+                KeyCode::Char('3') => self.active_view = ActiveView::Stream,
                 KeyCode::Char('4') => self.active_view = ActiveView::Query,
                 KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
                 KeyCode::Esc => {
@@ -256,7 +292,7 @@ impl App {
             self.active_view = match idx {
                 0 => ActiveView::Dashboard,
                 1 => ActiveView::Topics,
-                2 => ActiveView::Subscribe,
+                2 => ActiveView::Stream,
                 3 => ActiveView::Query,
                 4 => ActiveView::Nodes,
                 _ => self.active_view,
@@ -264,13 +300,15 @@ impl App {
             return;
         }
 
-        let Some(rect) = self.list_rect else { return };
+        let Some(rect) = self.list_rect else {
+            return;
+        };
         if col < rect.x || col >= rect.x + rect.width {
             return;
         }
         let total = match self.active_view {
             ActiveView::Topics => self.filtered_topics().len(),
-            ActiveView::Subscribe => self.sub_messages.len(),
+            ActiveView::Stream => self.sub_messages.len(),
             ActiveView::Query => self.query_results.len(),
             ActiveView::Nodes => self.nodes.len(),
             ActiveView::Dashboard => return,
@@ -289,7 +327,7 @@ impl App {
                 self.topic_selected = idx;
                 self.topic_detail_scroll = 0;
             }
-            ActiveView::Subscribe => self.sub_selected = idx,
+            ActiveView::Stream => self.sub_selected = idx,
             ActiveView::Query => self.query_selected = idx,
             ActiveView::Nodes => self.node_selected = idx,
             ActiveView::Dashboard => {}
@@ -302,7 +340,7 @@ impl App {
                 self.topic_selected = self.topic_selected.saturating_sub(1);
                 self.topic_detail_scroll = 0;
             }
-            ActiveView::Subscribe => {
+            ActiveView::Stream => {
                 self.sub_selected = self.sub_selected.saturating_sub(1);
             }
             ActiveView::Query => {
@@ -324,7 +362,7 @@ impl App {
                     self.topic_detail_scroll = 0;
                 }
             }
-            ActiveView::Subscribe => {
+            ActiveView::Stream => {
                 let max = self.sub_messages.len().saturating_sub(1);
                 if self.sub_selected < max {
                     self.sub_selected += 1;
@@ -407,14 +445,12 @@ impl App {
                         self.copy_to_clipboard(text, "key_expr");
                     }
                 }
-                // Shift+J/K or Ctrl+D/U: scroll detail panel
                 (m, KeyCode::Char('J')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
                     self.topic_detail_scroll = self.topic_detail_scroll.saturating_add(3);
                 }
                 (m, KeyCode::Char('K')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
                     self.topic_detail_scroll = self.topic_detail_scroll.saturating_sub(3);
                 }
-                // j/k: navigate topic list (reset detail scroll)
                 (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
                     self.topic_selected = self.topic_selected.saturating_sub(1);
                     self.topic_detail_scroll = 0;
@@ -427,11 +463,11 @@ impl App {
                     self.topic_detail_scroll = 0;
                 }
                 (_, KeyCode::Enter) => {
-                    self.active_view = ActiveView::Subscribe;
+                    self.active_view = ActiveView::Stream;
                 }
                 _ => {}
             },
-            ActiveView::Subscribe => match key.code {
+            ActiveView::Stream => match key.code {
                 KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
                 KeyCode::Char('y') => {
                     if let Some(msg) = self.sub_messages.get(self.sub_selected).cloned() {
@@ -495,6 +531,11 @@ impl App {
                         self.node_selected += 1;
                     }
                 }
+                KeyCode::Char('s') => {
+                    if !self.scout_in_progress {
+                        self.pending_scout_request = true;
+                    }
+                }
                 _ => {}
             },
             _ => {}
@@ -502,7 +543,6 @@ impl App {
     }
 
     fn handle_zenoh_message(&mut self, msg: ZenohMessage) {
-        // Auto-collect topic from received message
         if !self.topics.iter().any(|t| t.key_expr == msg.key_expr) {
             self.topics.push(TopicInfo {
                 key_expr: msg.key_expr.clone(),
@@ -510,11 +550,9 @@ impl App {
             self.topics.sort_by(|a, b| a.key_expr.cmp(&b.key_expr));
         }
 
-        // Store latest value per topic
         self.topic_latest
             .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
 
-        // Count messages for Hz calculation
         *self.topic_msg_counts.entry(msg.key_expr.clone()).or_insert(0) += 1;
         self.total_msg_count += 1;
 
@@ -528,7 +566,6 @@ impl App {
             if self.sub_messages.len() > 500 {
                 self.sub_messages.pop_back();
             }
-            // Cursor follows its message when a new one pushes the list.
             if self.sub_selected > 0 && self.sub_selected < self.sub_messages.len() {
                 self.sub_selected += 1;
             }
@@ -538,7 +575,6 @@ impl App {
         }
     }
 
-    /// Recalculate Hz rates. Call this periodically (e.g. every tick).
     pub fn update_hz(&mut self) {
         let elapsed = self.last_hz_update.elapsed().as_secs_f64();
         if elapsed >= 1.0 {
@@ -570,7 +606,6 @@ impl App {
         ])
         .areas(frame.area());
 
-        // Render tabs manually so we can record per-tab rects for hit-testing.
         let tabs_block = Block::default().borders(Borders::ALL).title(" dotori ");
         let inner = tabs_block.inner(tabs_area);
         frame.render_widget(tabs_block, tabs_area);
@@ -601,12 +636,11 @@ impl App {
         match self.active_view {
             ActiveView::Dashboard => views::dashboard::render(self, frame, content_area),
             ActiveView::Topics => views::topics::render(self, frame, content_area),
-            ActiveView::Subscribe => views::subscribe::render(self, frame, content_area),
+            ActiveView::Stream => views::stream::render(self, frame, content_area),
             ActiveView::Query => views::query::render(self, frame, content_area),
             ActiveView::Nodes => views::nodes::render(self, frame, content_area),
         }
 
-        // Status bar with connection state
         let (conn_text, conn_style) = match &self.connection_state {
             ConnectionState::Connected(zid) => (
                 format!(" Connected zid:{} ", &zid[..zid.len().min(16)]),
@@ -681,35 +715,25 @@ mod tests {
 
     #[test]
     fn tab_hit_outside_returns_none() {
-        let rects = [
-            Some(Rect::new(1, 0, 14, 3)),
-            None,
-            None,
-            None,
-            None,
-        ];
+        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None];
         assert_eq!(tab_hit(&rects, 50, 1), None);
         assert_eq!(tab_hit(&rects, 2, 5), None);
     }
 
     #[test]
     fn list_hit_converts_row_to_index() {
-        // list_rect at (0,5) size 20x10 → rows 5..15
-        // first_item_row = 6 (border at row 5)
-        // total_items = 8
         let rect = Rect::new(0, 5, 20, 10);
         assert_eq!(list_hit(rect, 6, 0, 8, 6), Some(0));
         assert_eq!(list_hit(rect, 8, 0, 8, 6), Some(2));
-        assert_eq!(list_hit(rect, 5, 0, 8, 6), None, "border row");
-        assert_eq!(list_hit(rect, 15, 0, 8, 6), None, "at rect.bottom(), exclusive");
-        assert_eq!(list_hit(rect, 20, 0, 8, 6), None, "past rect");
-        assert_eq!(list_hit(rect, 14, 0, 8, 6), None, "row 14 → index 8, past total");
+        assert_eq!(list_hit(rect, 5, 0, 8, 6), None);
+        assert_eq!(list_hit(rect, 15, 0, 8, 6), None);
+        assert_eq!(list_hit(rect, 20, 0, 8, 6), None);
+        assert_eq!(list_hit(rect, 14, 0, 8, 6), None);
     }
 
     #[test]
     fn list_hit_respects_scroll_offset() {
         let rect = Rect::new(0, 5, 20, 10);
-        // scroll_offset 4, total 20, first_item_row 6
         assert_eq!(list_hit(rect, 6, 4, 20, 6), Some(4));
         assert_eq!(list_hit(rect, 9, 4, 20, 6), Some(7));
     }
@@ -726,7 +750,7 @@ mod tests {
             attachment: None,
         };
         app.handle_zenoh_message(msg);
-        assert_eq!(app.sub_selected, 0, "cursor at top should stay at top");
+        assert_eq!(app.sub_selected, 0);
     }
 
     #[test]
@@ -742,9 +766,8 @@ mod tests {
         app.handle_zenoh_message(make("a"));
         app.handle_zenoh_message(make("b"));
         app.handle_zenoh_message(make("c"));
-        // push_front: sub_messages = [c, b, a], sub_selected still 0
-        app.sub_selected = 1; // pointing at "b"
-        app.handle_zenoh_message(make("d")); // now [d, c, b, a], "b" shifted to index 2
-        assert_eq!(app.sub_selected, 2, "cursor follows 'b' to new index 2");
+        app.sub_selected = 1;
+        app.handle_zenoh_message(make("d"));
+        assert_eq!(app.sub_selected, 2);
     }
 }

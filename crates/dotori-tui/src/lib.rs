@@ -11,10 +11,11 @@ use crossterm::terminal::{
 };
 use dotori_core::config::DotoriConfig;
 use dotori_core::types::ZenohMessage;
-use event::EventHandler;
+use event::{AppEvent, EventHandler};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use zenoh::Session;
@@ -29,7 +30,6 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     let (conn_tx, mut conn_rx) = mpsc::unbounded_channel::<ConnectResult>();
     let (query_tx, mut query_rx) = mpsc::unbounded_channel::<QueryResult>();
 
-    // Try initial connection in background (non-blocking)
     spawn_connect(config.clone(), conn_tx.clone());
 
     enable_raw_mode()?;
@@ -38,7 +38,6 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Restore terminal on panic
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
@@ -104,6 +103,57 @@ fn spawn_connect(config: DotoriConfig, tx: mpsc::UnboundedSender<ConnectResult>)
     });
 }
 
+fn spawn_scout_task(
+    config: DotoriConfig,
+    tx: mpsc::UnboundedSender<AppEvent>,
+    timeout: Duration,
+) {
+    tokio::spawn(async move {
+        let _ = tx.send(AppEvent::ScoutStarted);
+        let now = SystemTime::now();
+        match dotori_core::scout::scout(&config, timeout).await {
+            Ok(scouts) => {
+                let nodes: Vec<_> = scouts.iter().map(|s| s.to_node_info(now)).collect();
+                let _ = tx.send(AppEvent::ScoutNodes(nodes));
+            }
+            Err(e) => {
+                tracing::warn!("scout failed: {}", e);
+                let _ = tx.send(AppEvent::ScoutNodes(Vec::new()));
+            }
+        }
+    });
+}
+
+fn spawn_admin_polling_task(
+    session: Arc<Mutex<Option<Session>>>,
+    tx: mpsc::UnboundedSender<AppEvent>,
+) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(2));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            let sess = {
+                let guard = session.lock().await;
+                guard.as_ref().cloned()
+            };
+            let Some(sess) = sess else {
+                continue;
+            };
+            match dotori_core::registry::query_admin_nodes(&sess).await {
+                Ok(nodes) => {
+                    if tx.send(AppEvent::AdminNodes(nodes)).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("admin query failed: {}", e);
+                }
+            }
+        }
+    });
+}
+
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
@@ -116,13 +166,16 @@ async fn run_loop(
     query_tx: &mpsc::UnboundedSender<QueryResult>,
     query_rx: &mut mpsc::UnboundedReceiver<QueryResult>,
 ) -> Result<()> {
-    let mut refresh_interval = tokio::time::interval(std::time::Duration::from_secs(5));
-    let mut reconnect_pending = true; // initial connect is in flight
+    let mut refresh_interval = tokio::time::interval(Duration::from_secs(5));
+    let mut reconnect_pending = true;
+
+    let tx = events.sender();
+    spawn_admin_polling_task(session.clone(), tx.clone());
+    spawn_scout_task(config.clone(), tx.clone(), Duration::from_secs(3));
 
     loop {
         terminal.draw(|frame| app.render(frame))?;
 
-        // Dispatch pending query in background (non-blocking)
         if let Some(key_expr) = app.pending_query.take() {
             if let Some(s) = session.lock().await.as_ref() {
                 app.query_status = QueryStatus::Running;
@@ -130,11 +183,13 @@ async fn run_loop(
                 let tx = query_tx.clone();
                 let ke = key_expr.clone();
                 tokio::spawn(async move {
-                    match dotori_core::query::get(
-                        &s, &ke, None, std::time::Duration::from_secs(5),
-                    ).await {
-                        Ok(results) => { let _ = tx.send(QueryResult::Ok(results)); }
-                        Err(e) => { let _ = tx.send(QueryResult::Err(format!("{}", e))); }
+                    match dotori_core::query::get(&s, &ke, None, Duration::from_secs(5)).await {
+                        Ok(results) => {
+                            let _ = tx.send(QueryResult::Ok(results));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(QueryResult::Err(format!("{}", e)));
+                        }
                     }
                 });
             } else {
@@ -142,11 +197,15 @@ async fn run_loop(
             }
         }
 
+        if app.pending_scout_request {
+            app.pending_scout_request = false;
+            spawn_scout_task(config.clone(), tx.clone(), Duration::from_secs(3));
+        }
+
         tokio::select! {
             event = events.next() => {
                 app.handle_event(event?);
             }
-            // Handle background query result
             Some(result) = query_rx.recv() => {
                 match result {
                     QueryResult::Ok(results) => {
@@ -159,13 +218,11 @@ async fn run_loop(
                     }
                 }
             }
-            // Handle background connection result (non-blocking)
             Some(result) = conn_rx.recv() => {
                 reconnect_pending = false;
                 match result {
                     ConnectResult::Connected(s) => {
                         app.connection_state = ConnectionState::Connected(format!("{}", s.zid()));
-                        app.nodes = dotori_core::registry::list_nodes(&s).await.unwrap_or_default();
                         let _ = dotori_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
                         *session.lock().await = Some(s);
                     }
@@ -176,14 +233,9 @@ async fn run_loop(
             }
             _ = refresh_interval.tick() => {
                 if !app.is_connected() && !reconnect_pending {
-                    // Spawn reconnect in background — doesn't block the event loop
                     app.connection_state = ConnectionState::Connecting;
                     reconnect_pending = true;
                     spawn_connect(config.clone(), conn_tx.clone());
-                } else if let Some(s) = session.lock().await.as_ref() {
-                    if let Ok(nodes) = dotori_core::registry::list_nodes(s).await {
-                        app.nodes = nodes;
-                    }
                 }
             }
         }
