@@ -70,3 +70,20 @@ pub struct NodeInfo {
     pub metadata: Option<serde_json::Value>,
     pub last_seen: Option<SystemTime>,
 }
+
+/// Information about a Zenoh node discovered via scouting.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScoutInfo {
+    pub zid: String,
+    pub whatami: String,
+    pub locators: Vec<String>,
+}
+
+/// Detailed session information.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDetail {
+    pub zid: String,
+    pub mode: String,
+    pub routers: Vec<String>,
+    pub peers: Vec<String>,
+}
