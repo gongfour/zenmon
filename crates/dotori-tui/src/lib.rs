@@ -4,9 +4,16 @@ pub mod views;
 
 use app::{App, ConnectionState, QueryStatus};
 use color_eyre::Result;
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use dotori_core::config::DotoriConfig;
 use dotori_core::types::ZenohMessage;
 use event::EventHandler;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -25,7 +32,24 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     // Try initial connection in background (non-blocking)
     spawn_connect(config.clone(), conn_tx.clone());
 
-    let mut terminal = ratatui::init();
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Restore terminal on panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        original_hook(info);
+    }));
+
     let mut events = EventHandler::new(tick_rate_ms, zenoh_rx);
 
     let result = run_loop(
@@ -42,7 +66,12 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     )
     .await;
 
-    ratatui::restore();
+    disable_raw_mode()?;
+    execute!(
+        std::io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
 
     if let Some(s) = session.lock().await.take() {
         let _ = s.close().await;
@@ -76,7 +105,7 @@ fn spawn_connect(config: DotoriConfig, tx: mpsc::UnboundedSender<ConnectResult>)
 }
 
 async fn run_loop(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
     events: &mut EventHandler,
     session: &Arc<Mutex<Option<Session>>>,

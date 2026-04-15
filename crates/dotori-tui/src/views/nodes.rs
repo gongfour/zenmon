@@ -4,7 +4,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 
-pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
+pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
+    app.list_rect = Some(area);
+    app.list_first_item_row = area.y + 3;
+    app.list_scroll_offset = 0;
+
     let header = Row::new(vec![
         Cell::from("ZID"),
         Cell::from("Kind"),

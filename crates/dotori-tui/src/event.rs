@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::{EventStream, KeyEvent, KeyEventKind};
+use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
 use dotori_core::types::ZenohMessage;
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 #[derive(Clone, Debug)]
 pub enum AppEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Zenoh(ZenohMessage),
     Tick,
 }
@@ -43,12 +44,20 @@ impl EventHandler {
                     maybe_event = crossterm_event => {
                         match maybe_event {
                             Some(Ok(evt)) => {
-                                if let crossterm::event::Event::Key(key) = evt {
-                                    if key.kind == KeyEventKind::Press {
-                                        if tx.send(AppEvent::Key(key)).is_err() {
+                                match evt {
+                                    crossterm::event::Event::Key(key) => {
+                                        if key.kind == KeyEventKind::Press
+                                            && tx.send(AppEvent::Key(key)).is_err()
+                                        {
                                             break;
                                         }
                                     }
+                                    crossterm::event::Event::Mouse(m) => {
+                                        if tx.send(AppEvent::Mouse(m)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                             Some(Err(_)) => break,

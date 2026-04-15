@@ -1,14 +1,58 @@
 use crate::event::AppEvent;
 use crate::views;
-use crossterm::event::{KeyCode, KeyEvent};
-use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
-use ratatui::layout::{Constraint, Layout};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use dotori_core::types::{MessagePayload, NodeInfo, TopicInfo, ZenohMessage};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Tabs};
+use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
+
+/// Return the tab index hit by a click at `(col, row)`, or `None`.
+pub(crate) fn tab_hit(rects: &[Option<Rect>; 5], col: u16, row: u16) -> Option<usize> {
+    for (i, maybe) in rects.iter().enumerate() {
+        if let Some(r) = maybe {
+            if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// Return the list item index hit by a click row, or `None`.
+///
+/// `first_item_row` is the absolute screen row of item 0 (typically `rect.y + 1`
+/// to skip the top border). `scroll_offset` is the number of items skipped before
+/// rendering. `total_items` rejects clicks past the end of the list.
+pub(crate) fn list_hit(
+    rect: Rect,
+    click_row: u16,
+    scroll_offset: usize,
+    total_items: usize,
+    first_item_row: u16,
+) -> Option<usize> {
+    if click_row < first_item_row || click_row >= rect.y + rect.height {
+        return None;
+    }
+    let row_in_list = (click_row - first_item_row) as usize;
+    let idx = row_in_list + scroll_offset;
+    if idx >= total_items {
+        return None;
+    }
+    Some(idx)
+}
+
+fn payload_to_string(p: &MessagePayload) -> String {
+    match p {
+        MessagePayload::Json(v) => {
+            serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string())
+        }
+        MessagePayload::Raw { bytes_len } => format!("<{} bytes>", bytes_len),
+    }
+}
 
 const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Subscribe", "Query", "Nodes"];
 
@@ -53,6 +97,7 @@ pub struct App {
     pub should_quit: bool,
     pub connection_state: ConnectionState,
     pub endpoint: String,
+    pub tab_rects: [Option<ratatui::layout::Rect>; 5],
 
     pub topics: Vec<TopicInfo>,
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
@@ -61,7 +106,7 @@ pub struct App {
 
     pub sub_messages: VecDeque<ZenohMessage>,
     pub sub_paused: bool,
-    pub sub_scroll: u16,
+    pub sub_selected: usize,
 
     pub topic_filter: String,
     pub topic_selected: usize,
@@ -80,8 +125,16 @@ pub struct App {
     pub query_editing: bool,
     pub pending_query: Option<String>,
     pub query_status: QueryStatus,
+    pub query_selected: usize,
 
     pub node_selected: usize,
+
+    pub list_rect: Option<ratatui::layout::Rect>,
+    pub list_first_item_row: u16,
+    pub list_scroll_offset: usize,
+
+    pub toast: Option<(String, std::time::Instant)>,
+    pub toast_is_error: bool,
 }
 
 impl App {
@@ -91,13 +144,14 @@ impl App {
             should_quit: false,
             connection_state: ConnectionState::Connecting,
             endpoint,
+            tab_rects: [None; 5],
             topics: Vec::new(),
             topic_latest: HashMap::new(),
             nodes: Vec::new(),
             recent_messages: VecDeque::with_capacity(100),
             sub_messages: VecDeque::with_capacity(500),
             sub_paused: false,
-            sub_scroll: 0,
+            sub_selected: 0,
             topic_filter: String::new(),
             topic_selected: 0,
             topics_filtering: false,
@@ -113,7 +167,13 @@ impl App {
             query_editing: false,
             pending_query: None,
             query_status: QueryStatus::Idle,
+            query_selected: 0,
             node_selected: 0,
+            list_rect: None,
+            list_first_item_row: 0,
+            list_scroll_offset: 0,
+            toast: None,
+            toast_is_error: false,
         }
     }
 
@@ -121,11 +181,35 @@ impl App {
         matches!(self.connection_state, ConnectionState::Connected(_))
     }
 
+    pub fn set_toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some((msg.into(), std::time::Instant::now()));
+        self.toast_is_error = false;
+    }
+
+    pub fn set_error_toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some((msg.into(), std::time::Instant::now()));
+        self.toast_is_error = true;
+    }
+
+    fn copy_to_clipboard(&mut self, text: String, label: &str) {
+        let byte_len = text.len();
+        match arboard::Clipboard::new() {
+            Ok(mut cb) => match cb.set_text(text) {
+                Ok(()) => self.set_toast(format!("Copied {} ({}B)", label, byte_len)),
+                Err(e) => self.set_error_toast(format!("Copy failed: {}", e)),
+            },
+            Err(e) => self.set_error_toast(format!("Clipboard unavailable: {}", e)),
+        }
+    }
+
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
+            AppEvent::Mouse(m) => self.handle_mouse(m),
             AppEvent::Zenoh(msg) => self.handle_zenoh_message(msg),
-            AppEvent::Tick => { self.update_hz(); }
+            AppEvent::Tick => {
+                self.update_hz();
+            }
         }
     }
 
@@ -153,6 +237,113 @@ impl App {
 
     fn is_text_input_active(&self) -> bool {
         self.topics_filtering || self.query_editing
+    }
+
+    fn handle_mouse(&mut self, ev: MouseEvent) {
+        if self.is_text_input_active() {
+            return;
+        }
+        match ev.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.handle_click(ev.column, ev.row),
+            MouseEventKind::ScrollUp => self.handle_wheel_up(),
+            MouseEventKind::ScrollDown => self.handle_wheel_down(),
+            _ => {}
+        }
+    }
+
+    fn handle_click(&mut self, col: u16, row: u16) {
+        if let Some(idx) = tab_hit(&self.tab_rects, col, row) {
+            self.active_view = match idx {
+                0 => ActiveView::Dashboard,
+                1 => ActiveView::Topics,
+                2 => ActiveView::Subscribe,
+                3 => ActiveView::Query,
+                4 => ActiveView::Nodes,
+                _ => self.active_view,
+            };
+            return;
+        }
+
+        let Some(rect) = self.list_rect else { return };
+        if col < rect.x || col >= rect.x + rect.width {
+            return;
+        }
+        let total = match self.active_view {
+            ActiveView::Topics => self.filtered_topics().len(),
+            ActiveView::Subscribe => self.sub_messages.len(),
+            ActiveView::Query => self.query_results.len(),
+            ActiveView::Nodes => self.nodes.len(),
+            ActiveView::Dashboard => return,
+        };
+        let Some(idx) = list_hit(
+            rect,
+            row,
+            self.list_scroll_offset,
+            total,
+            self.list_first_item_row,
+        ) else {
+            return;
+        };
+        match self.active_view {
+            ActiveView::Topics => {
+                self.topic_selected = idx;
+                self.topic_detail_scroll = 0;
+            }
+            ActiveView::Subscribe => self.sub_selected = idx,
+            ActiveView::Query => self.query_selected = idx,
+            ActiveView::Nodes => self.node_selected = idx,
+            ActiveView::Dashboard => {}
+        }
+    }
+
+    fn handle_wheel_up(&mut self) {
+        match self.active_view {
+            ActiveView::Topics => {
+                self.topic_selected = self.topic_selected.saturating_sub(1);
+                self.topic_detail_scroll = 0;
+            }
+            ActiveView::Subscribe => {
+                self.sub_selected = self.sub_selected.saturating_sub(1);
+            }
+            ActiveView::Query => {
+                self.query_selected = self.query_selected.saturating_sub(1);
+            }
+            ActiveView::Nodes => {
+                self.node_selected = self.node_selected.saturating_sub(1);
+            }
+            ActiveView::Dashboard => {}
+        }
+    }
+
+    fn handle_wheel_down(&mut self) {
+        match self.active_view {
+            ActiveView::Topics => {
+                let max = self.filtered_topics().len().saturating_sub(1);
+                if self.topic_selected < max {
+                    self.topic_selected += 1;
+                    self.topic_detail_scroll = 0;
+                }
+            }
+            ActiveView::Subscribe => {
+                let max = self.sub_messages.len().saturating_sub(1);
+                if self.sub_selected < max {
+                    self.sub_selected += 1;
+                }
+            }
+            ActiveView::Query => {
+                let max = self.query_results.len().saturating_sub(1);
+                if self.query_selected < max {
+                    self.query_selected += 1;
+                }
+            }
+            ActiveView::Nodes => {
+                let max = self.nodes.len().saturating_sub(1);
+                if self.node_selected < max {
+                    self.node_selected += 1;
+                }
+            }
+            ActiveView::Dashboard => {}
+        }
     }
 
     fn handle_text_input_key(&mut self, key: KeyEvent) {
@@ -195,6 +386,27 @@ impl App {
         match self.active_view {
             ActiveView::Topics => match (key.modifiers, key.code) {
                 (_, KeyCode::Char('/')) => self.topics_filtering = true,
+                (_, KeyCode::Char('y')) => {
+                    let filtered = self.filtered_topics();
+                    if let Some(topic) = filtered.get(self.topic_selected) {
+                        let key = topic.key_expr.clone();
+                        drop(filtered);
+                        if let Some((msg, _)) = self.topic_latest.get(&key).cloned() {
+                            let text = payload_to_string(&msg.payload);
+                            self.copy_to_clipboard(text, "payload");
+                        } else {
+                            self.set_error_toast("No data for selected topic");
+                        }
+                    }
+                }
+                (_, KeyCode::Char('Y')) => {
+                    let filtered = self.filtered_topics();
+                    if let Some(topic) = filtered.get(self.topic_selected) {
+                        let text = topic.key_expr.clone();
+                        drop(filtered);
+                        self.copy_to_clipboard(text, "key_expr");
+                    }
+                }
                 // Shift+J/K or Ctrl+D/U: scroll detail panel
                 (m, KeyCode::Char('J')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
                     self.topic_detail_scroll = self.topic_detail_scroll.saturating_add(3);
@@ -221,24 +433,59 @@ impl App {
             },
             ActiveView::Subscribe => match key.code {
                 KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
+                KeyCode::Char('y') => {
+                    if let Some(msg) = self.sub_messages.get(self.sub_selected).cloned() {
+                        let text = payload_to_string(&msg.payload);
+                        self.copy_to_clipboard(text, "payload");
+                    } else {
+                        self.set_error_toast("No message selected");
+                    }
+                }
+                KeyCode::Char('Y') => {
+                    if let Some(msg) = self.sub_messages.get(self.sub_selected).cloned() {
+                        self.copy_to_clipboard(msg.key_expr, "key_expr");
+                    }
+                }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    self.sub_scroll = self.sub_scroll.saturating_add(1);
+                    self.sub_selected = self.sub_selected.saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.sub_scroll = self.sub_scroll.saturating_sub(1);
+                    let max = self.sub_messages.len().saturating_sub(1);
+                    if self.sub_selected < max {
+                        self.sub_selected += 1;
+                    }
                 }
                 _ => {}
             },
             ActiveView::Query => match key.code {
                 KeyCode::Char('/') | KeyCode::Char('i') => self.query_editing = true,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if let Some(prev) = self.query_history.last() {
-                        self.query_input = prev.clone();
+                KeyCode::Char('y') => {
+                    if let Some(msg) = self.query_results.get(self.query_selected).cloned() {
+                        let text = payload_to_string(&msg.payload);
+                        self.copy_to_clipboard(text, "payload");
+                    } else {
+                        self.set_error_toast("No result selected");
                     }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = self.query_results.len().saturating_sub(1);
+                    if self.query_selected < max {
+                        self.query_selected += 1;
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.query_selected = self.query_selected.saturating_sub(1);
                 }
                 _ => {}
             },
             ActiveView::Nodes => match key.code {
+                KeyCode::Char('y') => {
+                    if let Some(node) = self.nodes.get(self.node_selected).cloned() {
+                        self.copy_to_clipboard(node.zid, "zid");
+                    } else {
+                        self.set_error_toast("No node selected");
+                    }
+                }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.node_selected = self.node_selected.saturating_sub(1);
                 }
@@ -281,6 +528,13 @@ impl App {
             if self.sub_messages.len() > 500 {
                 self.sub_messages.pop_back();
             }
+            // Cursor follows its message when a new one pushes the list.
+            if self.sub_selected > 0 && self.sub_selected < self.sub_messages.len() {
+                self.sub_selected += 1;
+            }
+            if self.sub_selected >= self.sub_messages.len() && !self.sub_messages.is_empty() {
+                self.sub_selected = self.sub_messages.len() - 1;
+            }
         }
     }
 
@@ -316,22 +570,33 @@ impl App {
         ])
         .areas(frame.area());
 
-        let tabs = Tabs::new(
-            TAB_TITLES
-                .iter()
-                .enumerate()
-                .map(|(i, t)| format!("[{}] {}", i + 1, t)),
-        )
-        .block(Block::default().borders(Borders::ALL).title(" dotori "))
-        .select(self.active_view.index())
-        .style(Style::default().fg(Color::White))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )
-        .divider("  ");
-        frame.render_widget(tabs, tabs_area);
+        // Render tabs manually so we can record per-tab rects for hit-testing.
+        let tabs_block = Block::default().borders(Borders::ALL).title(" dotori ");
+        let inner = tabs_block.inner(tabs_area);
+        frame.render_widget(tabs_block, tabs_area);
+
+        let divider_width: u16 = 2;
+        let mut x = inner.x;
+        for (i, title) in TAB_TITLES.iter().enumerate() {
+            let label = format!("[{}] {}", i + 1, title);
+            let label_width = label.chars().count() as u16;
+            if x + label_width > inner.x + inner.width {
+                self.tab_rects[i] = None;
+                continue;
+            }
+            let rect = ratatui::layout::Rect::new(x, inner.y, label_width, inner.height);
+            self.tab_rects[i] = Some(rect);
+            let style = if i == self.active_view.index() {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let para = ratatui::widgets::Paragraph::new(Span::styled(label, style));
+            frame.render_widget(para, rect);
+            x += label_width + divider_width;
+        }
 
         match self.active_view {
             ActiveView::Dashboard => views::dashboard::render(self, frame, content_area),
@@ -357,10 +622,26 @@ impl App {
             ),
         };
 
-        let mode_text = if self.is_text_input_active() {
-            " INPUT "
+        let toast_expired = self
+            .toast
+            .as_ref()
+            .map(|(_, t)| t.elapsed().as_secs() >= 2)
+            .unwrap_or(true);
+        if toast_expired {
+            self.toast = None;
+        }
+
+        let middle_span = if let Some((msg, _)) = &self.toast {
+            let style = if self.toast_is_error {
+                Style::default().fg(Color::White).bg(Color::Red)
+            } else {
+                Style::default().fg(Color::Black).bg(Color::Green)
+            };
+            Span::styled(format!(" {} ", msg), style)
+        } else if self.is_text_input_active() {
+            Span::styled(" INPUT ", Style::default().fg(Color::Cyan))
         } else {
-            " NORMAL "
+            Span::styled(" NORMAL ", Style::default().fg(Color::Cyan))
         };
 
         let status = Line::from(vec![
@@ -369,12 +650,101 @@ impl App {
                 format!(" {} ", self.endpoint),
                 Style::default().fg(Color::Gray),
             ),
-            Span::styled(mode_text, Style::default().fg(Color::Cyan)),
+            middle_span,
             Span::styled(
-                " q:quit  1-5:view  /:filter ",
+                " q:quit  1-5:view  /:filter  y:copy ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
         frame.render_widget(status, status_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn tab_hit_inside_rect_returns_index() {
+        let rects = [
+            Some(Rect::new(1, 0, 14, 3)),
+            Some(Rect::new(16, 0, 10, 3)),
+            Some(Rect::new(28, 0, 12, 3)),
+            None,
+            None,
+        ];
+        assert_eq!(tab_hit(&rects, 2, 1), Some(0));
+        assert_eq!(tab_hit(&rects, 20, 1), Some(1));
+        assert_eq!(tab_hit(&rects, 30, 2), Some(2));
+    }
+
+    #[test]
+    fn tab_hit_outside_returns_none() {
+        let rects = [
+            Some(Rect::new(1, 0, 14, 3)),
+            None,
+            None,
+            None,
+            None,
+        ];
+        assert_eq!(tab_hit(&rects, 50, 1), None);
+        assert_eq!(tab_hit(&rects, 2, 5), None);
+    }
+
+    #[test]
+    fn list_hit_converts_row_to_index() {
+        // list_rect at (0,5) size 20x10 → rows 5..15
+        // first_item_row = 6 (border at row 5)
+        // total_items = 8
+        let rect = Rect::new(0, 5, 20, 10);
+        assert_eq!(list_hit(rect, 6, 0, 8, 6), Some(0));
+        assert_eq!(list_hit(rect, 8, 0, 8, 6), Some(2));
+        assert_eq!(list_hit(rect, 5, 0, 8, 6), None, "border row");
+        assert_eq!(list_hit(rect, 15, 0, 8, 6), None, "at rect.bottom(), exclusive");
+        assert_eq!(list_hit(rect, 20, 0, 8, 6), None, "past rect");
+        assert_eq!(list_hit(rect, 14, 0, 8, 6), None, "row 14 → index 8, past total");
+    }
+
+    #[test]
+    fn list_hit_respects_scroll_offset() {
+        let rect = Rect::new(0, 5, 20, 10);
+        // scroll_offset 4, total 20, first_item_row 6
+        assert_eq!(list_hit(rect, 6, 4, 20, 6), Some(4));
+        assert_eq!(list_hit(rect, 9, 4, 20, 6), Some(7));
+    }
+
+    #[test]
+    fn sub_selected_zero_stays_on_new_message() {
+        let mut app = App::new("test".into());
+        app.sub_selected = 0;
+        let msg = ZenohMessage {
+            key_expr: "a".into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(msg);
+        assert_eq!(app.sub_selected, 0, "cursor at top should stay at top");
+    }
+
+    #[test]
+    fn sub_selected_nonzero_follows_message_through_shift() {
+        let mut app = App::new("test".into());
+        let make = |k: &str| ZenohMessage {
+            key_expr: k.into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(make("a"));
+        app.handle_zenoh_message(make("b"));
+        app.handle_zenoh_message(make("c"));
+        // push_front: sub_messages = [c, b, a], sub_selected still 0
+        app.sub_selected = 1; // pointing at "b"
+        app.handle_zenoh_message(make("d")); // now [d, c, b, a], "b" shifted to index 2
+        assert_eq!(app.sub_selected, 2, "cursor follows 'b' to new index 2");
     }
 }
