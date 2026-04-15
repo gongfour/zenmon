@@ -1,11 +1,11 @@
 use crate::event::AppEvent;
 use crate::views;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Tabs};
+use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
@@ -88,6 +88,7 @@ pub struct App {
     pub should_quit: bool,
     pub connection_state: ConnectionState,
     pub endpoint: String,
+    pub tab_rects: [Option<ratatui::layout::Rect>; 5],
 
     pub topics: Vec<TopicInfo>,
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
@@ -126,6 +127,7 @@ impl App {
             should_quit: false,
             connection_state: ConnectionState::Connecting,
             endpoint,
+            tab_rects: [None; 5],
             topics: Vec::new(),
             topic_latest: HashMap::new(),
             nodes: Vec::new(),
@@ -159,7 +161,7 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
-            AppEvent::Mouse(_) => {} // wired in Task 5
+            AppEvent::Mouse(m) => self.handle_mouse(m),
             AppEvent::Zenoh(msg) => self.handle_zenoh_message(msg),
             AppEvent::Tick => {
                 self.update_hz();
@@ -191,6 +193,40 @@ impl App {
 
     fn is_text_input_active(&self) -> bool {
         self.topics_filtering || self.query_editing
+    }
+
+    fn handle_mouse(&mut self, ev: MouseEvent) {
+        if self.is_text_input_active() {
+            return;
+        }
+        match ev.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.handle_click(ev.column, ev.row),
+            MouseEventKind::ScrollUp => self.handle_wheel_up(),
+            MouseEventKind::ScrollDown => self.handle_wheel_down(),
+            _ => {}
+        }
+    }
+
+    fn handle_click(&mut self, col: u16, row: u16) {
+        if let Some(idx) = tab_hit(&self.tab_rects, col, row) {
+            self.active_view = match idx {
+                0 => ActiveView::Dashboard,
+                1 => ActiveView::Topics,
+                2 => ActiveView::Subscribe,
+                3 => ActiveView::Query,
+                4 => ActiveView::Nodes,
+                _ => self.active_view,
+            };
+        }
+        // list-area clicks added in Task 7
+    }
+
+    fn handle_wheel_up(&mut self) {
+        // wired in Task 8
+    }
+
+    fn handle_wheel_down(&mut self) {
+        // wired in Task 8
     }
 
     fn handle_text_input_key(&mut self, key: KeyEvent) {
@@ -354,22 +390,33 @@ impl App {
         ])
         .areas(frame.area());
 
-        let tabs = Tabs::new(
-            TAB_TITLES
-                .iter()
-                .enumerate()
-                .map(|(i, t)| format!("[{}] {}", i + 1, t)),
-        )
-        .block(Block::default().borders(Borders::ALL).title(" dotori "))
-        .select(self.active_view.index())
-        .style(Style::default().fg(Color::White))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )
-        .divider("  ");
-        frame.render_widget(tabs, tabs_area);
+        // Render tabs manually so we can record per-tab rects for hit-testing.
+        let tabs_block = Block::default().borders(Borders::ALL).title(" dotori ");
+        let inner = tabs_block.inner(tabs_area);
+        frame.render_widget(tabs_block, tabs_area);
+
+        let divider_width: u16 = 2;
+        let mut x = inner.x;
+        for (i, title) in TAB_TITLES.iter().enumerate() {
+            let label = format!("[{}] {}", i + 1, title);
+            let label_width = label.chars().count() as u16;
+            if x + label_width > inner.x + inner.width {
+                self.tab_rects[i] = None;
+                continue;
+            }
+            let rect = ratatui::layout::Rect::new(x, inner.y, label_width, inner.height);
+            self.tab_rects[i] = Some(rect);
+            let style = if i == self.active_view.index() {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let para = ratatui::widgets::Paragraph::new(Span::styled(label, style));
+            frame.render_widget(para, rect);
+            x += label_width + divider_width;
+        }
 
         match self.active_view {
             ActiveView::Dashboard => views::dashboard::render(self, frame, content_area),
