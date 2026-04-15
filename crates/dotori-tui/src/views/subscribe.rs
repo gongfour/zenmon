@@ -10,6 +10,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [status_area, messages_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
+    app.list_rect = Some(messages_area);
+    app.list_first_item_row = messages_area.y + 1;
+    app.list_scroll_offset = 0;
+
     let status_text = if app.sub_paused {
         Line::from(vec![
             Span::styled(

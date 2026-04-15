@@ -6,13 +6,17 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
-pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
+pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [filter_area, body_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
 
     let [list_area, detail_area] =
         Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
             .areas(body_area);
+
+    app.list_rect = Some(list_area);
+    app.list_first_item_row = list_area.y + 1;
+    app.list_scroll_offset = 0;
 
     // Filter bar
     let filter_text = if app.topics_filtering {

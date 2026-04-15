@@ -3,10 +3,10 @@ use dotori_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
+pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [input_area, status_area, results_area, history_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(1),
@@ -56,6 +56,10 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
     };
     frame.render_widget(status_line, status_area);
 
+    app.list_rect = Some(results_area);
+    app.list_first_item_row = results_area.y + 1;
+    app.list_scroll_offset = 0;
+
     let result_items: Vec<ListItem> = app
         .query_results
         .iter()
@@ -83,12 +87,19 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         })
         .collect();
     let result_count = result_items.len();
-    let results = List::new(result_items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" Results ({}) ", result_count)),
-    );
-    frame.render_widget(results, results_area);
+    let results = List::new(result_items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Results ({}) ", result_count)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+    let mut results_state = ListState::default().with_selected(Some(app.query_selected));
+    frame.render_stateful_widget(results, results_area, &mut results_state);
 
     let history_items: Vec<ListItem> = app
         .query_history

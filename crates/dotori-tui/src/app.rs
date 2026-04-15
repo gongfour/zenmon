@@ -116,8 +116,13 @@ pub struct App {
     pub query_editing: bool,
     pub pending_query: Option<String>,
     pub query_status: QueryStatus,
+    pub query_selected: usize,
 
     pub node_selected: usize,
+
+    pub list_rect: Option<ratatui::layout::Rect>,
+    pub list_first_item_row: u16,
+    pub list_scroll_offset: usize,
 }
 
 impl App {
@@ -150,7 +155,11 @@ impl App {
             query_editing: false,
             pending_query: None,
             query_status: QueryStatus::Idle,
+            query_selected: 0,
             node_selected: 0,
+            list_rect: None,
+            list_first_item_row: 0,
+            list_scroll_offset: 0,
         }
     }
 
@@ -217,8 +226,39 @@ impl App {
                 4 => ActiveView::Nodes,
                 _ => self.active_view,
             };
+            return;
         }
-        // list-area clicks added in Task 7
+
+        let Some(rect) = self.list_rect else { return };
+        if col < rect.x || col >= rect.x + rect.width {
+            return;
+        }
+        let total = match self.active_view {
+            ActiveView::Topics => self.filtered_topics().len(),
+            ActiveView::Subscribe => self.sub_messages.len(),
+            ActiveView::Query => self.query_results.len(),
+            ActiveView::Nodes => self.nodes.len(),
+            ActiveView::Dashboard => return,
+        };
+        let Some(idx) = list_hit(
+            rect,
+            row,
+            self.list_scroll_offset,
+            total,
+            self.list_first_item_row,
+        ) else {
+            return;
+        };
+        match self.active_view {
+            ActiveView::Topics => {
+                self.topic_selected = idx;
+                self.topic_detail_scroll = 0;
+            }
+            ActiveView::Subscribe => self.sub_selected = idx,
+            ActiveView::Query => self.query_selected = idx,
+            ActiveView::Nodes => self.node_selected = idx,
+            ActiveView::Dashboard => {}
+        }
     }
 
     fn handle_wheel_up(&mut self) {
@@ -308,10 +348,14 @@ impl App {
             },
             ActiveView::Query => match key.code {
                 KeyCode::Char('/') | KeyCode::Char('i') => self.query_editing = true,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if let Some(prev) = self.query_history.last() {
-                        self.query_input = prev.clone();
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = self.query_results.len().saturating_sub(1);
+                    if self.query_selected < max {
+                        self.query_selected += 1;
                     }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.query_selected = self.query_selected.saturating_sub(1);
                 }
                 _ => {}
             },

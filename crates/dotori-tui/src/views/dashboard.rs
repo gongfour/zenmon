@@ -5,7 +5,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
+pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
+    app.list_rect = None;
     let [info_area, body_area] = Layout::vertical([Constraint::Length(5), Constraint::Fill(1)])
         .areas(area);
 
