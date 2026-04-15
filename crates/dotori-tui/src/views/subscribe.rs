@@ -12,7 +12,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
 
     app.list_rect = Some(messages_area);
     app.list_first_item_row = messages_area.y + 1;
-    app.list_scroll_offset = 0;
+    let visible = messages_area.height.saturating_sub(2) as usize;
+    app.list_scroll_offset = if visible > 0 && app.sub_selected >= visible {
+        app.sub_selected + 1 - visible
+    } else {
+        0
+    };
 
     let status_text = if app.sub_paused {
         Line::from(vec![

@@ -58,7 +58,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
 
     app.list_rect = Some(results_area);
     app.list_first_item_row = results_area.y + 1;
-    app.list_scroll_offset = 0;
+    let q_visible = results_area.height.saturating_sub(2) as usize;
+    app.list_scroll_offset = if q_visible > 0 && app.query_selected >= q_visible {
+        app.query_selected + 1 - q_visible
+    } else {
+        0
+    };
 
     let result_items: Vec<ListItem> = app
         .query_results
