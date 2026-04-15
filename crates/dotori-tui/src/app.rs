@@ -2,11 +2,11 @@ use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use dotori_core::merge::merge_nodes;
-use dotori_core::types::{MessagePayload, NodeInfo, TopicInfo, ZenohMessage};
+use dotori_core::types::{MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
@@ -137,6 +137,15 @@ pub struct App {
     pub last_scout_at: Option<SystemTime>,
     pub pending_scout_request: bool,
 
+    pub scout_port_modal_open: bool,
+    pub scout_port_input: String,
+    pub scout_port_current: Option<u16>,
+    pub port_scan_results: Vec<PortScoutResult>,
+    pub port_scan_selected: usize,
+    pub port_scan_in_progress: bool,
+    pub pending_port_scan_request: bool,
+    pub pending_reconnect_port: Option<u16>,
+
     pub list_rect: Option<ratatui::layout::Rect>,
     pub list_first_item_row: u16,
     pub list_scroll_offset: usize,
@@ -184,6 +193,14 @@ impl App {
             scout_in_progress: false,
             last_scout_at: None,
             pending_scout_request: false,
+            scout_port_modal_open: false,
+            scout_port_input: String::new(),
+            scout_port_current: None,
+            port_scan_results: Vec::new(),
+            port_scan_selected: 0,
+            port_scan_in_progress: false,
+            pending_port_scan_request: false,
+            pending_reconnect_port: None,
             list_rect: None,
             list_first_item_row: 0,
             list_scroll_offset: 0,
@@ -228,6 +245,14 @@ impl App {
                 self.scout_in_progress = true;
             }
             AppEvent::ScoutNodes(nodes) => self.handle_scout_nodes(nodes),
+            AppEvent::PortScanStarted => {
+                self.port_scan_in_progress = true;
+            }
+            AppEvent::PortScanResults(results) => {
+                self.port_scan_results = results;
+                self.port_scan_selected = 0;
+                self.port_scan_in_progress = false;
+            }
         }
     }
 
@@ -254,10 +279,19 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.scout_port_modal_open {
+            self.handle_scout_modal_key(key);
+            return;
+        }
         if !self.is_text_input_active() {
             match key.code {
                 KeyCode::Char('q') => {
                     self.should_quit = true;
+                    return;
+                }
+                KeyCode::Char('P') => {
+                    self.scout_port_modal_open = true;
+                    self.scout_port_input.clear();
                     return;
                 }
                 KeyCode::Char('1') => self.active_view = ActiveView::Dashboard,
@@ -276,7 +310,73 @@ impl App {
     }
 
     fn is_text_input_active(&self) -> bool {
-        self.topics_filtering || self.stream_filtering || self.query_editing
+        self.topics_filtering
+            || self.stream_filtering
+            || self.query_editing
+            || self.scout_port_modal_open
+    }
+
+    fn handle_scout_modal_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.scout_port_modal_open = false;
+                self.scout_port_input.clear();
+            }
+            KeyCode::Char('s') => {
+                if self.scout_port_input.is_empty() && !self.port_scan_in_progress {
+                    self.pending_port_scan_request = true;
+                }
+            }
+            KeyCode::Enter => {
+                let from_input = self
+                    .scout_port_input
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| *p > 0);
+                let from_list = if self.scout_port_input.is_empty() {
+                    self.port_scan_results
+                        .iter()
+                        .filter(|r| !r.nodes.is_empty())
+                        .nth(self.port_scan_selected)
+                        .map(|r| r.port)
+                } else {
+                    None
+                };
+                if let Some(port) = from_input.or(from_list) {
+                    self.pending_reconnect_port = Some(port);
+                    self.scout_port_current = Some(port);
+                    self.scout_port_modal_open = false;
+                    self.scout_port_input.clear();
+                    self.set_toast(format!("Reconnecting with scout port {}", port));
+                } else {
+                    self.set_error_toast("Type a port or scan and select one");
+                }
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                if self.scout_port_input.len() < 5 {
+                    self.scout_port_input.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                self.scout_port_input.pop();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.port_scan_selected = self.port_scan_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let hits = self
+                    .port_scan_results
+                    .iter()
+                    .filter(|r| !r.nodes.is_empty())
+                    .count();
+                let max = hits.saturating_sub(1);
+                if self.port_scan_selected < max {
+                    self.port_scan_selected += 1;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn handle_mouse(&mut self, ev: MouseEvent) {
@@ -694,6 +794,10 @@ impl App {
             ActiveView::Nodes => views::nodes::render(self, frame, content_area),
         }
 
+        if self.scout_port_modal_open {
+            self.render_scout_port_modal(frame, content_area);
+        }
+
         let (conn_text, conn_style) = match &self.connection_state {
             ConnectionState::Connected(zid) => (
                 format!(" Connected zid:{} ", &zid[..zid.len().min(16)]),
@@ -731,19 +835,145 @@ impl App {
             Span::styled(" NORMAL ", Style::default().fg(Color::Cyan))
         };
 
+        let port_text = match self.scout_port_current {
+            Some(p) => format!(" scout:{} ", p),
+            None => " scout:7446 ".to_string(),
+        };
+
         let status = Line::from(vec![
             Span::styled(conn_text, conn_style),
             Span::styled(
                 format!(" {} ", self.endpoint),
                 Style::default().fg(Color::Gray),
             ),
+            Span::styled(
+                port_text,
+                Style::default().fg(Color::Black).bg(Color::Magenta),
+            ),
             middle_span,
             Span::styled(
-                " q:quit  1-5:view  /:filter  y:copy ",
+                " q:quit  1-5:view  /:filter  y:copy  P:port ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
         frame.render_widget(status, status_area);
+    }
+
+    fn render_scout_port_modal(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 58.min(content_area.width.saturating_sub(2));
+        let height = 16.min(content_area.height.saturating_sub(2));
+        if width < 20 || height < 8 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Scout Port ")
+            .style(
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let [current_row, input_row, _gap, list_area, hint_row] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+
+        let current_text = match self.scout_port_current {
+            Some(p) => format!(
+                "Current: {} (domain {})",
+                p,
+                p.saturating_sub(7446)
+            ),
+            None => "Current: 7446 (default, domain 0)".to_string(),
+        };
+        frame.render_widget(
+            Paragraph::new(current_text).style(Style::default().fg(Color::Gray)),
+            current_row,
+        );
+
+        let input_text = if self.scout_port_input.is_empty() {
+            "New port: _".to_string()
+        } else {
+            format!("New port: {}_", self.scout_port_input)
+        };
+        frame.render_widget(
+            Paragraph::new(input_text).style(Style::default().fg(Color::Cyan)),
+            input_row,
+        );
+
+        if self.port_scan_in_progress {
+            frame.render_widget(
+                Paragraph::new("Scanning ports 7446-7546 ...")
+                    .style(Style::default().fg(Color::Yellow)),
+                list_area,
+            );
+        } else {
+            let hits: Vec<&PortScoutResult> = self
+                .port_scan_results
+                .iter()
+                .filter(|r| !r.nodes.is_empty())
+                .collect();
+            if hits.is_empty() && self.port_scan_results.is_empty() {
+                frame.render_widget(
+                    Paragraph::new("Press 's' to scan ports 7446-7546")
+                        .style(Style::default().fg(Color::DarkGray)),
+                    list_area,
+                );
+            } else if hits.is_empty() {
+                frame.render_widget(
+                    Paragraph::new("No nodes found in 7446-7546")
+                        .style(Style::default().fg(Color::Red)),
+                    list_area,
+                );
+            } else {
+                let lines: Vec<Line> = hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        let selected = i == self.port_scan_selected;
+                        let marker = if selected { "> " } else { "  " };
+                        let style = if selected {
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::White)
+                        };
+                        Line::from(vec![Span::styled(
+                            format!(
+                                "{}{:>5}  (domain {:<3})  {} node(s)",
+                                marker,
+                                r.port,
+                                r.port.saturating_sub(7446),
+                                r.nodes.len()
+                            ),
+                            style,
+                        )])
+                    })
+                    .collect();
+                frame.render_widget(Paragraph::new(lines), list_area);
+            }
+        }
+
+        frame.render_widget(
+            Paragraph::new(" s:scan  Enter:reconnect  jk/↑↓:select  Esc:close ")
+                .style(Style::default().fg(Color::DarkGray)),
+            hint_row,
+        );
     }
 }
 

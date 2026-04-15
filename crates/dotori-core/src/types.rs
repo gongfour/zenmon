@@ -83,6 +83,13 @@ pub struct ScoutInfo {
     pub locators: Vec<String>,
 }
 
+/// Scouting results grouped by multicast port (for port scan output).
+#[derive(Debug, Clone, Serialize)]
+pub struct PortScoutResult {
+    pub port: u16,
+    pub nodes: Vec<ScoutInfo>,
+}
+
 /// Detailed session information.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionDetail {

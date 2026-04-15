@@ -6,6 +6,114 @@ use color_eyre::Result;
 use dotori_core::config::{ConnectMode, DotoriConfig};
 use std::time::Duration;
 
+/// Pick the most useful locator to display: prefer tcp/IPv4 non-loopback,
+/// then tcp/anything, then the first one. Zenoh peers typically advertise
+/// many interfaces, so picking one keeps the table readable.
+fn pick_best_locator(locators: &[String]) -> Option<&str> {
+    let score = |loc: &str| -> i32 {
+        if !loc.starts_with("tcp/") {
+            return 0;
+        }
+        let addr = &loc[4..];
+        let is_ipv6 = addr.starts_with('[');
+        let is_link_local = addr.starts_with("[fe80") || addr.starts_with("fe80");
+        let is_loopback = addr.starts_with("127.") || addr.starts_with("[::1]");
+        let is_tailscale =
+            addr.starts_with("100.") || addr.starts_with("[fd7a:115c:a1e0");
+        if is_link_local || is_loopback {
+            return 1;
+        }
+        let mut s = 10;
+        if !is_ipv6 {
+            s += 10;
+        }
+        if !is_tailscale {
+            s += 5;
+        }
+        s
+    };
+    locators
+        .iter()
+        .max_by_key(|l| score(l))
+        .map(|s| s.as_str())
+}
+
+fn print_scout_results(
+    results: &[dotori_core::types::PortScoutResult],
+    start: u16,
+    end: u16,
+    per_port_timeout: u64,
+) {
+    let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
+    if hits.is_empty() {
+        println!(
+            "No Zenoh nodes found in ports {}-{} ({}s per port)",
+            start, end, per_port_timeout
+        );
+        return;
+    }
+
+    let total: usize = hits.iter().map(|r| r.nodes.len()).sum();
+
+    for (i, result) in hits.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        let domain = result.port.saturating_sub(7446);
+        println!(
+            "Port {}  (domain {}, {} node{})",
+            result.port,
+            domain,
+            result.nodes.len(),
+            if result.nodes.len() == 1 { "" } else { "s" }
+        );
+        println!("{}", "─".repeat(78));
+        println!("  {:<8} {:<34} {}", "TYPE", "ZID", "LOCATOR");
+        for node in &result.nodes {
+            let loc = pick_best_locator(&node.locators).unwrap_or("(none)");
+            let zid_short = if node.zid.len() > 32 {
+                format!("{}…", &node.zid[..31])
+            } else {
+                node.zid.clone()
+            };
+            println!("  {:<8} {:<34} {}", node.whatami, zid_short, loc);
+        }
+    }
+
+    println!();
+    println!(
+        "Scanned {}-{} · {} node{} on {} port{}",
+        start,
+        end,
+        total,
+        if total == 1 { "" } else { "s" },
+        hits.len(),
+        if hits.len() == 1 { "" } else { "s" }
+    );
+}
+
+fn parse_port_range(s: &str) -> Result<(u16, u16)> {
+    let (start_s, end_s) = s
+        .split_once('-')
+        .ok_or_else(|| color_eyre::eyre::eyre!("port range must be START-END, got '{}'", s))?;
+    let start: u16 = start_s
+        .trim()
+        .parse()
+        .map_err(|e| color_eyre::eyre::eyre!("invalid start port '{}': {}", start_s, e))?;
+    let end: u16 = end_s
+        .trim()
+        .parse()
+        .map_err(|e| color_eyre::eyre::eyre!("invalid end port '{}': {}", end_s, e))?;
+    if start > end {
+        return Err(color_eyre::eyre::eyre!(
+            "start port {} must be <= end port {}",
+            start,
+            end
+        ));
+    }
+    Ok((start, end))
+}
+
 fn build_config(cli: &Cli) -> DotoriConfig {
     let mut cfg = DotoriConfig::from_env();
 
@@ -20,6 +128,9 @@ fn build_config(cli: &Cli) -> DotoriConfig {
     }
     if cli.config.is_some() {
         cfg.config_file = cli.config.clone();
+    }
+    if cli.scout_port.is_some() {
+        cfg.scout_port = cli.scout_port;
     }
 
     cfg
@@ -237,29 +348,24 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
-        Command::Scout { timeout } => {
-            let nodes = dotori_core::scout::scout(
+        Command::Scout {
+            port_range,
+            per_port_timeout,
+        } => {
+            let (start, end) = parse_port_range(&port_range)?;
+            let results = dotori_core::scout::scout_port_range(
                 &config,
-                Duration::from_secs(timeout),
+                start,
+                end,
+                Duration::from_secs(per_port_timeout),
             )
             .await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&nodes)?);
-            } else if nodes.is_empty() {
-                println!("No Zenoh nodes found (scouted for {}s)", timeout);
+                let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
+                println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
-                println!("{:<40} {:<10} {}", "ZID", "TYPE", "LOCATORS");
-                println!("{}", "-".repeat(70));
-                for node in &nodes {
-                    println!(
-                        "{:<40} {:<10} {}",
-                        node.zid,
-                        node.whatami,
-                        node.locators.join(", ")
-                    );
-                }
-                println!("\n{} node(s) found", nodes.len());
+                print_scout_results(&results, start, end, per_port_timeout);
             }
         }
 

@@ -20,9 +20,10 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use zenoh::Session;
 
-pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
+pub async fn run(mut config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
+    app.scout_port_current = config.scout_port;
 
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
     let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel::<ZenohMessage>();
@@ -56,7 +57,7 @@ pub async fn run(config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
         &mut app,
         &mut events,
         &session,
-        &config,
+        &mut config,
         &zenoh_tx,
         &conn_tx,
         &mut conn_rx,
@@ -127,6 +128,28 @@ fn spawn_scout_task(
     });
 }
 
+fn spawn_port_scan_task(config: DotoriConfig, tx: mpsc::UnboundedSender<AppEvent>) {
+    tokio::spawn(async move {
+        let _ = tx.send(AppEvent::PortScanStarted);
+        match dotori_core::scout::scout_port_range(
+            &config,
+            7446,
+            7546,
+            Duration::from_secs(1),
+        )
+        .await
+        {
+            Ok(results) => {
+                let _ = tx.send(AppEvent::PortScanResults(results));
+            }
+            Err(e) => {
+                tracing::warn!("port scan failed: {}", e);
+                let _ = tx.send(AppEvent::PortScanResults(Vec::new()));
+            }
+        }
+    });
+}
+
 fn spawn_admin_polling_task(
     session: Arc<Mutex<Option<Session>>>,
     tx: mpsc::UnboundedSender<AppEvent>,
@@ -162,7 +185,7 @@ async fn run_loop(
     app: &mut App,
     events: &mut EventHandler,
     session: &Arc<Mutex<Option<Session>>>,
-    config: &DotoriConfig,
+    config: &mut DotoriConfig,
     zenoh_tx: &mpsc::UnboundedSender<ZenohMessage>,
     conn_tx: &mpsc::UnboundedSender<ConnectResult>,
     conn_rx: &mut mpsc::UnboundedReceiver<ConnectResult>,
@@ -205,6 +228,20 @@ async fn run_loop(
         if app.pending_scout_request {
             app.pending_scout_request = false;
             spawn_scout_task(config.clone(), tx.clone(), Duration::from_secs(3));
+        }
+
+        if app.pending_port_scan_request {
+            app.pending_port_scan_request = false;
+            spawn_port_scan_task(config.clone(), tx.clone());
+        }
+
+        if let Some(new_port) = app.pending_reconnect_port.take() {
+            config.scout_port = Some(new_port);
+            *session.lock().await = None;
+            app.connection_state = ConnectionState::Connecting;
+            reconnect_pending = true;
+            spawn_connect(config.clone(), conn_tx.clone());
+            needs_redraw = true;
         }
 
         if needs_redraw || app.toast.is_some() {

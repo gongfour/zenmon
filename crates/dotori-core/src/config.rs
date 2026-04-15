@@ -8,6 +8,9 @@ pub struct DotoriConfig {
     pub mode: ConnectMode,
     pub namespace: Option<String>,
     pub config_file: Option<PathBuf>,
+    /// When set, overrides Zenoh's multicast scouting port to
+    /// `224.0.0.224:{scout_port}`. Zenoh default is 7446.
+    pub scout_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +26,7 @@ impl Default for DotoriConfig {
             mode: ConnectMode::Client,
             namespace: None,
             config_file: None,
+            scout_port: None,
         }
     }
 }
@@ -48,6 +52,18 @@ impl DotoriConfig {
             config.insert_json5("namespace", &format!("\"{}\"", ns)).map_err(|e| eyre!(e))?;
         }
 
+        if let Some(port) = self.scout_port {
+            config
+                .insert_json5("scouting/multicast/enabled", "true")
+                .map_err(|e| eyre!(e))?;
+            config
+                .insert_json5(
+                    "scouting/multicast/address",
+                    &format!("\"224.0.0.224:{}\"", port),
+                )
+                .map_err(|e| eyre!(e))?;
+        }
+
         Ok(config)
     }
 
@@ -69,6 +85,11 @@ impl DotoriConfig {
         }
         if let Ok(config_path) = std::env::var("DOTORI_CONFIG") {
             cfg.config_file = Some(PathBuf::from(config_path));
+        }
+        if let Ok(port) = std::env::var("DOTORI_SCOUT_PORT") {
+            if let Ok(p) = port.parse::<u16>() {
+                cfg.scout_port = Some(p);
+            }
         }
 
         cfg

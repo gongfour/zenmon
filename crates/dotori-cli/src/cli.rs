@@ -20,6 +20,11 @@ pub struct Cli {
     #[arg(short, long)]
     pub config: Option<PathBuf>,
 
+    /// Override Zenoh multicast scouting port (default 7446).
+    /// Sets scouting/multicast/address to 224.0.0.224:<PORT>.
+    #[arg(long, value_name = "PORT")]
+    pub scout_port: Option<u16>,
+
     /// Output in JSON format
     #[arg(long)]
     pub json: bool,
@@ -85,11 +90,18 @@ pub enum Command {
         att: Option<String>,
     },
 
-    /// Scout the network for Zenoh nodes (no router needed)
+    /// Scout the network for Zenoh nodes (no router needed).
+    /// Scans a multicast port range in parallel; each port maps to
+    /// Zenoh domain id = port - 7446.
     Scout {
-        /// Scouting timeout in seconds
-        #[arg(long, default_value = "3")]
-        timeout: u64,
+        /// Multicast port range, START-END inclusive.
+        /// Default covers domain ids 0..=100.
+        #[arg(long, value_name = "START-END", default_value = "7446-7546")]
+        port_range: String,
+
+        /// Per-port scouting timeout in seconds
+        #[arg(long, default_value = "1")]
+        per_port_timeout: u64,
     },
 
     /// Show current session information
