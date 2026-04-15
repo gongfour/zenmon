@@ -3,6 +3,7 @@ use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
 use dotori_core::types::{NodeInfo, ZenohMessage};
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 
 #[derive(Clone, Debug)]
 pub enum AppEvent {
@@ -90,5 +91,15 @@ impl EventHandler {
             .recv()
             .await
             .ok_or_else(|| color_eyre::eyre::eyre!("Event channel closed"))
+    }
+
+    pub fn try_next(&mut self) -> Result<Option<AppEvent>> {
+        match self.rx.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => {
+                Err(color_eyre::eyre::eyre!("Event channel closed"))
+            }
+        }
     }
 }

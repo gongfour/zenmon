@@ -110,6 +110,8 @@ pub struct App {
     pub sub_messages: VecDeque<ZenohMessage>,
     pub sub_paused: bool,
     pub sub_selected: usize,
+    pub stream_filter: String,
+    pub stream_filtering: bool,
 
     pub topic_filter: String,
     pub topic_selected: usize,
@@ -160,6 +162,8 @@ impl App {
             sub_messages: VecDeque::with_capacity(500),
             sub_paused: false,
             sub_selected: 0,
+            stream_filter: String::new(),
+            stream_filtering: false,
             topic_filter: String::new(),
             topic_selected: 0,
             topics_filtering: false,
@@ -272,7 +276,7 @@ impl App {
     }
 
     fn is_text_input_active(&self) -> bool {
-        self.topics_filtering || self.query_editing
+        self.topics_filtering || self.stream_filtering || self.query_editing
     }
 
     fn handle_mouse(&mut self, ev: MouseEvent) {
@@ -308,7 +312,7 @@ impl App {
         }
         let total = match self.active_view {
             ActiveView::Topics => self.filtered_topics().len(),
-            ActiveView::Stream => self.sub_messages.len(),
+            ActiveView::Stream => self.filtered_sub_messages().len(),
             ActiveView::Query => self.query_results.len(),
             ActiveView::Nodes => self.nodes.len(),
             ActiveView::Dashboard => return,
@@ -363,7 +367,7 @@ impl App {
                 }
             }
             ActiveView::Stream => {
-                let max = self.sub_messages.len().saturating_sub(1);
+                let max = self.filtered_sub_messages().len().saturating_sub(1);
                 if self.sub_selected < max {
                     self.sub_selected += 1;
                 }
@@ -388,6 +392,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.topics_filtering = false;
+                self.stream_filtering = false;
                 self.query_editing = false;
             }
             KeyCode::Enter => {
@@ -401,10 +406,17 @@ impl App {
                 if self.topics_filtering {
                     self.topics_filtering = false;
                 }
+                if self.stream_filtering {
+                    self.stream_filtering = false;
+                    self.clamp_stream_selection();
+                }
             }
             KeyCode::Char(c) => {
                 if self.topics_filtering {
                     self.topic_filter.push(c);
+                } else if self.stream_filtering {
+                    self.stream_filter.push(c);
+                    self.clamp_stream_selection();
                 } else if self.query_editing {
                     self.query_input.push(c);
                 }
@@ -412,6 +424,9 @@ impl App {
             KeyCode::Backspace => {
                 if self.topics_filtering {
                     self.topic_filter.pop();
+                } else if self.stream_filtering {
+                    self.stream_filter.pop();
+                    self.clamp_stream_selection();
                 } else if self.query_editing {
                     self.query_input.pop();
                 }
@@ -468,9 +483,14 @@ impl App {
                 _ => {}
             },
             ActiveView::Stream => match key.code {
+                KeyCode::Char('/') => self.stream_filtering = true,
                 KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
                 KeyCode::Char('y') => {
-                    if let Some(msg) = self.sub_messages.get(self.sub_selected).cloned() {
+                    if let Some(msg) = self
+                        .filtered_sub_messages()
+                        .get(self.sub_selected)
+                        .map(|msg| (*msg).clone())
+                    {
                         let text = payload_to_string(&msg.payload);
                         self.copy_to_clipboard(text, "payload");
                     } else {
@@ -478,7 +498,11 @@ impl App {
                     }
                 }
                 KeyCode::Char('Y') => {
-                    if let Some(msg) = self.sub_messages.get(self.sub_selected).cloned() {
+                    if let Some(msg) = self
+                        .filtered_sub_messages()
+                        .get(self.sub_selected)
+                        .map(|msg| (*msg).clone())
+                    {
                         self.copy_to_clipboard(msg.key_expr, "key_expr");
                     }
                 }
@@ -486,7 +510,7 @@ impl App {
                     self.sub_selected = self.sub_selected.saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    let max = self.sub_messages.len().saturating_sub(1);
+                    let max = self.filtered_sub_messages().len().saturating_sub(1);
                     if self.sub_selected < max {
                         self.sub_selected += 1;
                     }
@@ -562,16 +586,15 @@ impl App {
         }
 
         if !self.sub_paused {
+            let matches_stream_filter = self.stream_message_matches(&msg);
             self.sub_messages.push_front(msg);
             if self.sub_messages.len() > 500 {
                 self.sub_messages.pop_back();
             }
-            if self.sub_selected > 0 && self.sub_selected < self.sub_messages.len() {
+            if matches_stream_filter && self.sub_selected > 0 {
                 self.sub_selected += 1;
             }
-            if self.sub_selected >= self.sub_messages.len() && !self.sub_messages.is_empty() {
-                self.sub_selected = self.sub_messages.len() - 1;
-            }
+            self.clamp_stream_selection();
         }
     }
 
@@ -595,6 +618,36 @@ impl App {
                 .iter()
                 .filter(|t| t.key_expr.contains(&self.topic_filter))
                 .collect()
+        }
+    }
+
+    pub fn filtered_sub_messages(&self) -> Vec<&ZenohMessage> {
+        self.sub_messages
+            .iter()
+            .filter(|msg| self.stream_message_matches(msg))
+            .collect()
+    }
+
+    fn stream_message_matches(&self, msg: &ZenohMessage) -> bool {
+        if self.stream_filter.is_empty() {
+            return true;
+        }
+
+        msg.key_expr.contains(&self.stream_filter)
+            || payload_to_string(&msg.payload).contains(&self.stream_filter)
+            || msg
+                .attachment
+                .as_ref()
+                .map(|att| payload_to_string(att).contains(&self.stream_filter))
+                .unwrap_or(false)
+    }
+
+    fn clamp_stream_selection(&mut self) {
+        let filtered_len = self.filtered_sub_messages().len();
+        if filtered_len == 0 {
+            self.sub_selected = 0;
+        } else if self.sub_selected >= filtered_len {
+            self.sub_selected = filtered_len - 1;
         }
     }
 
@@ -768,6 +821,57 @@ mod tests {
         app.handle_zenoh_message(make("c"));
         app.sub_selected = 1;
         app.handle_zenoh_message(make("d"));
+        assert_eq!(app.sub_selected, 2);
+    }
+
+    #[test]
+    fn filtered_sub_messages_match_key_and_payload() {
+        let mut app = App::new("test".into());
+        app.handle_zenoh_message(ZenohMessage {
+            key_expr: "robot/pose".into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!({"x": 1})),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        });
+        app.handle_zenoh_message(ZenohMessage {
+            key_expr: "robot/status".into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!("idle")),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        });
+
+        app.stream_filter = "pose".into();
+        assert_eq!(app.filtered_sub_messages().len(), 1);
+        assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/pose");
+
+        app.stream_filter = "idle".into();
+        assert_eq!(app.filtered_sub_messages().len(), 1);
+        assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/status");
+    }
+
+    #[test]
+    fn sub_selected_only_shifts_for_matching_filtered_message() {
+        let mut app = App::new("test".into());
+        let make = |k: &str| ZenohMessage {
+            key_expr: k.into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(make("alpha/1"));
+        app.handle_zenoh_message(make("beta/1"));
+        app.handle_zenoh_message(make("alpha/2"));
+
+        app.stream_filter = "alpha".into();
+        app.sub_selected = 1;
+
+        app.handle_zenoh_message(make("beta/2"));
+        assert_eq!(app.sub_selected, 1);
+
+        app.handle_zenoh_message(make("alpha/3"));
         assert_eq!(app.sub_selected, 2);
     }
 }

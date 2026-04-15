@@ -66,53 +66,72 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Overview "));
     frame.render_widget(info, info_area);
 
-    let msg_items: Vec<ListItem> = app
-        .recent_messages
-        .iter()
-        .take(50)
-        .map(|msg| {
-            let mut spans = vec![
-                Span::styled(
-                    &msg.key_expr,
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" | "),
-                Span::styled(format!("{}", msg.payload), Style::default().fg(Color::White)),
-            ];
-            if let Some(att) = &msg.attachment {
-                spans.push(Span::styled(format!(" att:{}", att), Style::default().fg(Color::Magenta)));
-            }
-            let line = Line::from(spans);
-            ListItem::new(line)
-        })
-        .collect();
-    let msg_list = List::new(msg_items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Recent Messages "),
-    );
-    frame.render_widget(msg_list, left_area);
-
     let node_items: Vec<ListItem> = app
         .nodes
         .iter()
         .map(|node| {
-            let line = Line::from(vec![
+            let kind_style = match node.kind.as_str() {
+                "router" => Style::default().fg(Color::Green),
+                "peer" => Style::default().fg(Color::Blue),
+                "client" => Style::default().fg(Color::Gray),
+                _ => Style::default().fg(Color::White),
+            };
+            let locator_text = if node.locators.is_empty() {
+                "-".to_string()
+            } else {
+                node.locators.join(", ")
+            };
+            ListItem::new(Line::from(vec![
                 Span::styled(
                     &node.zid[..node.zid.len().min(16)],
-                    Style::default().fg(Color::Yellow),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" "),
-                Span::styled(&node.kind, Style::default().fg(Color::Green)),
-                Span::raw(" "),
-                Span::styled(node.locators.join(", "), Style::default().fg(Color::Gray)),
-            ]);
-            ListItem::new(line)
+                Span::raw("  "),
+                Span::styled(&node.kind, kind_style),
+                Span::raw("  "),
+                Span::styled(locator_text, Style::default().fg(Color::DarkGray)),
+            ]))
         })
         .collect();
-    let node_list = List::new(node_items)
-        .block(Block::default().borders(Borders::ALL).title(" Nodes "));
-    frame.render_widget(node_list, right_area);
+    let node_list = List::new(node_items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Nodes ({}) ", app.nodes.len())),
+    );
+    frame.render_widget(node_list, left_area);
+
+    let topic_items: Vec<ListItem> = app
+        .topics
+        .iter()
+        .map(|topic| {
+            let has_data = app.topic_latest.contains_key(&topic.key_expr);
+            let hz = app.topic_hz.get(&topic.key_expr).copied().unwrap_or(0.0);
+            let topic_style = if has_data {
+                Style::default().fg(Color::White)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let hz_str = if hz > 0.0 {
+                format!("{:.1} Hz", hz)
+            } else {
+                "-".to_string()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    &topic.key_expr,
+                    topic_style.add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(hz_str, Style::default().fg(Color::Green)),
+            ]))
+        })
+        .collect();
+    let topic_list = List::new(topic_items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Topics ({}) ", app.topics.len())),
+    );
+    frame.render_widget(topic_list, right_area);
 }

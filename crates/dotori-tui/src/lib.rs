@@ -89,6 +89,9 @@ enum QueryResult {
     Err(String),
 }
 
+const REDRAW_INTERVAL_MS: u64 = 66;
+const MAX_PENDING_EVENTS_PER_BATCH: usize = 512;
+
 fn spawn_connect(config: DotoriConfig, tx: mpsc::UnboundedSender<ConnectResult>) {
     tokio::spawn(async move {
         match dotori_core::session::open_session(&config).await {
@@ -167,15 +170,17 @@ async fn run_loop(
     query_rx: &mut mpsc::UnboundedReceiver<QueryResult>,
 ) -> Result<()> {
     let mut refresh_interval = tokio::time::interval(Duration::from_secs(5));
+    refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut redraw_interval = tokio::time::interval(Duration::from_millis(REDRAW_INTERVAL_MS));
+    redraw_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut reconnect_pending = true;
+    let mut needs_redraw = true;
 
     let tx = events.sender();
     spawn_admin_polling_task(session.clone(), tx.clone());
     spawn_scout_task(config.clone(), tx.clone(), Duration::from_secs(3));
 
     loop {
-        terminal.draw(|frame| app.render(frame))?;
-
         if let Some(key_expr) = app.pending_query.take() {
             if let Some(s) = session.lock().await.as_ref() {
                 app.query_status = QueryStatus::Running;
@@ -202,9 +207,16 @@ async fn run_loop(
             spawn_scout_task(config.clone(), tx.clone(), Duration::from_secs(3));
         }
 
+        if needs_redraw || app.toast.is_some() {
+            terminal.draw(|frame| app.render(frame))?;
+            needs_redraw = false;
+        }
+
         tokio::select! {
             event = events.next() => {
                 app.handle_event(event?);
+                drain_pending_events(events, app, MAX_PENDING_EVENTS_PER_BATCH)?;
+                needs_redraw = true;
             }
             Some(result) = query_rx.recv() => {
                 match result {
@@ -217,6 +229,7 @@ async fn run_loop(
                         app.query_status = QueryStatus::Error(e);
                     }
                 }
+                needs_redraw = true;
             }
             Some(result) = conn_rx.recv() => {
                 reconnect_pending = false;
@@ -230,19 +243,32 @@ async fn run_loop(
                         app.connection_state = ConnectionState::Disconnected(reason);
                     }
                 }
+                needs_redraw = true;
             }
             _ = refresh_interval.tick() => {
                 if !app.is_connected() && !reconnect_pending {
                     app.connection_state = ConnectionState::Connecting;
                     reconnect_pending = true;
                     spawn_connect(config.clone(), conn_tx.clone());
+                    needs_redraw = true;
                 }
             }
+            _ = redraw_interval.tick() => {}
         }
 
         if app.should_quit {
             break;
         }
+    }
+    Ok(())
+}
+
+fn drain_pending_events(events: &mut EventHandler, app: &mut App, limit: usize) -> Result<()> {
+    for _ in 0..limit {
+        let Some(event) = events.try_next()? else {
+            break;
+        };
+        app.handle_event(event);
     }
     Ok(())
 }
