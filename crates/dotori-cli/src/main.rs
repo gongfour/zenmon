@@ -164,7 +164,7 @@ async fn main() -> Result<()> {
 
         Command::Nodes { watch } => {
             let session = dotori_core::session::open_session(&config).await?;
-            let nodes = dotori_core::registry::list_nodes(&session).await?;
+            let nodes = dotori_core::registry::query_admin_nodes(&session).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&nodes)?);
@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
-                            let updated = dotori_core::registry::list_nodes(&session).await?;
+                            let updated = dotori_core::registry::query_admin_nodes(&session).await?;
                             print!("\x1B[2J\x1B[H");
                             println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
                             println!("{}", "-".repeat(70));

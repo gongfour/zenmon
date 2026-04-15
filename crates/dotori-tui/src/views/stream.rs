@@ -42,7 +42,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
         ])
     };
     let status = Paragraph::new(status_text)
-        .block(Block::default().borders(Borders::ALL).title(" Subscribe "));
+        .block(Block::default().borders(Borders::ALL).title(" Stream "));
     frame.render_widget(status, status_area);
 
     let items: Vec<ListItem> = app

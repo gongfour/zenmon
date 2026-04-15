@@ -5,5 +5,6 @@ pub mod discover;
 pub mod subscriber;
 pub mod query;
 pub mod registry;
+pub mod merge;
 pub mod scout;
 pub mod info;
