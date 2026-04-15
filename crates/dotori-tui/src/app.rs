@@ -1,7 +1,7 @@
 use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
+use dotori_core::types::{MessagePayload, NodeInfo, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -43,6 +43,15 @@ pub(crate) fn list_hit(
         return None;
     }
     Some(idx)
+}
+
+fn payload_to_string(p: &MessagePayload) -> String {
+    match p {
+        MessagePayload::Json(v) => {
+            serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string())
+        }
+        MessagePayload::Raw { bytes_len } => format!("<{} bytes>", bytes_len),
+    }
 }
 
 const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Subscribe", "Query", "Nodes"];
@@ -180,6 +189,17 @@ impl App {
     pub fn set_error_toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), std::time::Instant::now()));
         self.toast_is_error = true;
+    }
+
+    fn copy_to_clipboard(&mut self, text: String, label: &str) {
+        let byte_len = text.len();
+        match arboard::Clipboard::new() {
+            Ok(mut cb) => match cb.set_text(text) {
+                Ok(()) => self.set_toast(format!("Copied {} ({}B)", label, byte_len)),
+                Err(e) => self.set_error_toast(format!("Copy failed: {}", e)),
+            },
+            Err(e) => self.set_error_toast(format!("Clipboard unavailable: {}", e)),
+        }
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
@@ -366,6 +386,27 @@ impl App {
         match self.active_view {
             ActiveView::Topics => match (key.modifiers, key.code) {
                 (_, KeyCode::Char('/')) => self.topics_filtering = true,
+                (_, KeyCode::Char('y')) => {
+                    let filtered = self.filtered_topics();
+                    if let Some(topic) = filtered.get(self.topic_selected) {
+                        let key = topic.key_expr.clone();
+                        drop(filtered);
+                        if let Some((msg, _)) = self.topic_latest.get(&key).cloned() {
+                            let text = payload_to_string(&msg.payload);
+                            self.copy_to_clipboard(text, "payload");
+                        } else {
+                            self.set_error_toast("No data for selected topic");
+                        }
+                    }
+                }
+                (_, KeyCode::Char('Y')) => {
+                    let filtered = self.filtered_topics();
+                    if let Some(topic) = filtered.get(self.topic_selected) {
+                        let text = topic.key_expr.clone();
+                        drop(filtered);
+                        self.copy_to_clipboard(text, "key_expr");
+                    }
+                }
                 // Shift+J/K or Ctrl+D/U: scroll detail panel
                 (m, KeyCode::Char('J')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
                     self.topic_detail_scroll = self.topic_detail_scroll.saturating_add(3);
@@ -392,6 +433,19 @@ impl App {
             },
             ActiveView::Subscribe => match key.code {
                 KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
+                KeyCode::Char('y') => {
+                    if let Some(msg) = self.sub_messages.get(self.sub_selected).cloned() {
+                        let text = payload_to_string(&msg.payload);
+                        self.copy_to_clipboard(text, "payload");
+                    } else {
+                        self.set_error_toast("No message selected");
+                    }
+                }
+                KeyCode::Char('Y') => {
+                    if let Some(msg) = self.sub_messages.get(self.sub_selected).cloned() {
+                        self.copy_to_clipboard(msg.key_expr, "key_expr");
+                    }
+                }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.sub_selected = self.sub_selected.saturating_sub(1);
                 }
@@ -405,6 +459,14 @@ impl App {
             },
             ActiveView::Query => match key.code {
                 KeyCode::Char('/') | KeyCode::Char('i') => self.query_editing = true,
+                KeyCode::Char('y') => {
+                    if let Some(msg) = self.query_results.get(self.query_selected).cloned() {
+                        let text = payload_to_string(&msg.payload);
+                        self.copy_to_clipboard(text, "payload");
+                    } else {
+                        self.set_error_toast("No result selected");
+                    }
+                }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let max = self.query_results.len().saturating_sub(1);
                     if self.query_selected < max {
@@ -417,6 +479,13 @@ impl App {
                 _ => {}
             },
             ActiveView::Nodes => match key.code {
+                KeyCode::Char('y') => {
+                    if let Some(node) = self.nodes.get(self.node_selected).cloned() {
+                        self.copy_to_clipboard(node.zid, "zid");
+                    } else {
+                        self.set_error_toast("No node selected");
+                    }
+                }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.node_selected = self.node_selected.saturating_sub(1);
                 }
