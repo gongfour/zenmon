@@ -47,6 +47,19 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 Style::default().fg(Color::Yellow),
             ),
         ]),
+        Line::from(vec![
+            Span::styled("Throughput: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{:.1} msg/s", app.total_hz),
+                Style::default().fg(Color::Green),
+            ),
+            Span::raw("  "),
+            Span::styled("Active topics: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{}", app.topic_hz.values().filter(|&&hz| hz > 0.0).count()),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
     ];
     let info = Paragraph::new(info_text)
         .block(Block::default().borders(Borders::ALL).title(" Overview "));

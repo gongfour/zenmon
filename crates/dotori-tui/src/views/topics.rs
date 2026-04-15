@@ -40,6 +40,7 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .map(|(i, topic)| {
             let is_selected = i == app.topic_selected;
             let has_data = app.topic_latest.contains_key(&topic.key_expr);
+            let hz = app.topic_hz.get(&topic.key_expr).copied().unwrap_or(0.0);
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Black)
@@ -51,9 +52,15 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 Style::default().fg(Color::DarkGray)
             };
             let prefix = if is_selected { ">> " } else { "   " };
+            let hz_str = if hz > 0.0 {
+                format!(" {:.1} Hz", hz)
+            } else {
+                String::new()
+            };
             ListItem::new(Line::from(vec![
                 Span::raw(prefix),
                 Span::styled(&topic.key_expr, style),
+                Span::styled(hz_str, Style::default().fg(Color::Green)),
             ]))
         })
         .collect();
@@ -106,6 +113,13 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 Line::from(vec![
                     Span::styled("Kind: ", Style::default().fg(Color::Gray)),
                     Span::styled(&msg.kind, Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Rate: ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        format!("{:.1} Hz", app.topic_hz.get(key.as_str()).copied().unwrap_or(0.0)),
+                        Style::default().fg(Color::Green),
+                    ),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled("Payload:", Style::default().fg(Color::Gray))),

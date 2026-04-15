@@ -68,6 +68,12 @@ pub struct App {
     pub topics_filtering: bool,
     pub topic_detail_scroll: u16,
 
+    pub topic_msg_counts: HashMap<String, u32>,
+    pub topic_hz: HashMap<String, f64>,
+    pub last_hz_update: Instant,
+    pub total_msg_count: u32,
+    pub total_hz: f64,
+
     pub query_input: String,
     pub query_results: Vec<ZenohMessage>,
     pub query_history: Vec<String>,
@@ -96,6 +102,11 @@ impl App {
             topic_selected: 0,
             topics_filtering: false,
             topic_detail_scroll: 0,
+            topic_msg_counts: HashMap::new(),
+            topic_hz: HashMap::new(),
+            last_hz_update: Instant::now(),
+            total_msg_count: 0,
+            total_hz: 0.0,
             query_input: String::new(),
             query_results: Vec::new(),
             query_history: Vec::new(),
@@ -114,7 +125,7 @@ impl App {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Zenoh(msg) => self.handle_zenoh_message(msg),
-            AppEvent::Tick => {}
+            AppEvent::Tick => { self.update_hz(); }
         }
     }
 
@@ -256,6 +267,10 @@ impl App {
         self.topic_latest
             .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
 
+        // Count messages for Hz calculation
+        *self.topic_msg_counts.entry(msg.key_expr.clone()).or_insert(0) += 1;
+        self.total_msg_count += 1;
+
         self.recent_messages.push_front(msg.clone());
         if self.recent_messages.len() > 100 {
             self.recent_messages.pop_back();
@@ -266,6 +281,19 @@ impl App {
             if self.sub_messages.len() > 500 {
                 self.sub_messages.pop_back();
             }
+        }
+    }
+
+    /// Recalculate Hz rates. Call this periodically (e.g. every tick).
+    pub fn update_hz(&mut self) {
+        let elapsed = self.last_hz_update.elapsed().as_secs_f64();
+        if elapsed >= 1.0 {
+            for (key, count) in self.topic_msg_counts.drain() {
+                self.topic_hz.insert(key, count as f64 / elapsed);
+            }
+            self.total_hz = self.total_msg_count as f64 / elapsed;
+            self.total_msg_count = 0;
+            self.last_hz_update = Instant::now();
         }
     }
 
