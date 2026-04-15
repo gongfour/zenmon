@@ -262,11 +262,53 @@ impl App {
     }
 
     fn handle_wheel_up(&mut self) {
-        // wired in Task 8
+        match self.active_view {
+            ActiveView::Topics => {
+                self.topic_selected = self.topic_selected.saturating_sub(1);
+                self.topic_detail_scroll = 0;
+            }
+            ActiveView::Subscribe => {
+                self.sub_selected = self.sub_selected.saturating_sub(1);
+            }
+            ActiveView::Query => {
+                self.query_selected = self.query_selected.saturating_sub(1);
+            }
+            ActiveView::Nodes => {
+                self.node_selected = self.node_selected.saturating_sub(1);
+            }
+            ActiveView::Dashboard => {}
+        }
     }
 
     fn handle_wheel_down(&mut self) {
-        // wired in Task 8
+        match self.active_view {
+            ActiveView::Topics => {
+                let max = self.filtered_topics().len().saturating_sub(1);
+                if self.topic_selected < max {
+                    self.topic_selected += 1;
+                    self.topic_detail_scroll = 0;
+                }
+            }
+            ActiveView::Subscribe => {
+                let max = self.sub_messages.len().saturating_sub(1);
+                if self.sub_selected < max {
+                    self.sub_selected += 1;
+                }
+            }
+            ActiveView::Query => {
+                let max = self.query_results.len().saturating_sub(1);
+                if self.query_selected < max {
+                    self.query_selected += 1;
+                }
+            }
+            ActiveView::Nodes => {
+                let max = self.nodes.len().saturating_sub(1);
+                if self.node_selected < max {
+                    self.node_selected += 1;
+                }
+            }
+            ActiveView::Dashboard => {}
+        }
     }
 
     fn handle_text_input_key(&mut self, key: KeyEvent) {
