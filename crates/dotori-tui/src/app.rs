@@ -2,13 +2,48 @@ use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent};
 use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Tabs};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
+
+/// Return the tab index hit by a click at `(col, row)`, or `None`.
+pub(crate) fn tab_hit(rects: &[Option<Rect>; 5], col: u16, row: u16) -> Option<usize> {
+    for (i, maybe) in rects.iter().enumerate() {
+        if let Some(r) = maybe {
+            if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// Return the list item index hit by a click row, or `None`.
+///
+/// `first_item_row` is the absolute screen row of item 0 (typically `rect.y + 1`
+/// to skip the top border). `scroll_offset` is the number of items skipped before
+/// rendering. `total_items` rejects clicks past the end of the list.
+pub(crate) fn list_hit(
+    rect: Rect,
+    click_row: u16,
+    scroll_offset: usize,
+    total_items: usize,
+    first_item_row: u16,
+) -> Option<usize> {
+    if click_row < first_item_row || click_row >= rect.y + rect.height {
+        return None;
+    }
+    let row_in_list = (click_row - first_item_row) as usize;
+    let idx = row_in_list + scroll_offset;
+    if idx >= total_items {
+        return None;
+    }
+    Some(idx)
+}
 
 const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Subscribe", "Query", "Nodes"];
 
@@ -379,5 +414,60 @@ impl App {
             ),
         ]);
         frame.render_widget(status, status_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn tab_hit_inside_rect_returns_index() {
+        let rects = [
+            Some(Rect::new(1, 0, 14, 3)),
+            Some(Rect::new(16, 0, 10, 3)),
+            Some(Rect::new(28, 0, 12, 3)),
+            None,
+            None,
+        ];
+        assert_eq!(tab_hit(&rects, 2, 1), Some(0));
+        assert_eq!(tab_hit(&rects, 20, 1), Some(1));
+        assert_eq!(tab_hit(&rects, 30, 2), Some(2));
+    }
+
+    #[test]
+    fn tab_hit_outside_returns_none() {
+        let rects = [
+            Some(Rect::new(1, 0, 14, 3)),
+            None,
+            None,
+            None,
+            None,
+        ];
+        assert_eq!(tab_hit(&rects, 50, 1), None);
+        assert_eq!(tab_hit(&rects, 2, 5), None);
+    }
+
+    #[test]
+    fn list_hit_converts_row_to_index() {
+        // list_rect at (0,5) size 20x10 → rows 5..15
+        // first_item_row = 6 (border at row 5)
+        // total_items = 8
+        let rect = Rect::new(0, 5, 20, 10);
+        assert_eq!(list_hit(rect, 6, 0, 8, 6), Some(0));
+        assert_eq!(list_hit(rect, 8, 0, 8, 6), Some(2));
+        assert_eq!(list_hit(rect, 5, 0, 8, 6), None, "border row");
+        assert_eq!(list_hit(rect, 15, 0, 8, 6), None, "at rect.bottom(), exclusive");
+        assert_eq!(list_hit(rect, 20, 0, 8, 6), None, "past rect");
+        assert_eq!(list_hit(rect, 14, 0, 8, 6), None, "row 14 → index 8, past total");
+    }
+
+    #[test]
+    fn list_hit_respects_scroll_offset() {
+        let rect = Rect::new(0, 5, 20, 10);
+        // scroll_offset 4, total 20, first_item_row 6
+        assert_eq!(list_hit(rect, 6, 4, 20, 6), Some(4));
+        assert_eq!(list_hit(rect, 9, 4, 20, 6), Some(7));
     }
 }
