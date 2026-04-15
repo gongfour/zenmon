@@ -237,6 +237,70 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
+        Command::Scout { timeout } => {
+            let nodes = dotori_core::scout::scout(
+                &config,
+                Duration::from_secs(timeout),
+            )
+            .await?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&nodes)?);
+            } else if nodes.is_empty() {
+                println!("No Zenoh nodes found (scouted for {}s)", timeout);
+            } else {
+                println!("{:<40} {:<10} {}", "ZID", "TYPE", "LOCATORS");
+                println!("{}", "-".repeat(70));
+                for node in &nodes {
+                    println!(
+                        "{:<40} {:<10} {}",
+                        node.zid,
+                        node.whatami,
+                        node.locators.join(", ")
+                    );
+                }
+                println!("\n{} node(s) found", nodes.len());
+            }
+        }
+
+        Command::Info => {
+            let session = dotori_core::session::open_session(&config).await?;
+            let detail = dotori_core::info::session_info(&session).await?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&detail)?);
+            } else {
+                println!("Session ZID:  {}", detail.zid);
+                println!("Mode:         {}", detail.mode);
+                if detail.routers.is_empty() {
+                    println!("Routers:      (none)");
+                } else {
+                    for (i, r) in detail.routers.iter().enumerate() {
+                        if i == 0 {
+                            println!("Routers:      {}", r);
+                        } else {
+                            println!("              {}", r);
+                        }
+                    }
+                }
+                if detail.peers.is_empty() {
+                    println!("Peers:        (none)");
+                } else {
+                    for (i, p) in detail.peers.iter().enumerate() {
+                        if i == 0 {
+                            println!("Peers:        {}", p);
+                        } else {
+                            println!("              {}", p);
+                        }
+                    }
+                }
+            }
+            session
+                .close()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+
         Command::Tui { refresh } => {
             dotori_tui::run(config, refresh).await?;
         }

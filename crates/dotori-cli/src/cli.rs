@@ -85,6 +85,16 @@ pub enum Command {
         att: Option<String>,
     },
 
+    /// Scout the network for Zenoh nodes (no router needed)
+    Scout {
+        /// Scouting timeout in seconds
+        #[arg(long, default_value = "3")]
+        timeout: u64,
+    },
+
+    /// Show current session information
+    Info,
+
     /// Launch interactive TUI dashboard
     Tui {
         /// UI refresh interval in milliseconds
