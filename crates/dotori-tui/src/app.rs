@@ -124,8 +124,11 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
+            AppEvent::Mouse(_) => {} // wired in Task 5
             AppEvent::Zenoh(msg) => self.handle_zenoh_message(msg),
-            AppEvent::Tick => { self.update_hz(); }
+            AppEvent::Tick => {
+                self.update_hz();
+            }
         }
     }
 
