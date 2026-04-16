@@ -300,6 +300,11 @@ async fn run_loop(
                         let zid = format!("{}", s.zid());
                         app.connection_state = ConnectionState::Connected(zid.clone());
                         app.self_zid = Some(zid);
+                        // Clear stale liveliness state before re-subscribing
+                        app.liveliness_tokens.clear();
+                        app.liveliness_events.clear();
+                        app.liveliness_selected = 0;
+                        app.liveliness_log_scroll = 0;
                         let _ = dotori_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
                         spawn_liveliness_subscriber(&s, tx.clone());
                         *session.lock().await = Some(s);

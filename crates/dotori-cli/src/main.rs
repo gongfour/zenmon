@@ -381,12 +381,21 @@ async fn main() -> Result<()> {
                             let source = sample.source_info()
                                 .map(|s| format!("{}", s.source_id().zid()))
                                 .unwrap_or_else(|| "-".to_string());
-                            println!(
-                                "[{:?}] {} source_zid={}",
-                                sample.kind(),
-                                sample.key_expr(),
-                                source,
-                            );
+                            if cli.json {
+                                let event = serde_json::json!({
+                                    "kind": format!("{:?}", sample.kind()),
+                                    "key_expr": sample.key_expr().to_string(),
+                                    "source_zid": source,
+                                });
+                                println!("{}", serde_json::to_string(&event)?);
+                            } else {
+                                println!(
+                                    "[{:?}] {} source_zid={}",
+                                    sample.kind(),
+                                    sample.key_expr(),
+                                    source,
+                                );
+                            }
                         }
                         _ = tokio::signal::ctrl_c() => {
                             eprintln!("Stopped.");
