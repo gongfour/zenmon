@@ -1081,24 +1081,37 @@ impl App {
                     .map(|(i, r)| {
                         let selected = i == self.port_scan_selected;
                         let marker = if selected { "> " } else { "  " };
-                        let style = if selected {
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(Color::White)
-                        };
-                        Line::from(vec![Span::styled(
-                            format!(
-                                "{}{:>5}  (domain {:<3})  {} node(s)",
-                                marker,
-                                r.port,
-                                r.port.saturating_sub(7446),
-                                r.nodes.len()
-                            ),
-                            style,
-                        )])
+                        let is_self = matches!(
+                            &self.connection_state,
+                            ConnectionState::Connected(zid) if r.nodes.iter().any(|n| n.zid == *zid)
+                        );
+                        let base_text = format!(
+                            "{}{:>5}  (domain {:<3})  {} node(s)",
+                            marker,
+                            r.port,
+                            r.port.saturating_sub(7446),
+                            r.nodes.len()
+                        );
+                        let mut spans = vec![Span::styled(
+                            base_text,
+                            if selected {
+                                Style::default()
+                                    .fg(Color::Black)
+                                    .bg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::White)
+                            },
+                        )];
+                        if is_self {
+                            spans.push(Span::styled(
+                                "  (self)",
+                                Style::default()
+                                    .fg(Color::Green)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                        Line::from(spans)
                     })
                     .collect();
                 frame.render_widget(Paragraph::new(lines), list_area);
