@@ -142,6 +142,52 @@ impl ScoutInfo {
     }
 }
 
+/// A liveliness token discovered on the network.
+#[derive(Debug, Clone, Serialize)]
+pub struct LivelinessToken {
+    pub key_expr: String,
+    pub source_zid: Option<String>,
+    pub alive: bool,
+}
+
+/// Event from a liveliness subscriber.
+#[derive(Debug, Clone)]
+pub enum LivelinessEvent {
+    Join(LivelinessToken),
+    Leave(LivelinessToken),
+}
+
+impl LivelinessToken {
+    /// Extract a human-readable node name from the key expression.
+    /// e.g. "hdx/forky001/node/action_executor_ec98a701" -> "action_executor"
+    /// Falls back to the last path segment with hash stripped.
+    pub fn node_name(&self) -> Option<String> {
+        let last = self.key_expr.rsplit('/').next()?;
+        // Strip trailing hex hash (pattern: _[0-9a-f]{6,})
+        if let Some(pos) = last.rfind('_') {
+            let suffix = &last[pos + 1..];
+            if suffix.len() >= 6 && suffix.chars().all(|c| c.is_ascii_hexdigit()) {
+                let name = &last[..pos];
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        Some(last.to_string())
+    }
+
+    /// Extract the group/robot prefix from the key expression.
+    /// e.g. "hdx/forky001/node/action_executor_ec98a701" -> "hdx/forky001"
+    pub fn group_prefix(&self) -> Option<String> {
+        let parts: Vec<&str> = self.key_expr.split('/').collect();
+        if parts.len() >= 3 {
+            Some(parts[..parts.len() - 2].join("/"))
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

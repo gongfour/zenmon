@@ -180,6 +180,31 @@ fn spawn_admin_polling_task(
     });
 }
 
+fn spawn_liveliness_subscriber(
+    session: &Session,
+    tx: mpsc::UnboundedSender<AppEvent>,
+) {
+    let (liveliness_tx, mut liveliness_rx) =
+        mpsc::unbounded_channel::<dotori_core::types::LivelinessEvent>();
+
+    let session = session.clone();
+    tokio::spawn(async move {
+        if let Err(e) =
+            dotori_core::discover::subscribe_liveliness(&session, "**", liveliness_tx).await
+        {
+            tracing::warn!("liveliness subscribe failed: {}", e);
+        }
+    });
+
+    tokio::spawn(async move {
+        while let Some(event) = liveliness_rx.recv().await {
+            if tx.send(AppEvent::Liveliness(event)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
@@ -272,8 +297,11 @@ async fn run_loop(
                 reconnect_pending = false;
                 match result {
                     ConnectResult::Connected(s) => {
-                        app.connection_state = ConnectionState::Connected(format!("{}", s.zid()));
+                        let zid = format!("{}", s.zid());
+                        app.connection_state = ConnectionState::Connected(zid.clone());
+                        app.self_zid = Some(zid);
                         let _ = dotori_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
+                        spawn_liveliness_subscriber(&s, tx.clone());
                         *session.lock().await = Some(s);
                     }
                     ConnectResult::Failed(reason) => {

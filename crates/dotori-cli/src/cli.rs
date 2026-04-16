@@ -104,6 +104,17 @@ pub enum Command {
         per_port_timeout: u64,
     },
 
+    /// Query liveliness tokens on the network
+    Liveliness {
+        /// Key expression to filter (default: "**")
+        #[arg(default_value = "**")]
+        key_expr: String,
+
+        /// Watch for changes (live subscribe)
+        #[arg(long)]
+        watch: bool,
+    },
+
     /// Show current session information
     Info,
 

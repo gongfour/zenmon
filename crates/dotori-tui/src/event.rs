@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
-use dotori_core::types::{NodeInfo, PortScoutResult, ZenohMessage};
+use dotori_core::types::{LivelinessEvent, NodeInfo, PortScoutResult, ZenohMessage};
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -16,6 +16,7 @@ pub enum AppEvent {
     ScoutNodes(Vec<NodeInfo>),
     PortScanStarted,
     PortScanResults(Vec<PortScoutResult>),
+    Liveliness(LivelinessEvent),
 }
 
 pub struct EventHandler {

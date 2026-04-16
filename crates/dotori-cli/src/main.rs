@@ -348,6 +348,60 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
+        Command::Liveliness { key_expr, watch } => {
+            let session = dotori_core::session::open_session(&config).await?;
+            let tokens = dotori_core::discover::query_liveliness(&session, &key_expr).await?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&tokens)?);
+            } else if tokens.is_empty() {
+                println!("No liveliness tokens found for '{}'", key_expr);
+            } else {
+                println!("{:<50} {:<20} {}", "KEY", "NAME", "SOURCE_ZID");
+                println!("{}", "─".repeat(85));
+                for token in &tokens {
+                    let name = token.node_name().unwrap_or_default();
+                    let zid = token.source_zid.as_deref().unwrap_or("-");
+                    let status = if token.alive { "●" } else { "○" };
+                    println!("{} {:<49} {:<20} {}", status, token.key_expr, name, zid);
+                }
+                println!("\n{} token(s)", tokens.len());
+            }
+
+            if watch {
+                eprintln!("\nWatching liveliness changes... (Ctrl+C to stop)");
+                let sub = session
+                    .liveliness()
+                    .declare_subscriber(&key_expr)
+                    .await
+                    .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                loop {
+                    tokio::select! {
+                        Ok(sample) = sub.recv_async() => {
+                            let source = sample.source_info()
+                                .map(|s| format!("{}", s.source_id().zid()))
+                                .unwrap_or_else(|| "-".to_string());
+                            println!(
+                                "[{:?}] {} source_zid={}",
+                                sample.kind(),
+                                sample.key_expr(),
+                                source,
+                            );
+                        }
+                        _ = tokio::signal::ctrl_c() => {
+                            eprintln!("Stopped.");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            session
+                .close()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+
         Command::Scout {
             port_range,
             per_port_timeout,

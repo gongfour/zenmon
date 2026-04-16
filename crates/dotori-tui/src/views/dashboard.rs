@@ -81,18 +81,26 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             } else {
                 node.locators.join(", ")
             };
-            ListItem::new(Line::from(vec![
+            let is_self = app.self_zid.as_deref().is_some_and(|z| z == node.zid);
+            let zid_short = &node.zid[..node.zid.len().min(16)];
+            let mut spans = vec![
                 Span::styled(
-                    &node.zid[..node.zid.len().min(16)],
+                    zid_short,
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
+            ];
+            if is_self {
+                spans.push(Span::styled(" (self)", Style::default().fg(Color::DarkGray)));
+            }
+            spans.extend([
                 Span::raw("  "),
                 Span::styled(&node.kind, kind_style),
                 Span::raw("  "),
                 Span::styled(locator_text, Style::default().fg(Color::DarkGray)),
-            ]))
+            ]);
+            ListItem::new(Line::from(spans))
         })
         .collect();
     let node_list = List::new(node_items).block(
