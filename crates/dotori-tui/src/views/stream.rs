@@ -75,19 +75,33 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     };
     let filtered_messages = app.filtered_sub_messages();
 
+    let mode_badge = if app.stream_follow {
+        Span::styled(
+            " FOLLOW ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        )
+    } else {
+        Span::styled(
+            " PINNED ",
+            Style::default().fg(Color::Black).bg(Color::LightYellow),
+        )
+    };
+    let follow_hint = if app.stream_follow { "" } else { "  f:follow" };
+
     let status_text = if app.sub_paused {
         Line::from(vec![
             Span::styled(
                 " PAUSED ",
                 Style::default().fg(Color::Black).bg(Color::Yellow),
             ),
+            mode_badge.clone(),
             Span::raw(format!(
                 "  showing {} / {} buffered  ",
                 filtered_messages.len(),
                 app.sub_messages.len()
             )),
             Span::styled(
-                "Space:resume  /:filter  j/k:scroll",
+                format!("Space:resume  /:filter  j/k:scroll{}", follow_hint),
                 Style::default().fg(Color::Gray),
             ),
         ])
@@ -97,12 +111,16 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 " LIVE ",
                 Style::default().fg(Color::Black).bg(Color::Green),
             ),
+            mode_badge,
             Span::raw(format!(
                 "  showing {} / {} messages  ",
                 filtered_messages.len(),
                 app.sub_messages.len()
             )),
-            Span::styled("Space:pause  /:filter", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("Space:pause  /:filter{}", follow_hint),
+                Style::default().fg(Color::Gray),
+            ),
         ])
     };
     let status = Paragraph::new(status_text)

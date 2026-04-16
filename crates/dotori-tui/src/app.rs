@@ -110,6 +110,7 @@ pub struct App {
     pub sub_messages: VecDeque<ZenohMessage>,
     pub sub_paused: bool,
     pub sub_selected: usize,
+    pub stream_follow: bool,
     pub stream_filter: String,
     pub stream_filtering: bool,
 
@@ -171,6 +172,7 @@ impl App {
             sub_messages: VecDeque::with_capacity(500),
             sub_paused: false,
             sub_selected: 0,
+            stream_follow: true,
             stream_filter: String::new(),
             stream_filtering: false,
             topic_filter: String::new(),
@@ -431,7 +433,7 @@ impl App {
                 self.topic_selected = idx;
                 self.topic_detail_scroll = 0;
             }
-            ActiveView::Stream => self.sub_selected = idx,
+            ActiveView::Stream => self.pin_stream_at(idx),
             ActiveView::Query => self.query_selected = idx,
             ActiveView::Nodes => self.node_selected = idx,
             ActiveView::Dashboard => {}
@@ -445,7 +447,7 @@ impl App {
                 self.topic_detail_scroll = 0;
             }
             ActiveView::Stream => {
-                self.sub_selected = self.sub_selected.saturating_sub(1);
+                self.pin_stream_at(self.sub_selected.saturating_sub(1));
             }
             ActiveView::Query => {
                 self.query_selected = self.query_selected.saturating_sub(1);
@@ -469,7 +471,7 @@ impl App {
             ActiveView::Stream => {
                 let max = self.filtered_sub_messages().len().saturating_sub(1);
                 if self.sub_selected < max {
-                    self.sub_selected += 1;
+                    self.pin_stream_at(self.sub_selected + 1);
                 }
             }
             ActiveView::Query => {
@@ -584,6 +586,7 @@ impl App {
             },
             ActiveView::Stream => match key.code {
                 KeyCode::Char('/') => self.stream_filtering = true,
+                KeyCode::Char('f') => self.follow_stream(),
                 KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
                 KeyCode::Char('y') => {
                     if let Some(msg) = self
@@ -607,12 +610,12 @@ impl App {
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    self.sub_selected = self.sub_selected.saturating_sub(1);
+                    self.pin_stream_at(self.sub_selected.saturating_sub(1));
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let max = self.filtered_sub_messages().len().saturating_sub(1);
                     if self.sub_selected < max {
-                        self.sub_selected += 1;
+                        self.pin_stream_at(self.sub_selected + 1);
                     }
                 }
                 _ => {}
@@ -691,10 +694,13 @@ impl App {
             if self.sub_messages.len() > 500 {
                 self.sub_messages.pop_back();
             }
-            if matches_stream_filter && self.sub_selected > 0 {
+            if !self.stream_follow && matches_stream_filter && self.sub_selected > 0 {
                 self.sub_selected += 1;
             }
             self.clamp_stream_selection();
+            if self.stream_follow {
+                self.sub_selected = 0;
+            }
         }
     }
 
@@ -749,6 +755,17 @@ impl App {
         } else if self.sub_selected >= filtered_len {
             self.sub_selected = filtered_len - 1;
         }
+    }
+
+    fn follow_stream(&mut self) {
+        self.stream_follow = true;
+        self.sub_selected = 0;
+    }
+
+    fn pin_stream_at(&mut self, idx: usize) {
+        self.stream_follow = false;
+        self.sub_selected = idx;
+        self.clamp_stream_selection();
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
@@ -1049,8 +1066,9 @@ mod tests {
         app.handle_zenoh_message(make("a"));
         app.handle_zenoh_message(make("b"));
         app.handle_zenoh_message(make("c"));
-        app.sub_selected = 1;
+        app.pin_stream_at(1);
         app.handle_zenoh_message(make("d"));
+        assert!(!app.stream_follow);
         assert_eq!(app.sub_selected, 2);
     }
 
@@ -1096,12 +1114,30 @@ mod tests {
         app.handle_zenoh_message(make("alpha/2"));
 
         app.stream_filter = "alpha".into();
-        app.sub_selected = 1;
+        app.pin_stream_at(1);
 
         app.handle_zenoh_message(make("beta/2"));
         assert_eq!(app.sub_selected, 1);
 
         app.handle_zenoh_message(make("alpha/3"));
         assert_eq!(app.sub_selected, 2);
+    }
+
+    #[test]
+    fn follow_stream_resets_selection_to_latest() {
+        let mut app = App::new("test".into());
+        app.stream_follow = false;
+        app.sub_selected = 3;
+        app.follow_stream();
+        assert!(app.stream_follow);
+        assert_eq!(app.sub_selected, 0);
+    }
+
+    #[test]
+    fn pin_stream_disables_follow() {
+        let mut app = App::new("test".into());
+        app.pin_stream_at(2);
+        assert!(!app.stream_follow);
+        assert_eq!(app.sub_selected, 0);
     }
 }
