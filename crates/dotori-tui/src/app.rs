@@ -2,7 +2,7 @@ use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use dotori_core::merge::merge_nodes;
-use dotori_core::types::{MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
+use dotori_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -93,6 +93,17 @@ pub enum QueryStatus {
     Error(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct LivelinessEventRecord {
+    pub timestamp: Instant,
+    pub is_join: bool,
+    pub key_expr: String,
+    pub node_name: String,
+    pub group: String,
+}
+
+const LIVELINESS_EVENT_CAP: usize = 200;
+
 pub struct App {
     pub active_view: ActiveView,
     pub should_quit: bool,
@@ -134,6 +145,7 @@ pub struct App {
     pub query_selected: usize,
 
     pub node_selected: usize,
+    pub node_detail_scroll: u16,
     pub scout_in_progress: bool,
     pub last_scout_at: Option<SystemTime>,
     pub pending_scout_request: bool,
@@ -153,6 +165,13 @@ pub struct App {
 
     pub toast: Option<(String, std::time::Instant)>,
     pub toast_is_error: bool,
+
+    pub self_zid: Option<String>,
+
+    pub liveliness_tokens: Vec<LivelinessToken>,
+    pub liveliness_selected: usize,
+    pub liveliness_events: VecDeque<LivelinessEventRecord>,
+    pub liveliness_log_scroll: u16,
 }
 
 impl App {
@@ -192,6 +211,7 @@ impl App {
             query_status: QueryStatus::Idle,
             query_selected: 0,
             node_selected: 0,
+            node_detail_scroll: 0,
             scout_in_progress: false,
             last_scout_at: None,
             pending_scout_request: false,
@@ -208,6 +228,11 @@ impl App {
             list_scroll_offset: 0,
             toast: None,
             toast_is_error: false,
+            self_zid: None,
+            liveliness_tokens: Vec::new(),
+            liveliness_selected: 0,
+            liveliness_events: VecDeque::with_capacity(LIVELINESS_EVENT_CAP),
+            liveliness_log_scroll: 0,
         }
     }
 
@@ -255,6 +280,48 @@ impl App {
                 self.port_scan_selected = 0;
                 self.port_scan_in_progress = false;
             }
+            AppEvent::Liveliness(event) => self.handle_liveliness(event),
+        }
+    }
+
+    fn handle_liveliness(&mut self, event: dotori_core::types::LivelinessEvent) {
+        use dotori_core::types::LivelinessEvent;
+        let (token, is_join) = match event {
+            LivelinessEvent::Join(t) => (t, true),
+            LivelinessEvent::Leave(t) => (t, false),
+        };
+
+        // Record event
+        let record = LivelinessEventRecord {
+            timestamp: Instant::now(),
+            is_join,
+            key_expr: token.key_expr.clone(),
+            node_name: token.node_name().unwrap_or_else(|| token.key_expr.clone()),
+            group: token.group_prefix().unwrap_or_default(),
+        };
+        self.liveliness_events.push_front(record);
+        if self.liveliness_events.len() > LIVELINESS_EVENT_CAP {
+            self.liveliness_events.pop_back();
+        }
+
+        // Update token state
+        if is_join {
+            if let Some(existing) = self
+                .liveliness_tokens
+                .iter_mut()
+                .find(|t| t.key_expr == token.key_expr)
+            {
+                existing.alive = true;
+                existing.source_zid = token.source_zid.or(existing.source_zid.clone());
+            } else {
+                self.liveliness_tokens.push(token);
+            }
+        } else if let Some(existing) = self
+            .liveliness_tokens
+            .iter_mut()
+            .find(|t| t.key_expr == token.key_expr)
+        {
+            existing.alive = false;
         }
     }
 
@@ -651,12 +718,20 @@ impl App {
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.node_selected = self.node_selected.saturating_sub(1);
+                    self.node_detail_scroll = 0;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let max = self.nodes.len().saturating_sub(1);
                     if self.node_selected < max {
                         self.node_selected += 1;
+                        self.node_detail_scroll = 0;
                     }
+                }
+                KeyCode::Char('J') => {
+                    self.node_detail_scroll = self.node_detail_scroll.saturating_add(3);
+                }
+                KeyCode::Char('K') => {
+                    self.node_detail_scroll = self.node_detail_scroll.saturating_sub(3);
                 }
                 KeyCode::Char('s') => {
                     if !self.scout_in_progress {
