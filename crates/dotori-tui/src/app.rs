@@ -12,7 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
 
 /// Return the tab index hit by a click at `(col, row)`, or `None`.
-pub(crate) fn tab_hit(rects: &[Option<Rect>; 5], col: u16, row: u16) -> Option<usize> {
+pub(crate) fn tab_hit(rects: &[Option<Rect>; 6], col: u16, row: u16) -> Option<usize> {
     for (i, maybe) in rects.iter().enumerate() {
         if let Some(r) = maybe {
             if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
@@ -55,7 +55,7 @@ fn payload_to_string(p: &MessagePayload) -> String {
     }
 }
 
-const TAB_TITLES: [&str; 5] = ["Dashboard", "Topics", "Stream", "Query", "Nodes"];
+const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveView {
@@ -64,6 +64,7 @@ pub enum ActiveView {
     Stream,
     Query,
     Nodes,
+    Liveliness,
 }
 
 impl ActiveView {
@@ -74,6 +75,7 @@ impl ActiveView {
             ActiveView::Stream => 2,
             ActiveView::Query => 3,
             ActiveView::Nodes => 4,
+            ActiveView::Liveliness => 5,
         }
     }
 }
@@ -109,7 +111,7 @@ pub struct App {
     pub should_quit: bool,
     pub connection_state: ConnectionState,
     pub endpoint: String,
-    pub tab_rects: [Option<ratatui::layout::Rect>; 5],
+    pub tab_rects: [Option<ratatui::layout::Rect>; 6],
 
     pub topics: Vec<TopicInfo>,
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
@@ -181,7 +183,7 @@ impl App {
             should_quit: false,
             connection_state: ConnectionState::Connecting,
             endpoint,
-            tab_rects: [None; 5],
+            tab_rects: [None; 6],
             topics: Vec::new(),
             topic_latest: HashMap::new(),
             admin_nodes: Vec::new(),
@@ -368,6 +370,7 @@ impl App {
                 KeyCode::Char('3') => self.active_view = ActiveView::Stream,
                 KeyCode::Char('4') => self.active_view = ActiveView::Query,
                 KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
+                KeyCode::Char('6') => self.active_view = ActiveView::Liveliness,
                 KeyCode::Esc => {
                     self.active_view = ActiveView::Dashboard;
                 }
@@ -468,6 +471,7 @@ impl App {
                 2 => ActiveView::Stream,
                 3 => ActiveView::Query,
                 4 => ActiveView::Nodes,
+                5 => ActiveView::Liveliness,
                 _ => self.active_view,
             };
             return;
@@ -484,6 +488,7 @@ impl App {
             ActiveView::Stream => self.filtered_sub_messages().len(),
             ActiveView::Query => self.query_results.len(),
             ActiveView::Nodes => self.nodes.len(),
+            ActiveView::Liveliness => self.liveliness_tokens.len(),
             ActiveView::Dashboard => return,
         };
         let Some(idx) = list_hit(
@@ -503,6 +508,10 @@ impl App {
             ActiveView::Stream => self.pin_stream_at(idx),
             ActiveView::Query => self.query_selected = idx,
             ActiveView::Nodes => self.node_selected = idx,
+            ActiveView::Liveliness => {
+                self.liveliness_selected = idx;
+                self.liveliness_log_scroll = 0;
+            }
             ActiveView::Dashboard => {}
         }
     }
@@ -521,6 +530,9 @@ impl App {
             }
             ActiveView::Nodes => {
                 self.node_selected = self.node_selected.saturating_sub(1);
+            }
+            ActiveView::Liveliness => {
+                self.liveliness_selected = self.liveliness_selected.saturating_sub(1);
             }
             ActiveView::Dashboard => {}
         }
@@ -551,6 +563,12 @@ impl App {
                 let max = self.nodes.len().saturating_sub(1);
                 if self.node_selected < max {
                     self.node_selected += 1;
+                }
+            }
+            ActiveView::Liveliness => {
+                let max = self.liveliness_tokens.len().saturating_sub(1);
+                if self.liveliness_selected < max {
+                    self.liveliness_selected += 1;
                 }
             }
             ActiveView::Dashboard => {}
@@ -740,6 +758,31 @@ impl App {
                 }
                 _ => {}
             },
+            ActiveView::Liveliness => match key.code {
+                KeyCode::Char('y') => {
+                    if let Some(token) = self.liveliness_tokens.get(self.liveliness_selected).cloned() {
+                        self.copy_to_clipboard(token.key_expr, "key_expr");
+                    } else {
+                        self.set_error_toast("No token selected");
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.liveliness_selected = self.liveliness_selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = self.liveliness_tokens.len().saturating_sub(1);
+                    if self.liveliness_selected < max {
+                        self.liveliness_selected += 1;
+                    }
+                }
+                KeyCode::Char('J') => {
+                    self.liveliness_log_scroll = self.liveliness_log_scroll.saturating_add(3);
+                }
+                KeyCode::Char('K') => {
+                    self.liveliness_log_scroll = self.liveliness_log_scroll.saturating_sub(3);
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -884,6 +927,7 @@ impl App {
             ActiveView::Stream => views::stream::render(self, frame, content_area),
             ActiveView::Query => views::query::render(self, frame, content_area),
             ActiveView::Nodes => views::nodes::render(self, frame, content_area),
+            ActiveView::Liveliness => views::liveliness::render(self, frame, content_area),
         }
 
         if self.scout_port_modal_open {
@@ -944,7 +988,7 @@ impl App {
             ),
             middle_span,
             Span::styled(
-                " q:quit  1-5:view  /:filter  y:copy  P:port ",
+                " q:quit  1-6:view  /:filter  y:copy  P:port ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
@@ -1082,6 +1126,7 @@ mod tests {
             Some(Rect::new(28, 0, 12, 3)),
             None,
             None,
+            None,
         ];
         assert_eq!(tab_hit(&rects, 2, 1), Some(0));
         assert_eq!(tab_hit(&rects, 20, 1), Some(1));
@@ -1090,7 +1135,7 @@ mod tests {
 
     #[test]
     fn tab_hit_outside_returns_none() {
-        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None];
+        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None, None];
         assert_eq!(tab_hit(&rects, 50, 1), None);
         assert_eq!(tab_hit(&rects, 2, 5), None);
     }
