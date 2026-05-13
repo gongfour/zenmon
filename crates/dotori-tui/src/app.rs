@@ -392,6 +392,10 @@ impl App {
             self.handle_scout_modal_key(key);
             return;
         }
+        if self.mode_modal_open {
+            self.handle_mode_modal_key(key);
+            return;
+        }
         if !self.is_text_input_active() {
             match key.code {
                 KeyCode::Char('q') => {
@@ -401,6 +405,11 @@ impl App {
                 KeyCode::Char('P') => {
                     self.scout_port_modal_open = true;
                     self.scout_port_input.clear();
+                    return;
+                }
+                KeyCode::Char('m') => {
+                    self.mode_modal_open = true;
+                    self.mode_modal_selection = self.current_mode;
                     return;
                 }
                 KeyCode::Char('1') => self.active_view = ActiveView::Dashboard,
@@ -424,6 +433,7 @@ impl App {
             || self.stream_filtering
             || self.query_editing
             || self.scout_port_modal_open
+            || self.mode_modal_open
     }
 
     fn handle_scout_modal_key(&mut self, key: KeyEvent) {
@@ -483,6 +493,39 @@ impl App {
                 let max = hits.saturating_sub(1);
                 if self.port_scan_selected < max {
                     self.port_scan_selected += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_mode_modal_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('m') => {
+                self.mode_modal_open = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.mode_modal_selection = ConnectMode::Peer;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.mode_modal_selection = ConnectMode::Client;
+            }
+            KeyCode::Enter => {
+                let target = self.mode_modal_selection;
+                self.mode_modal_open = false;
+                if target == self.current_mode {
+                    let label = match target {
+                        ConnectMode::Peer => "peer",
+                        ConnectMode::Client => "client",
+                    };
+                    self.set_toast(format!("Already in {} mode", label));
+                } else {
+                    self.pending_reconnect_mode = Some(target);
+                    let label = match target {
+                        ConnectMode::Peer => "peer",
+                        ConnectMode::Client => "client",
+                    };
+                    self.set_toast(format!("Switching to {} mode...", label));
                 }
             }
             _ => {}
@@ -1167,7 +1210,91 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn pressing_m_opens_mode_modal_with_current_mode_selected() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Peer;
+        app.mode_modal_selection = ConnectMode::Client; // stale prior value
+
+        app.handle_key(key(KeyCode::Char('m')));
+
+        assert!(app.mode_modal_open);
+        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
+    }
+
+    #[test]
+    fn mode_modal_arrow_keys_change_selection() {
+        let mut app = App::new("test".into());
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Client;
+
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
+
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Client);
+
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
+
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Client);
+    }
+
+    #[test]
+    fn mode_modal_enter_same_mode_does_not_set_pending() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Peer;
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Peer;
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert!(app.pending_reconnect_mode.is_none());
+        assert!(!app.mode_modal_open);
+    }
+
+    #[test]
+    fn mode_modal_enter_different_mode_sets_pending_and_closes() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Peer;
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.pending_reconnect_mode, Some(ConnectMode::Peer));
+        assert!(!app.mode_modal_open);
+    }
+
+    #[test]
+    fn mode_modal_esc_closes_without_setting_pending() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Peer;
+
+        app.handle_key(key(KeyCode::Esc));
+
+        assert!(app.pending_reconnect_mode.is_none());
+        assert!(!app.mode_modal_open);
+    }
+
+    #[test]
+    fn pressing_m_again_closes_mode_modal() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('m')));
+        assert!(app.mode_modal_open);
+        app.handle_key(key(KeyCode::Char('m')));
+        assert!(!app.mode_modal_open);
+    }
 
     #[test]
     fn tab_hit_inside_rect_returns_index() {
