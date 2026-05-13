@@ -278,6 +278,7 @@ impl App {
         self.total_hz = 0.0;
         self.topic_selected = 0;
         self.topic_detail_scroll = 0;
+        self.list_scroll_offset = 0;
 
         self.sub_messages.clear();
         self.recent_messages.clear();
@@ -1526,6 +1527,7 @@ mod tests {
         app.total_hz = 3.5;
         app.topic_selected = 1;
         app.topic_detail_scroll = 4;
+        app.list_scroll_offset = 5;
         app.sub_selected = 1;
         app.admin_nodes.push(dotori_core::types::NodeInfo {
             zid: "z1".into(),
@@ -1559,6 +1561,7 @@ mod tests {
         assert_eq!(app.total_hz, 0.0);
         assert_eq!(app.topic_selected, 0);
         assert_eq!(app.topic_detail_scroll, 0);
+        assert_eq!(app.list_scroll_offset, 0);
 
         assert!(app.sub_messages.is_empty());
         assert!(app.recent_messages.is_empty());
