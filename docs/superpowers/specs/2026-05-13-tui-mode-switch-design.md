@@ -143,7 +143,7 @@ let mode_text = match self.current_mode {
 };
 ```
 
-Insert the corresponding `Span` immediately after the `scout:` span, using the same dim style. Order in the status line:
+Insert the corresponding `Span` immediately after the `scout:` span, using a distinct Blue background badge (`fg:Black bg:Blue` — scout 배지는 Magenta). Order in the status line:
 
 ```
 [ NORMAL ] [ scout:7446 ] [ mode:peer ] [ Connected zid:... ]
