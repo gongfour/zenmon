@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/dotori-core",
-    "crates/dotori-cli",
-    "crates/dotori-tui",
+    "crates/zemon-core",
+    "crates/zemon-cli",
+    "crates/zemon-tui",
 ]
 
 [workspace.package]
@@ -12,8 +12,8 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-dotori-core = { path = "crates/dotori-core" }
-dotori-tui = { path = "crates/dotori-tui" }
+zemon-core = { path = "crates/zemon-core" }
+zemon-tui = { path = "crates/zemon-tui" }
 zenoh = { version = "1.7", features = ["unstable"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }

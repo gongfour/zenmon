@@ -1,4 +1,4 @@
-use crate::config::DotoriConfig;
+use crate::config::ZemonConfig;
 use crate::types::{PortScoutResult, ScoutInfo};
 use color_eyre::eyre::{eyre, Result};
 use std::time::Duration;
@@ -7,7 +7,7 @@ use zenoh::config::WhatAmI;
 /// Scout the network for Zenoh nodes.
 /// This does NOT require a session — it uses multicast scouting directly.
 /// Returns after `timeout` duration.
-pub async fn scout(config: &DotoriConfig, timeout: Duration) -> Result<Vec<ScoutInfo>> {
+pub async fn scout(config: &ZemonConfig, timeout: Duration) -> Result<Vec<ScoutInfo>> {
     let zenoh_config = config.to_zenoh_config()?;
     run_scout(zenoh_config, timeout).await
 }
@@ -15,7 +15,7 @@ pub async fn scout(config: &DotoriConfig, timeout: Duration) -> Result<Vec<Scout
 /// Scout using a specific multicast port. Used for port scanning across
 /// different Zenoh multicast addresses.
 pub async fn scout_on_port(
-    config: &DotoriConfig,
+    config: &ZemonConfig,
     port: u16,
     timeout: Duration,
 ) -> Result<Vec<ScoutInfo>> {
@@ -29,7 +29,7 @@ pub async fn scout_on_port(
 /// sorted by port. Ports with no hits are still included (empty node list) so
 /// the caller can display them.
 pub async fn scout_port_range(
-    config: &DotoriConfig,
+    config: &ZemonConfig,
     start: u16,
     end: u16,
     per_port_timeout: Duration,

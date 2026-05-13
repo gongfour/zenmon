@@ -1,10 +1,10 @@
-# dotori-cli Implementation Plan
+# zemon-cli Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a Rust CLI+TUI tool for Zenoh network monitoring and debugging, with headless CLI subcommands and an interactive ratatui TUI dashboard.
 
-**Architecture:** Cargo workspace with 3 crates — `dotori-core` (library: Zenoh session, discover, subscribe, query, registry), `dotori-cli` (binary: clap subcommands), `dotori-tui` (library: ratatui views). Single `dotori` binary produced by dotori-cli. Async via tokio, events via mpsc channels.
+**Architecture:** Cargo workspace with 3 crates — `zemon-core` (library: Zenoh session, discover, subscribe, query, registry), `zemon-cli` (binary: clap subcommands), `zemon-tui` (library: ratatui views). Single `zemon` binary produced by zemon-cli. Async via tokio, events via mpsc channels.
 
 **Tech Stack:** Rust 2021, zenoh 1.7 (unstable feature), tokio 1, clap 4 (derive), ratatui 0.30, crossterm 0.29 (event-stream), serde/serde_json, tracing, color-eyre
 
@@ -16,18 +16,18 @@
 
 **Files:**
 - Create: `Cargo.toml` (workspace root)
-- Create: `crates/dotori-core/Cargo.toml`
-- Create: `crates/dotori-core/src/lib.rs`
-- Create: `crates/dotori-cli/Cargo.toml`
-- Create: `crates/dotori-cli/src/main.rs`
-- Create: `crates/dotori-tui/Cargo.toml`
-- Create: `crates/dotori-tui/src/lib.rs`
+- Create: `crates/zemon-core/Cargo.toml`
+- Create: `crates/zemon-core/src/lib.rs`
+- Create: `crates/zemon-cli/Cargo.toml`
+- Create: `crates/zemon-cli/src/main.rs`
+- Create: `crates/zemon-tui/Cargo.toml`
+- Create: `crates/zemon-tui/src/lib.rs`
 - Create: `.gitignore`
 
 - [ ] **Step 1: Initialize git repo**
 
 ```bash
-cd /Users/kang/Project/hdx/dotori_cli
+cd /Users/kang/Project/hdx/zemon_cli
 git init
 ```
 
@@ -46,9 +46,9 @@ Create `Cargo.toml`:
 [workspace]
 resolver = "2"
 members = [
-    "crates/dotori-core",
-    "crates/dotori-cli",
-    "crates/dotori-tui",
+    "crates/zemon-core",
+    "crates/zemon-cli",
+    "crates/zemon-tui",
 ]
 
 [workspace.package]
@@ -57,8 +57,8 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-dotori-core = { path = "crates/dotori-core" }
-dotori-tui = { path = "crates/dotori-tui" }
+zemon-core = { path = "crates/zemon-core" }
+zemon-tui = { path = "crates/zemon-tui" }
 zenoh = { version = "1.7", features = ["unstable"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }
@@ -68,12 +68,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 color-eyre = "0.6"
 ```
 
-- [ ] **Step 4: Create dotori-core crate**
+- [ ] **Step 4: Create zemon-core crate**
 
-Create `crates/dotori-core/Cargo.toml`:
+Create `crates/zemon-core/Cargo.toml`:
 ```toml
 [package]
-name = "dotori-core"
+name = "zemon-core"
 version.workspace = true
 edition.workspace = true
 
@@ -86,7 +86,7 @@ tracing.workspace = true
 color-eyre.workspace = true
 ```
 
-Create `crates/dotori-core/src/lib.rs`:
+Create `crates/zemon-core/src/lib.rs`:
 ```rust
 pub mod config;
 pub mod session;
@@ -97,17 +97,17 @@ pub mod query;
 pub mod registry;
 ```
 
-- [ ] **Step 5: Create dotori-tui crate**
+- [ ] **Step 5: Create zemon-tui crate**
 
-Create `crates/dotori-tui/Cargo.toml`:
+Create `crates/zemon-tui/Cargo.toml`:
 ```toml
 [package]
-name = "dotori-tui"
+name = "zemon-tui"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-dotori-core.workspace = true
+zemon-core.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -117,7 +117,7 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 ```
 
-Create `crates/dotori-tui/src/lib.rs`:
+Create `crates/zemon-tui/src/lib.rs`:
 ```rust
 pub mod app;
 pub mod event;
@@ -126,22 +126,22 @@ pub mod views;
 pub use app::run;
 ```
 
-- [ ] **Step 6: Create dotori-cli crate**
+- [ ] **Step 6: Create zemon-cli crate**
 
-Create `crates/dotori-cli/Cargo.toml`:
+Create `crates/zemon-cli/Cargo.toml`:
 ```toml
 [package]
-name = "dotori-cli"
+name = "zemon-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "dotori"
+name = "zemon"
 path = "src/main.rs"
 
 [dependencies]
-dotori-core.workspace = true
-dotori-tui.workspace = true
+zemon-core.workspace = true
+zemon-tui.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -150,17 +150,17 @@ color-eyre.workspace = true
 clap = { version = "4", features = ["derive"] }
 ```
 
-Create `crates/dotori-cli/src/main.rs`:
+Create `crates/zemon-cli/src/main.rs`:
 ```rust
 fn main() {
-    println!("dotori - Zenoh network monitor");
+    println!("zemon - Zenoh network monitor");
 }
 ```
 
 - [ ] **Step 7: Verify workspace builds**
 
 ```bash
-cd /Users/kang/Project/hdx/dotori_cli
+cd /Users/kang/Project/hdx/zemon_cli
 cargo check
 ```
 
@@ -175,20 +175,20 @@ git commit -m "feat: scaffold cargo workspace with core, cli, tui crates"
 
 ---
 
-### Task 2: dotori-core — Config Module
+### Task 2: zemon-core — Config Module
 
 **Files:**
-- Create: `crates/dotori-core/src/config.rs`
+- Create: `crates/zemon-core/src/config.rs`
 
 - [ ] **Step 1: Write config module**
 
-Create `crates/dotori-core/src/config.rs`:
+Create `crates/zemon-core/src/config.rs`:
 ```rust
 use std::path::PathBuf;
 
 /// Connection configuration for a Zenoh session.
 #[derive(Debug, Clone)]
-pub struct DotoriConfig {
+pub struct ZemonConfig {
     pub endpoint: String,
     pub mode: ConnectMode,
     pub namespace: Option<String>,
@@ -201,7 +201,7 @@ pub enum ConnectMode {
     Client,
 }
 
-impl Default for DotoriConfig {
+impl Default for ZemonConfig {
     fn default() -> Self {
         Self {
             endpoint: "tcp/localhost:7447".to_string(),
@@ -212,8 +212,8 @@ impl Default for DotoriConfig {
     }
 }
 
-impl DotoriConfig {
-    /// Build a Zenoh Config from DotoriConfig.
+impl ZemonConfig {
+    /// Build a Zenoh Config from ZemonConfig.
     pub fn to_zenoh_config(&self) -> color_eyre::Result<zenoh::Config> {
         let mut config = match &self.config_file {
             Some(path) => zenoh::Config::from_file(path)?,
@@ -240,19 +240,19 @@ impl DotoriConfig {
     pub fn from_env() -> Self {
         let mut cfg = Self::default();
 
-        if let Ok(endpoint) = std::env::var("DOTORI_ENDPOINT") {
+        if let Ok(endpoint) = std::env::var("ZEMON_ENDPOINT") {
             cfg.endpoint = endpoint;
         }
-        if let Ok(mode) = std::env::var("DOTORI_MODE") {
+        if let Ok(mode) = std::env::var("ZEMON_MODE") {
             cfg.mode = match mode.to_lowercase().as_str() {
                 "peer" => ConnectMode::Peer,
                 _ => ConnectMode::Client,
             };
         }
-        if let Ok(ns) = std::env::var("DOTORI_NAMESPACE") {
+        if let Ok(ns) = std::env::var("ZEMON_NAMESPACE") {
             cfg.namespace = Some(ns);
         }
-        if let Ok(config_path) = std::env::var("DOTORI_CONFIG") {
+        if let Ok(config_path) = std::env::var("ZEMON_CONFIG") {
             cfg.config_file = Some(PathBuf::from(config_path));
         }
 
@@ -264,7 +264,7 @@ impl DotoriConfig {
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-core
+cargo check -p zemon-core
 ```
 
 Expected: success.
@@ -272,20 +272,20 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/config.rs
-git commit -m "feat(core): add config module with DotoriConfig and env var support"
+git add crates/zemon-core/src/config.rs
+git commit -m "feat(core): add config module with ZemonConfig and env var support"
 ```
 
 ---
 
-### Task 3: dotori-core — Types Module
+### Task 3: zemon-core — Types Module
 
 **Files:**
-- Create: `crates/dotori-core/src/types.rs`
+- Create: `crates/zemon-core/src/types.rs`
 
 - [ ] **Step 1: Write types module**
 
-Create `crates/dotori-core/src/types.rs`:
+Create `crates/zemon-core/src/types.rs`:
 ```rust
 use serde::Serialize;
 use std::time::SystemTime;
@@ -336,7 +336,7 @@ pub struct NodeInfo {
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-core
+cargo check -p zemon-core
 ```
 
 Expected: success.
@@ -344,27 +344,27 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/types.rs
+git add crates/zemon-core/src/types.rs
 git commit -m "feat(core): add shared types — TopicInfo, ZenohMessage, NodeInfo"
 ```
 
 ---
 
-### Task 4: dotori-core — Session Module
+### Task 4: zemon-core — Session Module
 
 **Files:**
-- Create: `crates/dotori-core/src/session.rs`
+- Create: `crates/zemon-core/src/session.rs`
 
 - [ ] **Step 1: Write session module**
 
-Create `crates/dotori-core/src/session.rs`:
+Create `crates/zemon-core/src/session.rs`:
 ```rust
-use crate::config::DotoriConfig;
+use crate::config::ZemonConfig;
 use color_eyre::Result;
 use zenoh::Session;
 
-/// Open a Zenoh session from DotoriConfig.
-pub async fn open_session(config: &DotoriConfig) -> Result<Session> {
+/// Open a Zenoh session from ZemonConfig.
+pub async fn open_session(config: &ZemonConfig) -> Result<Session> {
     let zenoh_config = config.to_zenoh_config()?;
     let session = zenoh::open(zenoh_config).await?;
     tracing::info!(zid = %session.zid(), "Zenoh session opened");
@@ -375,7 +375,7 @@ pub async fn open_session(config: &DotoriConfig) -> Result<Session> {
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-core
+cargo check -p zemon-core
 ```
 
 Expected: success.
@@ -383,20 +383,20 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/session.rs
+git add crates/zemon-core/src/session.rs
 git commit -m "feat(core): add session module — open_session helper"
 ```
 
 ---
 
-### Task 5: dotori-core — Discover Module
+### Task 5: zemon-core — Discover Module
 
 **Files:**
-- Create: `crates/dotori-core/src/discover.rs`
+- Create: `crates/zemon-core/src/discover.rs`
 
 - [ ] **Step 1: Write discover module**
 
-Create `crates/dotori-core/src/discover.rs`:
+Create `crates/zemon-core/src/discover.rs`:
 ```rust
 use crate::types::TopicInfo;
 use color_eyre::Result;
@@ -465,7 +465,7 @@ pub async fn discover(session: &Session, key_expr: &str) -> Result<Vec<TopicInfo
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-core
+cargo check -p zemon-core
 ```
 
 Expected: success.
@@ -473,20 +473,20 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/discover.rs
+git add crates/zemon-core/src/discover.rs
 git commit -m "feat(core): add discover module — admin space + liveliness discovery"
 ```
 
 ---
 
-### Task 6: dotori-core — Subscriber Module
+### Task 6: zemon-core — Subscriber Module
 
 **Files:**
-- Create: `crates/dotori-core/src/subscriber.rs`
+- Create: `crates/zemon-core/src/subscriber.rs`
 
 - [ ] **Step 1: Write subscriber module**
 
-Create `crates/dotori-core/src/subscriber.rs`:
+Create `crates/zemon-core/src/subscriber.rs`:
 ```rust
 use crate::types::{MessagePayload, ZenohMessage};
 use color_eyre::Result;
@@ -540,7 +540,7 @@ pub async fn subscribe(
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-core
+cargo check -p zemon-core
 ```
 
 Expected: success.
@@ -548,20 +548,20 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/subscriber.rs
+git add crates/zemon-core/src/subscriber.rs
 git commit -m "feat(core): add subscriber module — async subscription with mpsc channel"
 ```
 
 ---
 
-### Task 7: dotori-core — Query Module
+### Task 7: zemon-core — Query Module
 
 **Files:**
-- Create: `crates/dotori-core/src/query.rs`
+- Create: `crates/zemon-core/src/query.rs`
 
 - [ ] **Step 1: Write query module**
 
-Create `crates/dotori-core/src/query.rs`:
+Create `crates/zemon-core/src/query.rs`:
 ```rust
 use crate::types::{MessagePayload, ZenohMessage};
 use color_eyre::Result;
@@ -625,7 +625,7 @@ pub async fn get(
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-core
+cargo check -p zemon-core
 ```
 
 Expected: success.
@@ -633,20 +633,20 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/query.rs
+git add crates/zemon-core/src/query.rs
 git commit -m "feat(core): add query module — Zenoh GET with timeout and payload"
 ```
 
 ---
 
-### Task 8: dotori-core — Registry Module
+### Task 8: zemon-core — Registry Module
 
 **Files:**
-- Create: `crates/dotori-core/src/registry.rs`
+- Create: `crates/zemon-core/src/registry.rs`
 
 - [ ] **Step 1: Write registry module**
 
-Create `crates/dotori-core/src/registry.rs`:
+Create `crates/zemon-core/src/registry.rs`:
 ```rust
 use crate::types::NodeInfo;
 use color_eyre::Result;
@@ -709,7 +709,7 @@ pub async fn list_nodes(session: &Session) -> Result<Vec<NodeInfo>> {
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-core
+cargo check -p zemon-core
 ```
 
 Expected: success.
@@ -717,27 +717,27 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/registry.rs
+git add crates/zemon-core/src/registry.rs
 git commit -m "feat(core): add registry module — node discovery via admin space"
 ```
 
 ---
 
-### Task 9: dotori-cli — Clap CLI with All Subcommands
+### Task 9: zemon-cli — Clap CLI with All Subcommands
 
 **Files:**
-- Create: `crates/dotori-cli/src/cli.rs`
-- Modify: `crates/dotori-cli/src/main.rs`
+- Create: `crates/zemon-cli/src/cli.rs`
+- Modify: `crates/zemon-cli/src/main.rs`
 
 - [ ] **Step 1: Write CLI argument definitions**
 
-Create `crates/dotori-cli/src/cli.rs`:
+Create `crates/zemon-cli/src/cli.rs`:
 ```rust
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "dotori", about = "Zenoh network monitor and debugger")]
+#[command(name = "zemon", about = "Zenoh network monitor and debugger")]
 pub struct Cli {
     /// Zenoh connection endpoint
     #[arg(short, long, default_value = "tcp/localhost:7447")]
@@ -818,19 +818,19 @@ pub enum Command {
 
 - [ ] **Step 2: Write main.rs with command dispatch**
 
-Replace `crates/dotori-cli/src/main.rs`:
+Replace `crates/zemon-cli/src/main.rs`:
 ```rust
 mod cli;
 
 use clap::Parser;
 use cli::{Cli, Command};
 use color_eyre::Result;
-use dotori_core::config::{ConnectMode, DotoriConfig};
+use zemon_core::config::{ConnectMode, ZemonConfig};
 use std::path::PathBuf;
 use std::time::Duration;
 
-fn build_config(cli: &Cli) -> DotoriConfig {
-    let mut cfg = DotoriConfig::from_env();
+fn build_config(cli: &Cli) -> ZemonConfig {
+    let mut cfg = ZemonConfig::from_env();
 
     // CLI flags override env
     cfg.endpoint = cli.endpoint.clone();
@@ -854,7 +854,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "dotori=info,zenoh=warn".into()),
+                .unwrap_or_else(|_| "zemon=info,zenoh=warn".into()),
         )
         .init();
 
@@ -863,8 +863,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Discover { key_expr } => {
-            let session = dotori_core::session::open_session(&config).await?;
-            let topics = dotori_core::discover::discover(&session, &key_expr).await?;
+            let session = zemon_core::session::open_session(&config).await?;
+            let topics = zemon_core::discover::discover(&session, &key_expr).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&topics)?);
@@ -886,9 +886,9 @@ async fn main() -> Result<()> {
             pretty,
             timestamp,
         } => {
-            let session = dotori_core::session::open_session(&config).await?;
+            let session = zemon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let _handle = dotori_core::subscriber::subscribe(&session, &key_expr, tx).await?;
+            let _handle = zemon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
             eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
 
@@ -905,7 +905,7 @@ async fn main() -> Result<()> {
                             };
                             let payload_str = if pretty {
                                 match &msg.payload {
-                                    dotori_core::types::MessagePayload::Json(v) => {
+                                    zemon_core::types::MessagePayload::Json(v) => {
                                         serde_json::to_string_pretty(v)?
                                     }
                                     other => format!("{}", other),
@@ -935,8 +935,8 @@ async fn main() -> Result<()> {
             payload,
             timeout,
         } => {
-            let session = dotori_core::session::open_session(&config).await?;
-            let results = dotori_core::query::get(
+            let session = zemon_core::session::open_session(&config).await?;
+            let results = zemon_core::query::get(
                 &session,
                 &key_expr,
                 payload.as_deref(),
@@ -960,8 +960,8 @@ async fn main() -> Result<()> {
         }
 
         Command::Nodes { watch } => {
-            let session = dotori_core::session::open_session(&config).await?;
-            let nodes = dotori_core::registry::list_nodes(&session).await?;
+            let session = zemon_core::session::open_session(&config).await?;
+            let nodes = zemon_core::registry::list_nodes(&session).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&nodes)?);
@@ -989,7 +989,7 @@ async fn main() -> Result<()> {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
-                            let updated = dotori_core::registry::list_nodes(&session).await?;
+                            let updated = zemon_core::registry::list_nodes(&session).await?;
                             // Clear screen and reprint
                             print!("\x1B[2J\x1B[H");
                             println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
@@ -1015,8 +1015,8 @@ async fn main() -> Result<()> {
         }
 
         Command::Tui { refresh } => {
-            let session = dotori_core::session::open_session(&config).await?;
-            dotori_tui::run(session, refresh).await?;
+            let session = zemon_core::session::open_session(&config).await?;
+            zemon_tui::run(session, refresh).await?;
         }
     }
 
@@ -1027,14 +1027,14 @@ async fn main() -> Result<()> {
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cargo check -p dotori-cli
+cargo check -p zemon-cli
 ```
 
-Expected: may fail because `dotori_tui::run` doesn't exist yet. That's fine — we'll fix it in the next task.
+Expected: may fail because `zemon_tui::run` doesn't exist yet. That's fine — we'll fix it in the next task.
 
-- [ ] **Step 4: Create stub dotori_tui::run**
+- [ ] **Step 4: Create stub zemon_tui::run**
 
-Update `crates/dotori-tui/src/lib.rs`:
+Update `crates/zemon-tui/src/lib.rs`:
 ```rust
 pub mod app;
 pub mod event;
@@ -1051,24 +1051,24 @@ pub async fn run(session: Session, tick_rate_ms: u64) -> Result<()> {
 
 Create stubs for TUI modules:
 
-`crates/dotori-tui/src/app.rs`:
+`crates/zemon-tui/src/app.rs`:
 ```rust
 // App state — implemented in Task 12
 ```
 
-`crates/dotori-tui/src/event.rs`:
+`crates/zemon-tui/src/event.rs`:
 ```rust
 // Event handler — implemented in Task 11
 ```
 
-`crates/dotori-tui/src/views/mod.rs`:
+`crates/zemon-tui/src/views/mod.rs`:
 ```rust
 // TUI views — implemented in Tasks 13-17
 ```
 
 Create directory:
 ```bash
-mkdir -p crates/dotori-tui/src/views
+mkdir -p crates/zemon-tui/src/views
 ```
 
 - [ ] **Step 5: Verify full workspace compiles**
@@ -1090,24 +1090,24 @@ Expected: help text showing all global options and subcommands.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/dotori-cli/ crates/dotori-tui/
+git add crates/zemon-cli/ crates/zemon-tui/
 git commit -m "feat(cli): add clap CLI with discover, sub, query, nodes, tui subcommands"
 ```
 
 ---
 
-### Task 10: dotori-tui — Event Handler
+### Task 10: zemon-tui — Event Handler
 
 **Files:**
-- Modify: `crates/dotori-tui/src/event.rs`
+- Modify: `crates/zemon-tui/src/event.rs`
 
 - [ ] **Step 1: Write event handler**
 
-Replace `crates/dotori-tui/src/event.rs`:
+Replace `crates/zemon-tui/src/event.rs`:
 ```rust
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent, KeyEventKind};
-use dotori_core::types::ZenohMessage;
+use zemon_core::types::ZenohMessage;
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 
@@ -1187,7 +1187,7 @@ impl EventHandler {
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p dotori-tui
+cargo check -p zemon-tui
 ```
 
 Expected: success.
@@ -1195,26 +1195,26 @@ Expected: success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-tui/src/event.rs
+git add crates/zemon-tui/src/event.rs
 git commit -m "feat(tui): add async event handler — keyboard, zenoh, tick multiplexing"
 ```
 
 ---
 
-### Task 11: dotori-tui — App Structure + Tab Switching
+### Task 11: zemon-tui — App Structure + Tab Switching
 
 **Files:**
-- Modify: `crates/dotori-tui/src/app.rs`
-- Modify: `crates/dotori-tui/src/lib.rs`
+- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zemon-tui/src/lib.rs`
 
 - [ ] **Step 1: Write app state and rendering**
 
-Replace `crates/dotori-tui/src/app.rs`:
+Replace `crates/zemon-tui/src/app.rs`:
 ```rust
 use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent};
-use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
+use zemon_core::types::{NodeInfo, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
@@ -1474,7 +1474,7 @@ impl App {
         let tabs = Tabs::new(TAB_TITLES.iter().enumerate().map(|(i, t)| {
             format!("[{}] {}", i + 1, t)
         }))
-        .block(Block::default().borders(Borders::ALL).title(" dotori "))
+        .block(Block::default().borders(Borders::ALL).title(" zemon "))
         .select(self.active_view.index())
         .style(Style::default().fg(Color::White))
         .highlight_style(
@@ -1512,7 +1512,7 @@ impl App {
 
 - [ ] **Step 2: Update lib.rs with the run function**
 
-Replace `crates/dotori-tui/src/lib.rs`:
+Replace `crates/zemon-tui/src/lib.rs`:
 ```rust
 pub mod app;
 pub mod event;
@@ -1520,7 +1520,7 @@ pub mod views;
 
 use app::App;
 use color_eyre::Result;
-use dotori_core::types::ZenohMessage;
+use zemon_core::types::ZenohMessage;
 use event::EventHandler;
 use tokio::sync::mpsc;
 use zenoh::Session;
@@ -1530,14 +1530,14 @@ pub async fn run(session: Session, tick_rate_ms: u64) -> Result<()> {
     let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel::<ZenohMessage>();
 
     // Subscribe to everything to populate the TUI
-    let _sub_handle = dotori_core::subscriber::subscribe(&session, "**", zenoh_tx.clone()).await?;
+    let _sub_handle = zemon_core::subscriber::subscribe(&session, "**", zenoh_tx.clone()).await?;
 
     let connection_info = format!("zid:{}", session.zid());
     let mut app = App::new(connection_info);
 
     // Initial data load
-    app.topics = dotori_core::discover::discover(&session, "**").await.unwrap_or_default();
-    app.nodes = dotori_core::registry::list_nodes(&session).await.unwrap_or_default();
+    app.topics = zemon_core::discover::discover(&session, "**").await.unwrap_or_default();
+    app.nodes = zemon_core::registry::list_nodes(&session).await.unwrap_or_default();
 
     let mut terminal = ratatui::init();
     let mut events = EventHandler::new(tick_rate_ms, zenoh_rx);
@@ -1562,7 +1562,7 @@ async fn run_loop(
 
         // Execute pending query if any
         if let Some(key_expr) = app.pending_query.take() {
-            match dotori_core::query::get(
+            match zemon_core::query::get(
                 session,
                 &key_expr,
                 None,
@@ -1581,10 +1581,10 @@ async fn run_loop(
             }
             _ = refresh_interval.tick() => {
                 // Periodically refresh topics and nodes
-                if let Ok(topics) = dotori_core::discover::discover(session, "**").await {
+                if let Ok(topics) = zemon_core::discover::discover(session, "**").await {
                     app.topics = topics;
                 }
-                if let Ok(nodes) = dotori_core::registry::list_nodes(session).await {
+                if let Ok(nodes) = zemon_core::registry::list_nodes(session).await {
                     app.nodes = nodes;
                 }
             }
@@ -1601,7 +1601,7 @@ async fn run_loop(
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cargo check -p dotori-tui
+cargo check -p zemon-tui
 ```
 
 Expected: may fail on missing view modules — fixed in next tasks.
@@ -1609,21 +1609,21 @@ Expected: may fail on missing view modules — fixed in next tasks.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/dotori-tui/src/app.rs crates/dotori-tui/src/lib.rs
+git add crates/zemon-tui/src/app.rs crates/zemon-tui/src/lib.rs
 git commit -m "feat(tui): add app state, tab switching, event handling, and run loop"
 ```
 
 ---
 
-### Task 12: dotori-tui — Views Module + Dashboard View
+### Task 12: zemon-tui — Views Module + Dashboard View
 
 **Files:**
-- Modify: `crates/dotori-tui/src/views/mod.rs`
-- Create: `crates/dotori-tui/src/views/dashboard.rs`
+- Modify: `crates/zemon-tui/src/views/mod.rs`
+- Create: `crates/zemon-tui/src/views/dashboard.rs`
 
 - [ ] **Step 1: Update views/mod.rs**
 
-Replace `crates/dotori-tui/src/views/mod.rs`:
+Replace `crates/zemon-tui/src/views/mod.rs`:
 ```rust
 pub mod dashboard;
 pub mod topics;
@@ -1634,7 +1634,7 @@ pub mod nodes;
 
 - [ ] **Step 2: Write dashboard view**
 
-Create `crates/dotori-tui/src/views/dashboard.rs`:
+Create `crates/zemon-tui/src/views/dashboard.rs`:
 ```rust
 use crate::app::App;
 use ratatui::layout::{Constraint, Layout};
@@ -1742,20 +1742,20 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-tui/src/views/
+git add crates/zemon-tui/src/views/
 git commit -m "feat(tui): add views module and dashboard view"
 ```
 
 ---
 
-### Task 13: dotori-tui — Topics View
+### Task 13: zemon-tui — Topics View
 
 **Files:**
-- Create: `crates/dotori-tui/src/views/topics.rs`
+- Create: `crates/zemon-tui/src/views/topics.rs`
 
 - [ ] **Step 1: Write topics view**
 
-Create `crates/dotori-tui/src/views/topics.rs`:
+Create `crates/zemon-tui/src/views/topics.rs`:
 ```rust
 use crate::app::App;
 use ratatui::layout::{Constraint, Layout};
@@ -1825,23 +1825,23 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
 - [ ] **Step 2: Commit**
 
 ```bash
-git add crates/dotori-tui/src/views/topics.rs
+git add crates/zemon-tui/src/views/topics.rs
 git commit -m "feat(tui): add topics view with filtering and selection"
 ```
 
 ---
 
-### Task 14: dotori-tui — Subscribe View
+### Task 14: zemon-tui — Subscribe View
 
 **Files:**
-- Create: `crates/dotori-tui/src/views/subscribe.rs`
+- Create: `crates/zemon-tui/src/views/subscribe.rs`
 
 - [ ] **Step 1: Write subscribe view**
 
-Create `crates/dotori-tui/src/views/subscribe.rs`:
+Create `crates/zemon-tui/src/views/subscribe.rs`:
 ```rust
 use crate::app::App;
-use dotori_core::types::MessagePayload;
+use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -1913,23 +1913,23 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
 - [ ] **Step 2: Commit**
 
 ```bash
-git add crates/dotori-tui/src/views/subscribe.rs
+git add crates/zemon-tui/src/views/subscribe.rs
 git commit -m "feat(tui): add subscribe view with pause/resume and scrollback"
 ```
 
 ---
 
-### Task 15: dotori-tui — Query View
+### Task 15: zemon-tui — Query View
 
 **Files:**
-- Create: `crates/dotori-tui/src/views/query.rs`
+- Create: `crates/zemon-tui/src/views/query.rs`
 
 - [ ] **Step 1: Write query view**
 
-Create `crates/dotori-tui/src/views/query.rs`:
+Create `crates/zemon-tui/src/views/query.rs`:
 ```rust
 use crate::app::App;
-use dotori_core::types::MessagePayload;
+use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -2011,20 +2011,20 @@ pub fn render(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
 - [ ] **Step 2: Commit**
 
 ```bash
-git add crates/dotori-tui/src/views/query.rs
+git add crates/zemon-tui/src/views/query.rs
 git commit -m "feat(tui): add query view with input, results, and history"
 ```
 
 ---
 
-### Task 16: dotori-tui — Nodes View
+### Task 16: zemon-tui — Nodes View
 
 **Files:**
-- Create: `crates/dotori-tui/src/views/nodes.rs`
+- Create: `crates/zemon-tui/src/views/nodes.rs`
 
 - [ ] **Step 1: Write nodes view**
 
-Create `crates/dotori-tui/src/views/nodes.rs`:
+Create `crates/zemon-tui/src/views/nodes.rs`:
 ```rust
 use crate::app::App;
 use ratatui::layout::Constraint;
@@ -2105,7 +2105,7 @@ Expected: success — all modules now have implementations.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-tui/src/views/nodes.rs
+git add crates/zemon-tui/src/views/nodes.rs
 git commit -m "feat(tui): add nodes view with table display"
 ```
 
@@ -2121,17 +2121,17 @@ git commit -m "feat(tui): add nodes view with table display"
 cargo build --release
 ```
 
-Expected: compiles successfully. Binary at `target/release/dotori`.
+Expected: compiles successfully. Binary at `target/release/zemon`.
 
 - [ ] **Step 2: Test CLI help**
 
 ```bash
-./target/release/dotori --help
-./target/release/dotori discover --help
-./target/release/dotori sub --help
-./target/release/dotori query --help
-./target/release/dotori nodes --help
-./target/release/dotori tui --help
+./target/release/zemon --help
+./target/release/zemon discover --help
+./target/release/zemon sub --help
+./target/release/zemon query --help
+./target/release/zemon nodes --help
+./target/release/zemon tui --help
 ```
 
 Expected: all help texts display correctly with proper descriptions.
@@ -2139,7 +2139,7 @@ Expected: all help texts display correctly with proper descriptions.
 - [ ] **Step 3: Test CLI without Zenoh (expect connection error)**
 
 ```bash
-./target/release/dotori discover 2>&1 || true
+./target/release/zemon discover 2>&1 || true
 ```
 
 Expected: error message about Zenoh connection failure (no zenohd running). This confirms the binary runs and attempts to connect.
@@ -2170,15 +2170,15 @@ zenohd --cfg "adminspace/enabled:true"
 
 In another terminal:
 ```bash
-./target/release/dotori discover
-./target/release/dotori discover --json
+./target/release/zemon discover
+./target/release/zemon discover --json
 ```
 
 - [ ] **Step 3: Test subscribe**
 
 Terminal 1 — subscribe:
 ```bash
-./target/release/dotori sub "test/**" --pretty --timestamp
+./target/release/zemon sub "test/**" --pretty --timestamp
 ```
 
 Terminal 2 — publish (using zenoh CLI tool `z_put` or similar):
@@ -2192,21 +2192,21 @@ Verify messages appear in the subscriber terminal.
 - [ ] **Step 4: Test query**
 
 ```bash
-./target/release/dotori query "test/**" --timeout 2000
-./target/release/dotori query "test/**" --json
+./target/release/zemon query "test/**" --timeout 2000
+./target/release/zemon query "test/**" --json
 ```
 
 - [ ] **Step 5: Test nodes**
 
 ```bash
-./target/release/dotori nodes
-./target/release/dotori nodes --json
+./target/release/zemon nodes
+./target/release/zemon nodes --json
 ```
 
 - [ ] **Step 6: Test TUI**
 
 ```bash
-./target/release/dotori tui
+./target/release/zemon tui
 ```
 
 Verify:
