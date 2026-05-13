@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
-use dotori_core::types::{LivelinessEvent, NodeInfo, PortScoutResult, ZenohMessage};
+use zemon_core::types::{LivelinessEvent, NodeInfo, PortScoutResult, ZenohMessage};
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
