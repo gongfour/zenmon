@@ -162,7 +162,7 @@ Key 'y'/'Y' → App::handle_view_key → arboard::Clipboard → toast 설정
 
 ## 테스트 전략
 
-zemon는 현재 단위 테스트가 없지만 이 기능은 순수 로직 테스트가 가능한 부분이 많다:
+zemon은 현재 단위 테스트가 없지만 이 기능은 순수 로직 테스트가 가능한 부분이 많다:
 
 1. **Hit-testing 단위 테스트**: `tab_rects` 주어졌을 때 (col,row) → tab index 변환 함수를 분리해 테스트
 2. **리스트 클릭 인덱스 계산**: `list_rect`, `list_first_item_row`, `list_scroll_offset`, click row가 주어졌을 때 인덱스 계산 함수 테스트

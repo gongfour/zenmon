@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2021, zenoh 1.7 (unstable feature), tokio 1, clap 4 (derive), ratatui 0.30, crossterm 0.29 (event-stream), serde/serde_json, tracing, color-eyre
 
-**Design Spec:** `docs/superpowers/specs/2026-04-14-zemon-cli-design.md`
+**Design Spec:** `docs/superpowers/specs/2026-04-14-dotori-cli-design.md`
 
 ---
 
