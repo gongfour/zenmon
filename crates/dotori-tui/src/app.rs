@@ -1238,15 +1238,9 @@ impl App {
         ])
         .areas(inner);
 
-        let peer_marker = if matches!(self.mode_modal_selection, ConnectMode::Peer) {
-            "> [*] Peer"
-        } else {
-            "  [ ] Peer"
-        };
-        let client_marker = if matches!(self.mode_modal_selection, ConnectMode::Client) {
-            "> [*] Client"
-        } else {
-            "  [ ] Client"
+        let (peer_marker, client_marker) = match self.mode_modal_selection {
+            ConnectMode::Peer => ("> [*] Peer", "  [ ] Client"),
+            ConnectMode::Client => ("  [ ] Peer", "> [*] Client"),
         };
 
         frame.render_widget(
