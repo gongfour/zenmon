@@ -1,6 +1,7 @@
 use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use dotori_core::config::ConnectMode;
 use dotori_core::merge::merge_nodes;
 use dotori_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -155,6 +156,10 @@ pub struct App {
     pub scout_port_modal_open: bool,
     pub scout_port_input: String,
     pub scout_port_current: Option<u16>,
+    pub current_mode: ConnectMode,
+    pub mode_modal_open: bool,
+    pub mode_modal_selection: ConnectMode,
+    pub pending_reconnect_mode: Option<ConnectMode>,
     pub port_scan_results: Vec<PortScoutResult>,
     pub port_scan_selected: usize,
     pub port_scan_in_progress: bool,
@@ -220,6 +225,10 @@ impl App {
             scout_port_modal_open: false,
             scout_port_input: String::new(),
             scout_port_current: None,
+            current_mode: ConnectMode::Client,
+            mode_modal_open: false,
+            mode_modal_selection: ConnectMode::Client,
+            pending_reconnect_mode: None,
             port_scan_results: Vec::new(),
             port_scan_selected: 0,
             port_scan_in_progress: false,
@@ -250,6 +259,36 @@ impl App {
     pub fn set_error_toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), std::time::Instant::now()));
         self.toast_is_error = true;
+    }
+
+    /// Wipes all network-observation state (topics, messages, nodes) and resets
+    /// associated UI selection indices. Called before reconnecting with a new
+    /// mode so the previous session's data does not bleed into the new one.
+    ///
+    /// Does NOT clear liveliness state — the `ConnectResult::Connected` handler
+    /// in `lib.rs` clears those fields after the new session is established.
+    /// Does NOT clear query results, history, or user-entered filters, which
+    /// are session-scoped user inputs that should survive a reconnect.
+    pub fn clear_network_state(&mut self) {
+        self.topics.clear();
+        self.topic_latest.clear();
+        self.topic_msg_counts.clear();
+        self.topic_hz.clear();
+        self.total_msg_count = 0;
+        self.total_hz = 0.0;
+        self.topic_selected = 0;
+        self.topic_detail_scroll = 0;
+        self.list_scroll_offset = 0;
+
+        self.sub_messages.clear();
+        self.recent_messages.clear();
+        self.sub_selected = 0;
+
+        self.admin_nodes.clear();
+        self.scout_nodes.clear();
+        self.nodes.clear();
+        self.node_selected = 0;
+        self.node_detail_scroll = 0;
     }
 
     fn copy_to_clipboard(&mut self, text: String, label: &str) {
@@ -354,6 +393,10 @@ impl App {
             self.handle_scout_modal_key(key);
             return;
         }
+        if self.mode_modal_open {
+            self.handle_mode_modal_key(key);
+            return;
+        }
         if !self.is_text_input_active() {
             match key.code {
                 KeyCode::Char('q') => {
@@ -363,6 +406,11 @@ impl App {
                 KeyCode::Char('P') => {
                     self.scout_port_modal_open = true;
                     self.scout_port_input.clear();
+                    return;
+                }
+                KeyCode::Char('m') => {
+                    self.mode_modal_open = true;
+                    self.mode_modal_selection = self.current_mode;
                     return;
                 }
                 KeyCode::Char('1') => self.active_view = ActiveView::Dashboard,
@@ -386,6 +434,7 @@ impl App {
             || self.stream_filtering
             || self.query_editing
             || self.scout_port_modal_open
+            || self.mode_modal_open
     }
 
     fn handle_scout_modal_key(&mut self, key: KeyEvent) {
@@ -445,6 +494,35 @@ impl App {
                 let max = hits.saturating_sub(1);
                 if self.port_scan_selected < max {
                     self.port_scan_selected += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_mode_modal_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('m') => {
+                self.mode_modal_open = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.mode_modal_selection = ConnectMode::Peer;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.mode_modal_selection = ConnectMode::Client;
+            }
+            KeyCode::Enter => {
+                let target = self.mode_modal_selection;
+                self.mode_modal_open = false;
+                let label = match target {
+                    ConnectMode::Peer => "peer",
+                    ConnectMode::Client => "client",
+                };
+                if target == self.current_mode {
+                    self.set_toast(format!("Already in {} mode", label));
+                } else {
+                    self.pending_reconnect_mode = Some(target);
+                    self.set_toast(format!("Switching to {} mode...", label));
                 }
             }
             _ => {}
@@ -933,6 +1011,9 @@ impl App {
         if self.scout_port_modal_open {
             self.render_scout_port_modal(frame, content_area);
         }
+        if self.mode_modal_open {
+            self.render_mode_modal(frame, content_area);
+        }
 
         let (conn_text, conn_style) = match &self.connection_state {
             ConnectionState::Connected(zid) => (
@@ -976,6 +1057,11 @@ impl App {
             None => " scout:7446 ".to_string(),
         };
 
+        let mode_text = match self.current_mode {
+            ConnectMode::Peer => " mode:peer ",
+            ConnectMode::Client => " mode:client ",
+        };
+
         let status = Line::from(vec![
             Span::styled(conn_text, conn_style),
             Span::styled(
@@ -986,9 +1072,13 @@ impl App {
                 port_text,
                 Style::default().fg(Color::Black).bg(Color::Magenta),
             ),
+            Span::styled(
+                mode_text,
+                Style::default().fg(Color::Black).bg(Color::Blue),
+            ),
             middle_span,
             Span::styled(
-                " q:quit  1-6:view  /:filter  y:copy  P:port ",
+                " q:quit  1-6:view  /:filter  y:copy  P:port  m:mode ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
@@ -1124,12 +1214,159 @@ impl App {
             hint_row,
         );
     }
+
+    fn render_mode_modal(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 36.min(content_area.width.saturating_sub(2));
+        let height = 9.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 7 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Mode ")
+            .style(
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let [_pad, peer_row, client_row, _gap, current_row, hint_row] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+
+        let (peer_marker, client_marker) = match self.mode_modal_selection {
+            ConnectMode::Peer => ("> [*] Peer", "  [ ] Client"),
+            ConnectMode::Client => ("  [ ] Peer", "> [*] Client"),
+        };
+
+        frame.render_widget(
+            Paragraph::new(peer_marker).style(Style::default().fg(Color::Cyan)),
+            peer_row,
+        );
+        frame.render_widget(
+            Paragraph::new(client_marker).style(Style::default().fg(Color::Cyan)),
+            client_row,
+        );
+
+        let current_label = match self.current_mode {
+            ConnectMode::Peer => "current: peer",
+            ConnectMode::Client => "current: client",
+        };
+        frame.render_widget(
+            Paragraph::new(current_label).style(Style::default().fg(Color::Gray)),
+            current_row,
+        );
+
+        frame.render_widget(
+            Paragraph::new(" jk/UpDn:select  Enter:apply  Esc:close ")
+                .style(Style::default().fg(Color::DarkGray)),
+            hint_row,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn pressing_m_opens_mode_modal_with_current_mode_selected() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Peer;
+        app.mode_modal_selection = ConnectMode::Client; // stale prior value
+
+        app.handle_key(key(KeyCode::Char('m')));
+
+        assert!(app.mode_modal_open);
+        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
+    }
+
+    #[test]
+    fn mode_modal_arrow_keys_change_selection() {
+        let mut app = App::new("test".into());
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Client;
+
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
+
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Client);
+
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
+
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.mode_modal_selection, ConnectMode::Client);
+    }
+
+    #[test]
+    fn mode_modal_enter_same_mode_does_not_set_pending() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Peer;
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Peer;
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert!(app.pending_reconnect_mode.is_none());
+        assert!(!app.mode_modal_open);
+    }
+
+    #[test]
+    fn mode_modal_enter_different_mode_sets_pending_and_closes() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Peer;
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.pending_reconnect_mode, Some(ConnectMode::Peer));
+        assert!(!app.mode_modal_open);
+    }
+
+    #[test]
+    fn mode_modal_esc_closes_without_setting_pending() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.mode_modal_open = true;
+        app.mode_modal_selection = ConnectMode::Peer;
+
+        app.handle_key(key(KeyCode::Esc));
+
+        assert!(app.pending_reconnect_mode.is_none());
+        assert!(!app.mode_modal_open);
+    }
+
+    #[test]
+    fn pressing_m_again_closes_mode_modal() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('m')));
+        assert!(app.mode_modal_open);
+        app.handle_key(key(KeyCode::Char('m')));
+        assert!(!app.mode_modal_open);
+    }
 
     #[test]
     fn tab_hit_inside_rect_returns_index() {
@@ -1272,5 +1509,96 @@ mod tests {
         app.pin_stream_at(2);
         assert!(!app.stream_follow);
         assert_eq!(app.sub_selected, 0);
+    }
+
+    #[test]
+    fn clear_network_state_clears_topics_messages_and_nodes() {
+        let mut app = App::new("test".into());
+        let make = |k: &str| ZenohMessage {
+            key_expr: k.into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(make("a"));
+        app.handle_zenoh_message(make("b"));
+        app.total_msg_count = 7;
+        app.total_hz = 3.5;
+        app.topic_selected = 1;
+        app.topic_detail_scroll = 4;
+        app.list_scroll_offset = 5;
+        app.sub_selected = 1;
+        app.admin_nodes.push(dotori_core::types::NodeInfo {
+            zid: "z1".into(),
+            kind: "router".into(),
+            locators: vec![],
+            metadata: None,
+            sources: dotori_core::types::NodeSources::default(),
+            admin_last_seen: None,
+            scout_last_seen: None,
+        });
+        app.scout_nodes.push(dotori_core::types::NodeInfo {
+            zid: "z2".into(),
+            kind: "peer".into(),
+            locators: vec![],
+            metadata: None,
+            sources: dotori_core::types::NodeSources::default(),
+            admin_last_seen: None,
+            scout_last_seen: None,
+        });
+        app.nodes = dotori_core::merge::merge_nodes(&app.admin_nodes, &app.scout_nodes);
+        app.node_selected = 1;
+        app.node_detail_scroll = 2;
+
+        app.clear_network_state();
+
+        assert!(app.topics.is_empty());
+        assert!(app.topic_latest.is_empty());
+        assert!(app.topic_msg_counts.is_empty());
+        assert!(app.topic_hz.is_empty());
+        assert_eq!(app.total_msg_count, 0);
+        assert_eq!(app.total_hz, 0.0);
+        assert_eq!(app.topic_selected, 0);
+        assert_eq!(app.topic_detail_scroll, 0);
+        assert_eq!(app.list_scroll_offset, 0);
+
+        assert!(app.sub_messages.is_empty());
+        assert!(app.recent_messages.is_empty());
+        assert_eq!(app.sub_selected, 0);
+
+        assert!(app.admin_nodes.is_empty());
+        assert!(app.scout_nodes.is_empty());
+        assert!(app.nodes.is_empty());
+        assert_eq!(app.node_selected, 0);
+        assert_eq!(app.node_detail_scroll, 0);
+    }
+
+    #[test]
+    fn clear_network_state_preserves_query_history_and_filters() {
+        let mut app = App::new("test".into());
+        app.query_input = "demo/**".into();
+        app.query_history.push("demo/**".into());
+        app.query_results.push(ZenohMessage {
+            key_expr: "demo/x".into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(1)),
+            timestamp: None,
+            kind: "get".into(),
+            attachment: None,
+        });
+        app.topic_filter = "abc".into();
+        app.stream_filter = "xyz".into();
+        app.stream_follow = false;
+        app.sub_paused = true;
+
+        app.clear_network_state();
+
+        assert_eq!(app.query_input, "demo/**");
+        assert_eq!(app.query_history, vec!["demo/**".to_string()]);
+        assert_eq!(app.query_results.len(), 1);
+        assert_eq!(app.topic_filter, "abc");
+        assert_eq!(app.stream_filter, "xyz");
+        assert!(!app.stream_follow);
+        assert!(app.sub_paused);
     }
 }
