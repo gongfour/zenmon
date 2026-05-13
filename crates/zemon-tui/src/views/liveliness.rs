@@ -27,7 +27,7 @@ fn build_grouped_rows(app: &App) -> Vec<GroupedRow> {
     }
 
     // Group tokens by prefix
-    let mut groups: Vec<(String, Vec<(usize, &dotori_core::types::LivelinessToken)>)> = Vec::new();
+    let mut groups: Vec<(String, Vec<(usize, &zemon_core::types::LivelinessToken)>)> = Vec::new();
     for (i, token) in tokens.iter().enumerate() {
         let group = token.group_prefix().unwrap_or_else(|| "(ungrouped)".to_string());
         if let Some(g) = groups.iter_mut().find(|(k, _)| *k == group) {

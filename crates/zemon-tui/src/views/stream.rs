@@ -1,5 +1,5 @@
 use crate::app::App;
-use dotori_core::types::MessagePayload;
+use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

@@ -1,16 +1,13 @@
 [package]
-name = "dotori-tui"
+name = "zemon-core"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-dotori-core.workspace = true
 zenoh.workspace = true
 tokio.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 color-eyre.workspace = true
-arboard = "3"
-ratatui = "0.30"
-crossterm = { version = "0.29", features = ["event-stream"] }
-futures = "0.3"
+bitflags.workspace = true

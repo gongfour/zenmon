@@ -9,8 +9,8 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use dotori_core::config::DotoriConfig;
-use dotori_core::types::ZenohMessage;
+use zemon_core::config::ZemonConfig;
+use zemon_core::types::ZenohMessage;
 use event::{AppEvent, EventHandler};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use zenoh::Session;
 
-pub async fn run(mut config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
+pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
@@ -95,9 +95,9 @@ enum QueryResult {
 const REDRAW_INTERVAL_MS: u64 = 66;
 const MAX_PENDING_EVENTS_PER_BATCH: usize = 512;
 
-fn spawn_connect(config: DotoriConfig, tx: mpsc::UnboundedSender<ConnectResult>) {
+fn spawn_connect(config: ZemonConfig, tx: mpsc::UnboundedSender<ConnectResult>) {
     tokio::spawn(async move {
-        match dotori_core::session::open_session(&config).await {
+        match zemon_core::session::open_session(&config).await {
             Ok(s) => {
                 let _ = tx.send(ConnectResult::Connected(s));
             }
@@ -110,14 +110,14 @@ fn spawn_connect(config: DotoriConfig, tx: mpsc::UnboundedSender<ConnectResult>)
 }
 
 fn spawn_scout_task(
-    config: DotoriConfig,
+    config: ZemonConfig,
     tx: mpsc::UnboundedSender<AppEvent>,
     timeout: Duration,
 ) {
     tokio::spawn(async move {
         let _ = tx.send(AppEvent::ScoutStarted);
         let now = SystemTime::now();
-        match dotori_core::scout::scout(&config, timeout).await {
+        match zemon_core::scout::scout(&config, timeout).await {
             Ok(scouts) => {
                 let nodes: Vec<_> = scouts.iter().map(|s| s.to_node_info(now)).collect();
                 let _ = tx.send(AppEvent::ScoutNodes(nodes));
@@ -130,10 +130,10 @@ fn spawn_scout_task(
     });
 }
 
-fn spawn_port_scan_task(config: DotoriConfig, tx: mpsc::UnboundedSender<AppEvent>) {
+fn spawn_port_scan_task(config: ZemonConfig, tx: mpsc::UnboundedSender<AppEvent>) {
     tokio::spawn(async move {
         let _ = tx.send(AppEvent::PortScanStarted);
-        match dotori_core::scout::scout_port_range(
+        match zemon_core::scout::scout_port_range(
             &config,
             7446,
             7546,
@@ -168,7 +168,7 @@ fn spawn_admin_polling_task(
             let Some(sess) = sess else {
                 continue;
             };
-            match dotori_core::registry::query_admin_nodes(&sess).await {
+            match zemon_core::registry::query_admin_nodes(&sess).await {
                 Ok(nodes) => {
                     if tx.send(AppEvent::AdminNodes(nodes)).is_err() {
                         break;
@@ -187,12 +187,12 @@ fn spawn_liveliness_subscriber(
     tx: mpsc::UnboundedSender<AppEvent>,
 ) {
     let (liveliness_tx, mut liveliness_rx) =
-        mpsc::unbounded_channel::<dotori_core::types::LivelinessEvent>();
+        mpsc::unbounded_channel::<zemon_core::types::LivelinessEvent>();
 
     let session = session.clone();
     tokio::spawn(async move {
         if let Err(e) =
-            dotori_core::discover::subscribe_liveliness(&session, "**", liveliness_tx).await
+            zemon_core::discover::subscribe_liveliness(&session, "**", liveliness_tx).await
         {
             tracing::warn!("liveliness subscribe failed: {}", e);
         }
@@ -212,7 +212,7 @@ async fn run_loop(
     app: &mut App,
     events: &mut EventHandler,
     session: &Arc<Mutex<Option<Session>>>,
-    config: &mut DotoriConfig,
+    config: &mut ZemonConfig,
     zenoh_tx: &mpsc::UnboundedSender<ZenohMessage>,
     conn_tx: &mpsc::UnboundedSender<ConnectResult>,
     conn_rx: &mut mpsc::UnboundedReceiver<ConnectResult>,
@@ -238,7 +238,7 @@ async fn run_loop(
                 let tx = query_tx.clone();
                 let ke = key_expr.clone();
                 tokio::spawn(async move {
-                    match dotori_core::query::get(&s, &ke, None, Duration::from_secs(5)).await {
+                    match zemon_core::query::get(&s, &ke, None, Duration::from_secs(5)).await {
                         Ok(results) => {
                             let _ = tx.send(QueryResult::Ok(results));
                         }
@@ -318,7 +318,7 @@ async fn run_loop(
                         app.liveliness_events.clear();
                         app.liveliness_selected = 0;
                         app.liveliness_log_scroll = 0;
-                        let _ = dotori_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
+                        let _ = zemon_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
                         spawn_liveliness_subscriber(&s, tx.clone());
                         *session.lock().await = Some(s);
                     }

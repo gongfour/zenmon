@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-dotori-zenoh is a Rust CLI + TUI tool for monitoring and debugging Zenoh networks. Single binary `dotori` with headless CLI subcommands and an interactive ratatui TUI dashboard.
+zemon is a Rust CLI + TUI tool for monitoring and debugging Zenoh networks. Single binary `zemon` with headless CLI subcommands and an interactive ratatui TUI dashboard.
 
 ## Build & Run
 
 ```bash
-cargo build --release          # Release binary at ./target/release/dotori
+cargo build --release          # Release binary at ./target/release/zemon
 cargo check                    # Quick type check
 cargo run -- sub "test/**"     # Run via cargo
 ```
@@ -18,14 +18,14 @@ Requires: Rust 1.75+, zenohd for testing (homebrew: `brew install zenoh`)
 
 ```
 crates/
-  dotori-core/    # Library: Zenoh session, subscribe, query, registry
-  dotori-cli/     # Binary: clap CLI, produces `dotori`
-  dotori-tui/     # Library: ratatui views, event loop, app state
+  zemon-core/    # Library: Zenoh session, subscribe, query, registry
+  zemon-cli/     # Binary: clap CLI, produces `zemon`
+  zemon-tui/     # Library: ratatui views, event loop, app state
 ```
 
-- `dotori-core` is the shared library — CLI and TUI both depend on it
-- `dotori-tui` is a library crate called by `dotori-cli` via `dotori tui` subcommand
-- Single binary: `dotori` (defined in dotori-cli/Cargo.toml)
+- `zemon-core` is the shared library — CLI and TUI both depend on it
+- `zemon-tui` is a library crate called by `zemon-cli` via `zemon tui` subcommand
+- Single binary: `zemon` (defined in zemon-cli/Cargo.toml)
 
 ## Key Patterns
 
@@ -44,10 +44,10 @@ No unit tests yet. Manual testing:
 zenohd
 
 # Terminal 2: Start TUI
-./target/release/dotori tui
+./target/release/zemon tui
 
 # Terminal 3: Publish test data
-./target/release/dotori pub test/hello '{"msg":"world"}' --att '{"source":"debug"}'
+./target/release/zemon pub test/hello '{"msg":"world"}' --att '{"source":"debug"}'
 ```
 
 ## Conventions
