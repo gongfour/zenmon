@@ -1010,6 +1010,9 @@ impl App {
         if self.scout_port_modal_open {
             self.render_scout_port_modal(frame, content_area);
         }
+        if self.mode_modal_open {
+            self.render_mode_modal(frame, content_area);
+        }
 
         let (conn_text, conn_style) = match &self.connection_state {
             ConnectionState::Connected(zid) => (
@@ -1197,6 +1200,75 @@ impl App {
 
         frame.render_widget(
             Paragraph::new(" s:scan  Enter:reconnect  jk/↑↓:select  Esc:close ")
+                .style(Style::default().fg(Color::DarkGray)),
+            hint_row,
+        );
+    }
+
+    fn render_mode_modal(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 36.min(content_area.width.saturating_sub(2));
+        let height = 9.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 7 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Mode ")
+            .style(
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let [_pad, peer_row, client_row, _gap, current_row, hint_row] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+
+        let peer_marker = if matches!(self.mode_modal_selection, ConnectMode::Peer) {
+            "> [*] Peer"
+        } else {
+            "  [ ] Peer"
+        };
+        let client_marker = if matches!(self.mode_modal_selection, ConnectMode::Client) {
+            "> [*] Client"
+        } else {
+            "  [ ] Client"
+        };
+
+        frame.render_widget(
+            Paragraph::new(peer_marker).style(Style::default().fg(Color::Cyan)),
+            peer_row,
+        );
+        frame.render_widget(
+            Paragraph::new(client_marker).style(Style::default().fg(Color::Cyan)),
+            client_row,
+        );
+
+        let current_label = match self.current_mode {
+            ConnectMode::Peer => "current: peer",
+            ConnectMode::Client => "current: client",
+        };
+        frame.render_widget(
+            Paragraph::new(current_label).style(Style::default().fg(Color::Gray)),
+            current_row,
+        );
+
+        frame.render_widget(
+            Paragraph::new(" jk/UpDn:select  Enter:apply  Esc:close ")
                 .style(Style::default().fg(Color::DarkGray)),
             hint_row,
         );
