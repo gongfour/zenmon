@@ -304,8 +304,12 @@ If the list contains files not under `docs/superpowers/`, `README.md`, or `CLAUD
 
 Specific-before-generic ordering matters here too. The `dotori-zenoh` literal (project/repo name) becomes `zemon`, not `zemon-zenoh`, per spec.
 
+**Exception:** `docs/superpowers/specs/2026-05-13-rename-zemon-design.md` is **excluded** from this pass. That document describes the rename itself; substituting `dotori` → `zemon` inside its body would produce self-referential statements like "the string `zemon` becomes `zemon`" and destroy its meaning. It stays as the historical record of what was renamed and why. The `-not -path` filter below applies this exception.
+
 ```bash
-find README.md CLAUDE.md docs/superpowers -name '*.md' -type f -exec sed -i '' \
+find README.md CLAUDE.md docs/superpowers -name '*.md' -type f \
+  -not -path '*/specs/2026-05-13-rename-zemon-design.md' \
+  -exec sed -i '' \
   -e 's|gongfour/dotori-zenoh|gongfour/zemon|g' \
   -e 's|dotori-zenoh|zemon|g' \
   -e 's|DOTORI_ENDPOINT|ZEMON_ENDPOINT|g' \
@@ -384,6 +388,7 @@ grep -rn "dotori\|Dotori\|DOTORI" \
 
 Acceptable output:
 - Lines that are markdown path references to historical filenames containing `dotori-` (e.g. `docs/superpowers/plans/2026-04-14-dotori-cli-implementation.md`).
+- Every `dotori`/`Dotori`/`DOTORI` mention inside `docs/superpowers/specs/2026-05-13-rename-zemon-design.md` (deliberately preserved — see Task 2 Step 2.2 exception).
 - Nothing else.
 
 If any other lines appear, fix them with an `$EDITOR` and re-run.
