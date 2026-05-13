@@ -24,6 +24,8 @@ pub async fn run(mut config: DotoriConfig, tick_rate_ms: u64) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
+    app.current_mode = config.mode;
+    app.mode_modal_selection = config.mode;
 
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
     let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel::<ZenohMessage>();
@@ -262,6 +264,17 @@ async fn run_loop(
 
         if let Some(new_port) = app.pending_reconnect_port.take() {
             config.scout_port = Some(new_port);
+            *session.lock().await = None;
+            app.connection_state = ConnectionState::Connecting;
+            reconnect_pending = true;
+            spawn_connect(config.clone(), conn_tx.clone());
+            needs_redraw = true;
+        }
+
+        if let Some(new_mode) = app.pending_reconnect_mode.take() {
+            config.mode = new_mode;
+            app.current_mode = new_mode;
+            app.clear_network_state();
             *session.lock().await = None;
             app.connection_state = ConnectionState::Connecting;
             reconnect_pending = true;
