@@ -1,15 +1,15 @@
 [package]
-name = "dotori-cli"
+name = "zemon-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "dotori"
+name = "zemon"
 path = "src/main.rs"
 
 [dependencies]
-dotori-core.workspace = true
-dotori-tui.workspace = true
+zemon-core.workspace = true
+zemon-tui.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
