@@ -513,18 +513,14 @@ impl App {
             KeyCode::Enter => {
                 let target = self.mode_modal_selection;
                 self.mode_modal_open = false;
+                let label = match target {
+                    ConnectMode::Peer => "peer",
+                    ConnectMode::Client => "client",
+                };
                 if target == self.current_mode {
-                    let label = match target {
-                        ConnectMode::Peer => "peer",
-                        ConnectMode::Client => "client",
-                    };
                     self.set_toast(format!("Already in {} mode", label));
                 } else {
                     self.pending_reconnect_mode = Some(target);
-                    let label = match target {
-                        ConnectMode::Peer => "peer",
-                        ConnectMode::Client => "client",
-                    };
                     self.set_toast(format!("Switching to {} mode...", label));
                 }
             }
