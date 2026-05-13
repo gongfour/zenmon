@@ -1056,6 +1056,11 @@ impl App {
             None => " scout:7446 ".to_string(),
         };
 
+        let mode_text = match self.current_mode {
+            ConnectMode::Peer => " mode:peer ",
+            ConnectMode::Client => " mode:client ",
+        };
+
         let status = Line::from(vec![
             Span::styled(conn_text, conn_style),
             Span::styled(
@@ -1066,9 +1071,13 @@ impl App {
                 port_text,
                 Style::default().fg(Color::Black).bg(Color::Magenta),
             ),
+            Span::styled(
+                mode_text,
+                Style::default().fg(Color::Black).bg(Color::Blue),
+            ),
             middle_span,
             Span::styled(
-                " q:quit  1-6:view  /:filter  y:copy  P:port ",
+                " q:quit  1-6:view  /:filter  y:copy  P:port  m:mode ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
