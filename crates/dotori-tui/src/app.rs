@@ -1,8 +1,8 @@
 use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use dotori_core::merge::merge_nodes;
 use dotori_core::config::ConnectMode;
+use dotori_core::merge::merge_nodes;
 use dotori_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -261,6 +261,14 @@ impl App {
         self.toast_is_error = true;
     }
 
+    /// Wipes all network-observation state (topics, messages, nodes) and resets
+    /// associated UI selection indices. Called before reconnecting with a new
+    /// mode so the previous session's data does not bleed into the new one.
+    ///
+    /// Does NOT clear liveliness state — the `ConnectResult::Connected` handler
+    /// in `lib.rs` clears those fields after the new session is established.
+    /// Does NOT clear query results, history, or user-entered filters, which
+    /// are session-scoped user inputs that should survive a reconnect.
     pub fn clear_network_state(&mut self) {
         self.topics.clear();
         self.topic_latest.clear();
