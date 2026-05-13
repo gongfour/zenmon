@@ -1,4 +1,4 @@
-# dotori-zenoh
+# zemon
 
 Zenoh network monitor and debugger. CLI + TUI tool built with Rust.
 
@@ -7,14 +7,14 @@ Lightweight terminal-based alternative to web dashboards for monitoring Zenoh ne
 ## Install
 
 ```bash
-cargo install --path crates/dotori-cli
+cargo install --path crates/zemon-cli
 ```
 
 Or build from source:
 
 ```bash
 cargo build --release
-# Binary at ./target/release/dotori
+# Binary at ./target/release/zemon
 ```
 
 Requires a Rust toolchain (1.75+).
@@ -23,23 +23,23 @@ Requires a Rust toolchain (1.75+).
 
 ```bash
 # Subscribe to topics (real-time stream)
-dotori sub "forklift/**" --pretty --timestamp
+zemon sub "forklift/**" --pretty --timestamp
 
 # Publish a message
-dotori pub test/hello '{"msg":"world"}'
+zemon pub test/hello '{"msg":"world"}'
 
 # Publish with attachment metadata
-dotori pub task/goal '{"action":"move","x":5}' --att '{"request_id":"001","client_id":"dotori"}'
+zemon pub task/goal '{"action":"move","x":5}' --att '{"request_id":"001","client_id":"zemon"}'
 
 # List discovered nodes
-dotori nodes
+zemon nodes
 
 # Query (Zenoh GET — requires queryable responder)
-dotori query "@/*/router"
+zemon query "@/*/router"
 
 # JSON output (pipe to jq, etc.)
-dotori --json nodes
-dotori --json sub "sensor/**"
+zemon --json nodes
+zemon --json sub "sensor/**"
 ```
 
 ### Global Options
@@ -52,12 +52,12 @@ dotori --json sub "sensor/**"
 | `-c, --config` | Path to Zenoh JSON5 config file | - |
 | `--json` | Output in JSON format | - |
 
-Options can also be set via environment variables: `DOTORI_ENDPOINT`, `DOTORI_MODE`, `DOTORI_NAMESPACE`, `DOTORI_CONFIG`.
+Options can also be set via environment variables: `ZEMON_ENDPOINT`, `ZEMON_MODE`, `ZEMON_NAMESPACE`, `ZEMON_CONFIG`.
 
 ## TUI Dashboard
 
 ```bash
-dotori tui
+zemon tui
 ```
 
 Interactive terminal dashboard with 5 views:
@@ -97,9 +97,9 @@ Cargo workspace with 3 crates:
 
 ```
 crates/
-  dotori-core/    # Zenoh session, subscribe, query, registry (library)
-  dotori-cli/     # clap subcommands, produces `dotori` binary
-  dotori-tui/     # ratatui views and event loop (library)
+  zemon-core/    # Zenoh session, subscribe, query, registry (library)
+  zemon-cli/     # clap subcommands, produces `zemon` binary
+  zemon-tui/     # ratatui views and event loop (library)
 ```
 
 ### Tech Stack
@@ -112,8 +112,8 @@ crates/
 ## Roadmap
 
 ### Phase 1 — Network Visibility
-1. [ ] `dotori scout` — discover all Zenoh nodes on the network (ZID, type, locators)
-2. [ ] `dotori info` — show current session info, connected peers/routers, locators
+1. [ ] `zemon scout` — discover all Zenoh nodes on the network (ZID, type, locators)
+2. [ ] `zemon info` — show current session info, connected peers/routers, locators
 3. [ ] Topic Hz/throughput — display message rate (msgs/sec) per topic in TUI Topics view
 
 ### Phase 2 — Message Metadata
@@ -127,9 +127,9 @@ crates/
 9. [ ] Pub matching — show whether subscribers exist when publishing
 
 ### Phase 4 — Debugging Utilities
-10. [ ] `dotori keyexpr test <A> <B>` — test intersection/inclusion between key expressions
-11. [ ] `dotori pub --rate <HZ>` — repeated publish at fixed frequency for testing
-12. [ ] `dotori pub --congestion block|drop` — congestion control mode selection
+10. [ ] `zemon keyexpr test <A> <B>` — test intersection/inclusion between key expressions
+11. [ ] `zemon pub --rate <HZ>` — repeated publish at fixed frequency for testing
+12. [ ] `zemon pub --congestion block|drop` — congestion control mode selection
 13. [ ] DELETE message display — color-code PUT vs DELETE, filter by kind
 
 ### Phase 5 — Advanced Inspection

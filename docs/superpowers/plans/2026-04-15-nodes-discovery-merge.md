@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the dotori TUI Nodes view reflect the real Zenoh network by merging router admin-space data (live, 2s polling) with multicast scout results (manual trigger), with per-source tracking and scout-staleness visualization.
+**Goal:** Make the zemon TUI Nodes view reflect the real Zenoh network by merging router admin-space data (live, 2s polling) with multicast scout results (manual trigger), with per-source tracking and scout-staleness visualization.
 
-**Architecture:** Two independent background tokio tasks in the TUI produce `Vec<NodeInfo>` — one polling `@/*/router` admin space every 2 seconds, one running multicast `scout` on demand. A pure `merge_nodes` function combines both sides in `dotori-core`; results flow into `App` via new `AppEvent` variants and are rendered in a 4-column Nodes view with source badges and stale dimming.
+**Architecture:** Two independent background tokio tasks in the TUI produce `Vec<NodeInfo>` — one polling `@/*/router` admin space every 2 seconds, one running multicast `scout` on demand. A pure `merge_nodes` function combines both sides in `zemon-core`; results flow into `App` via new `AppEvent` variants and are rendered in a 4-column Nodes view with source badges and stale dimming.
 
 **Tech Stack:** Rust 1.75+, Zenoh 1.7, tokio, ratatui, `bitflags = "2"` (new dep), existing `color_eyre`.
 
 **Spec reference:** `docs/superpowers/specs/2026-04-15-nodes-discovery-merge-design.md` (commits `9375843` + `98e317a`)
 
-**Worktree assumption:** The user will create an isolated git worktree + branch before executing this plan. All paths below are relative to the worktree root, which mirrors `D:\project\hdx\dotori-zenoh`. If you start on `master`, create a branch first:
+**Worktree assumption:** The user will create an isolated git worktree + branch before executing this plan. All paths below are relative to the worktree root, which mirrors `D:\project\hdx\zemon`. If you start on `master`, create a branch first:
 
 ```bash
 git checkout -b feat/nodes-discovery-merge
@@ -23,20 +23,20 @@ All commits in this plan land on that branch.
 ## File Structure
 
 **Created:**
-- `crates/dotori-core/src/merge.rs` — pure merge function + unit tests
+- `crates/zemon-core/src/merge.rs` — pure merge function + unit tests
 
 **Modified:**
 - `Cargo.toml` — add `bitflags` to `[workspace.dependencies]`
-- `crates/dotori-core/Cargo.toml` — depend on workspace `bitflags`
-- `crates/dotori-core/src/lib.rs` — register new `merge` module
-- `crates/dotori-core/src/types.rs` — add `NodeSources` bitflags, modify `NodeInfo` fields, add `is_scout_stale()` + unit tests
-- `crates/dotori-core/src/registry.rs` — rename `list_nodes` → `query_admin_nodes`, implement `@/*/router` JSON parsing with `sessions[]` expansion
-- `crates/dotori-core/src/scout.rs` — add `ScoutInfo::to_node_info()` helper
-- `crates/dotori-cli/src/main.rs` — update two call sites from `list_nodes` → `query_admin_nodes`
-- `crates/dotori-tui/src/event.rs` — add `AdminNodes` / `ScoutStarted` / `ScoutNodes` variants; store `tx` in `EventHandler`; expose `sender()`
-- `crates/dotori-tui/src/app.rs` — add `admin_nodes`, `scout_nodes`, `scout_in_progress`, `last_scout_at`, `pending_scout_request`; add event handlers; remove `node_selected` range bugs; wire `s` key binding for Nodes view
-- `crates/dotori-tui/src/lib.rs` — remove old `list_nodes` call paths, spawn admin polling task + scout trigger helper, use `events.sender()`
-- `crates/dotori-tui/src/views/nodes.rs` — 4-column layout with Source column, footer counts, stale dimming
+- `crates/zemon-core/Cargo.toml` — depend on workspace `bitflags`
+- `crates/zemon-core/src/lib.rs` — register new `merge` module
+- `crates/zemon-core/src/types.rs` — add `NodeSources` bitflags, modify `NodeInfo` fields, add `is_scout_stale()` + unit tests
+- `crates/zemon-core/src/registry.rs` — rename `list_nodes` → `query_admin_nodes`, implement `@/*/router` JSON parsing with `sessions[]` expansion
+- `crates/zemon-core/src/scout.rs` — add `ScoutInfo::to_node_info()` helper
+- `crates/zemon-cli/src/main.rs` — update two call sites from `list_nodes` → `query_admin_nodes`
+- `crates/zemon-tui/src/event.rs` — add `AdminNodes` / `ScoutStarted` / `ScoutNodes` variants; store `tx` in `EventHandler`; expose `sender()`
+- `crates/zemon-tui/src/app.rs` — add `admin_nodes`, `scout_nodes`, `scout_in_progress`, `last_scout_at`, `pending_scout_request`; add event handlers; remove `node_selected` range bugs; wire `s` key binding for Nodes view
+- `crates/zemon-tui/src/lib.rs` — remove old `list_nodes` call paths, spawn admin polling task + scout trigger helper, use `events.sender()`
+- `crates/zemon-tui/src/views/nodes.rs` — 4-column layout with Source column, footer counts, stale dimming
 
 ---
 
@@ -44,7 +44,7 @@ All commits in this plan land on that branch.
 
 **Files:**
 - Modify: `Cargo.toml`
-- Modify: `crates/dotori-core/Cargo.toml`
+- Modify: `crates/zemon-core/Cargo.toml`
 
 - [ ] **Step 1: Add bitflags to workspace dependencies**
 
@@ -52,8 +52,8 @@ Edit `Cargo.toml`. Add one line inside `[workspace.dependencies]`:
 
 ```toml
 [workspace.dependencies]
-dotori-core = { path = "crates/dotori-core" }
-dotori-tui = { path = "crates/dotori-tui" }
+zemon-core = { path = "crates/zemon-core" }
+zemon-tui = { path = "crates/zemon-tui" }
 zenoh = { version = "1.7", features = ["unstable"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }
@@ -64,9 +64,9 @@ color-eyre = "0.6"
 bitflags = "2"
 ```
 
-- [ ] **Step 2: Add bitflags to dotori-core**
+- [ ] **Step 2: Add bitflags to zemon-core**
 
-Edit `crates/dotori-core/Cargo.toml`. Add one line:
+Edit `crates/zemon-core/Cargo.toml`. Add one line:
 
 ```toml
 [dependencies]
@@ -81,13 +81,13 @@ bitflags.workspace = true
 
 - [ ] **Step 3: Verify workspace builds**
 
-Run: `cargo check -p dotori-core`
+Run: `cargo check -p zemon-core`
 Expected: PASS with no errors. (May emit warnings — ignore.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add Cargo.toml crates/dotori-core/Cargo.toml
+git add Cargo.toml crates/zemon-core/Cargo.toml
 git commit -m "chore(deps): add bitflags to workspace"
 ```
 
@@ -96,12 +96,12 @@ git commit -m "chore(deps): add bitflags to workspace"
 ## Task 2: Add `NodeSources` bitflags + modify `NodeInfo`
 
 **Files:**
-- Modify: `crates/dotori-core/src/types.rs:64-72`
+- Modify: `crates/zemon-core/src/types.rs:64-72`
 - Test: same file (module-inline `#[cfg(test)] mod tests`)
 
 - [ ] **Step 1: Replace the existing `NodeInfo` struct and add `NodeSources`**
 
-In `crates/dotori-core/src/types.rs`, replace lines 64-72 (the existing `NodeInfo` block) with:
+In `crates/zemon-core/src/types.rs`, replace lines 64-72 (the existing `NodeInfo` block) with:
 
 ```rust
 bitflags::bitflags! {
@@ -150,7 +150,7 @@ Note: `bitflags::bitflags!` needs the macro imported — since we added it as a 
 
 - [ ] **Step 2: Add unit tests below the new code**
 
-Append to the same file `crates/dotori-core/src/types.rs`:
+Append to the same file `crates/zemon-core/src/types.rs`:
 
 ```rust
 #[cfg(test)]
@@ -195,7 +195,7 @@ mod tests {
 
 - [ ] **Step 3: Run tests — expected to FAIL to build first**
 
-Run: `cargo test -p dotori-core types::tests`
+Run: `cargo test -p zemon-core types::tests`
 
 Expected: the three test functions compile and fail/pass, BUT the rest of the crate fails to compile because `registry.rs` still references `last_seen` on `NodeInfo`. This is expected — Task 3 fixes it. For now, verify the **test module itself parses** by checking the error message mentions `registry.rs`, not `types.rs`.
 
@@ -204,7 +204,7 @@ If errors reference `types.rs`, stop and fix the struct definition before procee
 - [ ] **Step 4: Commit (even though crate doesn't build yet)**
 
 ```bash
-git add crates/dotori-core/src/types.rs
+git add crates/zemon-core/src/types.rs
 git commit -m "feat(core): NodeSources bitflags + NodeInfo source tracking"
 ```
 
@@ -215,9 +215,9 @@ This is a WIP commit — the crate is broken and will be fixed in Task 3. Commit
 ## Task 3: Rewrite `query_admin_nodes` in registry.rs
 
 **Files:**
-- Modify: `crates/dotori-core/src/registry.rs` (full replacement)
+- Modify: `crates/zemon-core/src/registry.rs` (full replacement)
 
-- [ ] **Step 1: Replace the entire contents of `crates/dotori-core/src/registry.rs`**
+- [ ] **Step 1: Replace the entire contents of `crates/zemon-core/src/registry.rs`**
 
 ```rust
 use crate::types::{NodeInfo, NodeSources};
@@ -393,20 +393,20 @@ pub async fn query_admin_nodes(session: &Session) -> Result<Vec<NodeInfo>> {
 }
 ```
 
-- [ ] **Step 2: Verify dotori-core now builds**
+- [ ] **Step 2: Verify zemon-core now builds**
 
-Run: `cargo check -p dotori-core`
+Run: `cargo check -p zemon-core`
 Expected: PASS (types.rs test block and registry.rs both compile).
 
 - [ ] **Step 3: Run the type unit tests**
 
-Run: `cargo test -p dotori-core types::tests`
+Run: `cargo test -p zemon-core types::tests`
 Expected: PASS — three tests green.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/dotori-core/src/registry.rs
+git add crates/zemon-core/src/registry.rs
 git commit -m "feat(core): query_admin_nodes parses router sessions[]"
 ```
 
@@ -415,35 +415,35 @@ git commit -m "feat(core): query_admin_nodes parses router sessions[]"
 ## Task 4: Update CLI callers of the renamed function
 
 **Files:**
-- Modify: `crates/dotori-cli/src/main.rs:167` and `:193`
+- Modify: `crates/zemon-cli/src/main.rs:167` and `:193`
 
 - [ ] **Step 1: Confirm the call sites**
 
-Run: `grep -n "list_nodes" crates/dotori-cli/src/main.rs`
+Run: `grep -n "list_nodes" crates/zemon-cli/src/main.rs`
 Expected output:
 ```
-167:            let nodes = dotori_core::registry::list_nodes(&session).await?;
-193:                            let updated = dotori_core::registry::list_nodes(&session).await?;
+167:            let nodes = zemon_core::registry::list_nodes(&session).await?;
+193:                            let updated = zemon_core::registry::list_nodes(&session).await?;
 ```
 
 - [ ] **Step 2: Rename both call sites**
 
-In `crates/dotori-cli/src/main.rs`, replace both occurrences:
+In `crates/zemon-cli/src/main.rs`, replace both occurrences:
 
 - Line 167: `list_nodes(&session)` → `query_admin_nodes(&session)`
 - Line 193: `list_nodes(&session)` → `query_admin_nodes(&session)`
 
-Use find-and-replace for `dotori_core::registry::list_nodes` → `dotori_core::registry::query_admin_nodes`.
+Use find-and-replace for `zemon_core::registry::list_nodes` → `zemon_core::registry::query_admin_nodes`.
 
 - [ ] **Step 3: Build the CLI**
 
-Run: `cargo check -p dotori-cli`
-Expected: PASS. If the compile error mentions `NodeInfo::last_seen`, the CLI is reading that field somewhere — search with `grep -n "last_seen" crates/dotori-cli/src/main.rs`. Remove any such references (the CLI nodes printer at lines 170-184 only uses `.zid`, `.kind`, `.locators`, so should be clean).
+Run: `cargo check -p zemon-cli`
+Expected: PASS. If the compile error mentions `NodeInfo::last_seen`, the CLI is reading that field somewhere — search with `grep -n "last_seen" crates/zemon-cli/src/main.rs`. Remove any such references (the CLI nodes printer at lines 170-184 only uses `.zid`, `.kind`, `.locators`, so should be clean).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/dotori-cli/src/main.rs
+git add crates/zemon-cli/src/main.rs
 git commit -m "refactor(cli): rename list_nodes callers to query_admin_nodes"
 ```
 
@@ -452,12 +452,12 @@ git commit -m "refactor(cli): rename list_nodes callers to query_admin_nodes"
 ## Task 5: Create pure `merge_nodes` function with unit tests
 
 **Files:**
-- Create: `crates/dotori-core/src/merge.rs`
-- Modify: `crates/dotori-core/src/lib.rs` (register module)
+- Create: `crates/zemon-core/src/merge.rs`
+- Modify: `crates/zemon-core/src/lib.rs` (register module)
 
 - [ ] **Step 1: Write the file with implementation + tests together**
 
-Create `crates/dotori-core/src/merge.rs`:
+Create `crates/zemon-core/src/merge.rs`:
 
 ```rust
 use crate::types::{NodeInfo, NodeSources};
@@ -582,7 +582,7 @@ mod tests {
 
 - [ ] **Step 2: Register the module in `lib.rs`**
 
-Edit `crates/dotori-core/src/lib.rs`. Add `pub mod merge;` after `pub mod registry;`:
+Edit `crates/zemon-core/src/lib.rs`. Add `pub mod merge;` after `pub mod registry;`:
 
 ```rust
 pub mod config;
@@ -599,13 +599,13 @@ pub mod info;
 
 - [ ] **Step 3: Run the merge tests — expected to PASS**
 
-Run: `cargo test -p dotori-core merge::tests`
+Run: `cargo test -p zemon-core merge::tests`
 Expected: all four tests PASS.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/dotori-core/src/merge.rs crates/dotori-core/src/lib.rs
+git add crates/zemon-core/src/merge.rs crates/zemon-core/src/lib.rs
 git commit -m "feat(core): add pure merge_nodes with unit tests"
 ```
 
@@ -614,11 +614,11 @@ git commit -m "feat(core): add pure merge_nodes with unit tests"
 ## Task 6: Add `ScoutInfo::to_node_info` helper
 
 **Files:**
-- Modify: `crates/dotori-core/src/types.rs` (append below existing `ScoutInfo`)
+- Modify: `crates/zemon-core/src/types.rs` (append below existing `ScoutInfo`)
 
 - [ ] **Step 1: Add the conversion method**
 
-In `crates/dotori-core/src/types.rs`, immediately after the `pub struct ScoutInfo { ... }` block, add:
+In `crates/zemon-core/src/types.rs`, immediately after the `pub struct ScoutInfo { ... }` block, add:
 
 ```rust
 impl ScoutInfo {
@@ -639,13 +639,13 @@ impl ScoutInfo {
 
 - [ ] **Step 2: Build**
 
-Run: `cargo check -p dotori-core`
+Run: `cargo check -p zemon-core`
 Expected: PASS.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/dotori-core/src/types.rs
+git add crates/zemon-core/src/types.rs
 git commit -m "feat(core): ScoutInfo::to_node_info conversion"
 ```
 
@@ -654,11 +654,11 @@ git commit -m "feat(core): ScoutInfo::to_node_info conversion"
 ## Task 7: Expose `EventHandler::sender()` and add new `AppEvent` variants
 
 **Files:**
-- Modify: `crates/dotori-tui/src/event.rs`
+- Modify: `crates/zemon-tui/src/event.rs`
 
 - [ ] **Step 1: Add new variants to `AppEvent`**
 
-Edit `crates/dotori-tui/src/event.rs`. Replace the existing enum at lines 7-12 with:
+Edit `crates/zemon-tui/src/event.rs`. Replace the existing enum at lines 7-12 with:
 
 ```rust
 #[derive(Clone, Debug)]
@@ -666,9 +666,9 @@ pub enum AppEvent {
     Key(KeyEvent),
     Zenoh(ZenohMessage),
     Tick,
-    AdminNodes(Vec<dotori_core::types::NodeInfo>),
+    AdminNodes(Vec<zemon_core::types::NodeInfo>),
     ScoutStarted,
-    ScoutNodes(Vec<dotori_core::types::NodeInfo>),
+    ScoutNodes(Vec<zemon_core::types::NodeInfo>),
 }
 ```
 
@@ -750,23 +750,23 @@ impl EventHandler {
 
 - [ ] **Step 2.5: Add `NodeInfo` re-export usage check**
 
-The new variants use `dotori_core::types::NodeInfo`. The file already has `use dotori_core::types::ZenohMessage;` at the top. Change that line to:
+The new variants use `zemon_core::types::NodeInfo`. The file already has `use zemon_core::types::ZenohMessage;` at the top. Change that line to:
 
 ```rust
-use dotori_core::types::{NodeInfo, ZenohMessage};
+use zemon_core::types::{NodeInfo, ZenohMessage};
 ```
 
 Then simplify the variants to just `AdminNodes(Vec<NodeInfo>)` and `ScoutNodes(Vec<NodeInfo>)`.
 
 - [ ] **Step 3: Build TUI crate**
 
-Run: `cargo check -p dotori-tui`
+Run: `cargo check -p zemon-tui`
 Expected: FAIL with errors about missing `AdminNodes`/`ScoutNodes` match arms in `app.rs::handle_event` and/or unused `scout_in_progress` etc. This is expected — later tasks fix `app.rs` and `lib.rs`. The event module itself should compile without errors; if the errors are inside `event.rs`, stop and fix before proceeding.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/dotori-tui/src/event.rs
+git add crates/zemon-tui/src/event.rs
 git commit -m "feat(tui): EventHandler::sender and new node-discovery events"
 ```
 
@@ -775,21 +775,21 @@ git commit -m "feat(tui): EventHandler::sender and new node-discovery events"
 ## Task 8: Add new state fields + event handlers in `App`
 
 **Files:**
-- Modify: `crates/dotori-tui/src/app.rs`
+- Modify: `crates/zemon-tui/src/app.rs`
 
 - [ ] **Step 1: Add new `use` for merge + NodeSources + Duration**
 
-In `crates/dotori-tui/src/app.rs` line 4, replace:
+In `crates/zemon-tui/src/app.rs` line 4, replace:
 
 ```rust
-use dotori_core::types::{NodeInfo, TopicInfo, ZenohMessage};
+use zemon_core::types::{NodeInfo, TopicInfo, ZenohMessage};
 ```
 
 with:
 
 ```rust
-use dotori_core::merge::merge_nodes;
-use dotori_core::types::{NodeInfo, NodeSources, TopicInfo, ZenohMessage};
+use zemon_core::merge::merge_nodes;
+use zemon_core::types::{NodeInfo, NodeSources, TopicInfo, ZenohMessage};
 use std::time::{Duration, SystemTime};
 ```
 
@@ -797,7 +797,7 @@ Note: `std::time::Instant` is already imported at line 11 — keep that line unc
 
 - [ ] **Step 2: Replace the existing `nodes` field with three fields in the `App` struct**
 
-In `crates/dotori-tui/src/app.rs`, change line 59 from:
+In `crates/zemon-tui/src/app.rs`, change line 59 from:
 
 ```rust
     pub nodes: Vec<NodeInfo>,
@@ -925,19 +925,19 @@ with:
 
 - [ ] **Step 6: Confirm `s` is not already bound globally**
 
-Run: `grep -n "Char('s')\|Char('S')" crates/dotori-tui/src/app.rs`
+Run: `grep -n "Char('s')\|Char('S')" crates/zemon-tui/src/app.rs`
 
 Expected: only the new line you just added. If any other match arm claims `'s'` globally (outside `ActiveView::Nodes`), stop and report back — the design says to fall back to `'S'` (shift-s). Today the codebase has no other `'s'` binding.
 
 - [ ] **Step 7: Build — App will still fail because `views/nodes.rs` and `lib.rs` still reference old paths**
 
-Run: `cargo check -p dotori-tui`
+Run: `cargo check -p zemon-tui`
 Expected: FAIL with errors about `node.last_seen`, stale `list_nodes` calls in `lib.rs`, or missing imports. Those are fixed in Tasks 9 and 10. If the errors reference `app.rs` itself (e.g. unresolved imports in app.rs), stop and fix.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/dotori-tui/src/app.rs
+git add crates/zemon-tui/src/app.rs
 git commit -m "feat(tui): App state + handlers for admin/scout node events"
 ```
 
@@ -946,11 +946,11 @@ git commit -m "feat(tui): App state + handlers for admin/scout node events"
 ## Task 9: Rewire `lib.rs` — spawn admin polling + scout trigger
 
 **Files:**
-- Modify: `crates/dotori-tui/src/lib.rs`
+- Modify: `crates/zemon-tui/src/lib.rs`
 
 - [ ] **Step 1: Add imports**
 
-At the top of `crates/dotori-tui/src/lib.rs`, after the existing imports (lines 1-13), add:
+At the top of `crates/zemon-tui/src/lib.rs`, after the existing imports (lines 1-13), add:
 
 ```rust
 use event::AppEvent;
@@ -963,14 +963,14 @@ After `spawn_connect` (around line 76), append:
 
 ```rust
 fn spawn_scout_task(
-    config: DotoriConfig,
+    config: ZemonConfig,
     tx: mpsc::UnboundedSender<AppEvent>,
     timeout: Duration,
 ) {
     tokio::spawn(async move {
         let _ = tx.send(AppEvent::ScoutStarted);
         let now = std::time::SystemTime::now();
-        match dotori_core::scout::scout(&config, timeout).await {
+        match zemon_core::scout::scout(&config, timeout).await {
             Ok(scouts) => {
                 let nodes: Vec<_> = scouts.iter().map(|s| s.to_node_info(now)).collect();
                 let _ = tx.send(AppEvent::ScoutNodes(nodes));
@@ -997,7 +997,7 @@ fn spawn_admin_polling_task(
                 guard.as_ref().cloned()
             };
             let Some(sess) = sess else { continue };
-            match dotori_core::registry::query_admin_nodes(&sess).await {
+            match zemon_core::registry::query_admin_nodes(&sess).await {
                 Ok(nodes) => {
                     if tx.send(AppEvent::AdminNodes(nodes)).is_err() {
                         break;
@@ -1038,7 +1038,7 @@ Inside the main loop body, find the block at lines 93-114 that dispatches pendin
 
 Then inside the `tokio::select!`, **remove** the two old `list_nodes` call paths:
 
-- Line 139 (inside `ConnectResult::Connected`): delete the line `app.nodes = dotori_core::registry::list_nodes(&s).await.unwrap_or_default();`. The admin polling task already populates `app.admin_nodes` on its 2-second cadence.
+- Line 139 (inside `ConnectResult::Connected`): delete the line `app.nodes = zemon_core::registry::list_nodes(&s).await.unwrap_or_default();`. The admin polling task already populates `app.admin_nodes` on its 2-second cadence.
 - Lines 148-159 (`_ = refresh_interval.tick()` arm): replace the body that calls `list_nodes` inside `if let Some(s) = session.lock().await.as_ref()` with just the reconnect branch. New body:
 
 ```rust
@@ -1053,20 +1053,20 @@ Then inside the `tokio::select!`, **remove** the two old `list_nodes` call paths
 
 - [ ] **Step 5: Confirm no `list_nodes` references remain**
 
-Run: `grep -n "list_nodes" crates/dotori-tui/src/lib.rs`
+Run: `grep -n "list_nodes" crates/zemon-tui/src/lib.rs`
 Expected: no output.
 
 - [ ] **Step 6: Build**
 
-Run: `cargo check -p dotori-tui`
-Expected: FAIL only on `crates/dotori-tui/src/views/nodes.rs` (which still uses `node.kind.as_str()` patterns that will still work, plus potentially stale field reads). If `lib.rs` itself errors, stop and fix.
+Run: `cargo check -p zemon-tui`
+Expected: FAIL only on `crates/zemon-tui/src/views/nodes.rs` (which still uses `node.kind.as_str()` patterns that will still work, plus potentially stale field reads). If `lib.rs` itself errors, stop and fix.
 
 Specifically expect errors like "no field `nodes` on App" — NO, the field still exists. Expected errors are instead around unused variables or similar. If the project compiles fully at this step, even better.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/dotori-tui/src/lib.rs
+git add crates/zemon-tui/src/lib.rs
 git commit -m "feat(tui): spawn admin polling + scout trigger tasks"
 ```
 
@@ -1075,15 +1075,15 @@ git commit -m "feat(tui): spawn admin polling + scout trigger tasks"
 ## Task 10: Rewrite Nodes view with 4 columns + source badge + footer
 
 **Files:**
-- Modify: `crates/dotori-tui/src/views/nodes.rs` (full replacement)
+- Modify: `crates/zemon-tui/src/views/nodes.rs` (full replacement)
 
 - [ ] **Step 1: Replace the file contents**
 
-Replace `crates/dotori-tui/src/views/nodes.rs` with:
+Replace `crates/zemon-tui/src/views/nodes.rs` with:
 
 ```rust
 use crate::app::App;
-use dotori_core::types::{NodeInfo, NodeSources};
+use zemon_core::types::{NodeInfo, NodeSources};
 use ratatui::layout::Constraint;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
@@ -1226,7 +1226,7 @@ Expected: PASS on the 4 merge tests and 3 types tests (7 tests total green, no f
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/dotori-tui/src/views/nodes.rs
+git add crates/zemon-tui/src/views/nodes.rs
 git commit -m "feat(tui): 4-column Nodes view with source badge and stale dim"
 ```
 
@@ -1283,7 +1283,7 @@ Expected: router starts and listens on the default `tcp/[::]:7447`.
 In terminal 2:
 
 ```bash
-./target/release/dotori tui
+./target/release/zemon tui
 ```
 
 Expected: TUI launches. Press `5` to switch to Nodes view. Within 2 seconds (first admin poll tick), the view should show:
@@ -1296,7 +1296,7 @@ Expected: TUI launches. Press `5` to switch to Nodes view. Within 2 seconds (fir
 In terminal 3:
 
 ```bash
-./target/release/dotori sub "**"
+./target/release/zemon sub "**"
 ```
 
 Expected: within 2-4 seconds the TUI Nodes view gains a third row with `Source: admin`, kind `peer`, empty Locators column (per spec: peer/client locators are intentionally empty from admin data).

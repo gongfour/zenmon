@@ -33,7 +33,7 @@ The TUI currently locks the connection mode to whatever was passed via `--mode` 
 
 ### Data model
 
-Additions to `App` (`crates/dotori-tui/src/app.rs`):
+Additions to `App` (`crates/zemon-tui/src/app.rs`):
 
 ```rust
 pub current_mode: ConnectMode,        // mirrors the live config.mode
@@ -42,13 +42,13 @@ pub mode_modal_selection: ConnectMode, // transient selection inside the modal
 pub pending_reconnect_mode: Option<ConnectMode>, // signal picked up by main loop
 ```
 
-`ConnectMode` is already exported from `dotori-core::config`. `dotori-tui` already depends on `dotori-core` via `DotoriConfig`, so no new crate boundary is crossed.
+`ConnectMode` is already exported from `zemon-core::config`. `zemon-tui` already depends on `zemon-core` via `ZemonConfig`, so no new crate boundary is crossed.
 
-`App::new` is updated to accept the initial mode (or to read it from a passed-in `DotoriConfig`) so `current_mode` is initialized correctly. The CLI entry point (`crates/dotori-cli/src/main.rs`) wires the resolved `cfg.mode` through.
+`App::new` is updated to accept the initial mode (or to read it from a passed-in `ZemonConfig`) so `current_mode` is initialized correctly. The CLI entry point (`crates/zemon-cli/src/main.rs`) wires the resolved `cfg.mode` through.
 
 ### Reconnect plumbing
 
-In the main loop (`crates/dotori-tui/src/lib.rs`), add a block adjacent to the existing `pending_reconnect_port` handler:
+In the main loop (`crates/zemon-tui/src/lib.rs`), add a block adjacent to the existing `pending_reconnect_port` handler:
 
 ```rust
 if let Some(new_mode) = app.pending_reconnect_mode.take() {
@@ -162,7 +162,7 @@ Insert the corresponding `Span` immediately after the `scout:` span, using a dis
 
 ## Tests
 
-Unit tests in `crates/dotori-tui/src/app.rs` `#[cfg(test)]` block:
+Unit tests in `crates/zemon-tui/src/app.rs` `#[cfg(test)]` block:
 
 - `clear_network_state_clears_topics_and_nodes_only`
 - `clear_network_state_preserves_query_history_and_filters`
