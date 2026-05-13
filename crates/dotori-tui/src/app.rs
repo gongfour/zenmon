@@ -2,6 +2,7 @@ use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use dotori_core::merge::merge_nodes;
+use dotori_core::config::ConnectMode;
 use dotori_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -155,6 +156,10 @@ pub struct App {
     pub scout_port_modal_open: bool,
     pub scout_port_input: String,
     pub scout_port_current: Option<u16>,
+    pub current_mode: ConnectMode,
+    pub mode_modal_open: bool,
+    pub mode_modal_selection: ConnectMode,
+    pub pending_reconnect_mode: Option<ConnectMode>,
     pub port_scan_results: Vec<PortScoutResult>,
     pub port_scan_selected: usize,
     pub port_scan_in_progress: bool,
@@ -220,6 +225,10 @@ impl App {
             scout_port_modal_open: false,
             scout_port_input: String::new(),
             scout_port_current: None,
+            current_mode: ConnectMode::Client,
+            mode_modal_open: false,
+            mode_modal_selection: ConnectMode::Client,
+            pending_reconnect_mode: None,
             port_scan_results: Vec::new(),
             port_scan_selected: 0,
             port_scan_in_progress: false,
@@ -250,6 +259,27 @@ impl App {
     pub fn set_error_toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), std::time::Instant::now()));
         self.toast_is_error = true;
+    }
+
+    pub fn clear_network_state(&mut self) {
+        self.topics.clear();
+        self.topic_latest.clear();
+        self.topic_msg_counts.clear();
+        self.topic_hz.clear();
+        self.total_msg_count = 0;
+        self.total_hz = 0.0;
+        self.topic_selected = 0;
+        self.topic_detail_scroll = 0;
+
+        self.sub_messages.clear();
+        self.recent_messages.clear();
+        self.sub_selected = 0;
+
+        self.admin_nodes.clear();
+        self.scout_nodes.clear();
+        self.nodes.clear();
+        self.node_selected = 0;
+        self.node_detail_scroll = 0;
     }
 
     fn copy_to_clipboard(&mut self, text: String, label: &str) {
@@ -1272,5 +1302,94 @@ mod tests {
         app.pin_stream_at(2);
         assert!(!app.stream_follow);
         assert_eq!(app.sub_selected, 0);
+    }
+
+    #[test]
+    fn clear_network_state_clears_topics_messages_and_nodes() {
+        let mut app = App::new("test".into());
+        let make = |k: &str| ZenohMessage {
+            key_expr: k.into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(make("a"));
+        app.handle_zenoh_message(make("b"));
+        app.total_msg_count = 7;
+        app.total_hz = 3.5;
+        app.topic_selected = 1;
+        app.topic_detail_scroll = 4;
+        app.sub_selected = 1;
+        app.admin_nodes.push(dotori_core::types::NodeInfo {
+            zid: "z1".into(),
+            kind: "router".into(),
+            locators: vec![],
+            metadata: None,
+            sources: dotori_core::types::NodeSources::default(),
+            admin_last_seen: None,
+            scout_last_seen: None,
+        });
+        app.scout_nodes.push(dotori_core::types::NodeInfo {
+            zid: "z2".into(),
+            kind: "peer".into(),
+            locators: vec![],
+            metadata: None,
+            sources: dotori_core::types::NodeSources::default(),
+            admin_last_seen: None,
+            scout_last_seen: None,
+        });
+        app.nodes = dotori_core::merge::merge_nodes(&app.admin_nodes, &app.scout_nodes);
+        app.node_selected = 1;
+        app.node_detail_scroll = 2;
+
+        app.clear_network_state();
+
+        assert!(app.topics.is_empty());
+        assert!(app.topic_latest.is_empty());
+        assert!(app.topic_msg_counts.is_empty());
+        assert!(app.topic_hz.is_empty());
+        assert_eq!(app.total_msg_count, 0);
+        assert_eq!(app.total_hz, 0.0);
+        assert_eq!(app.topic_selected, 0);
+        assert_eq!(app.topic_detail_scroll, 0);
+
+        assert!(app.sub_messages.is_empty());
+        assert!(app.recent_messages.is_empty());
+        assert_eq!(app.sub_selected, 0);
+
+        assert!(app.admin_nodes.is_empty());
+        assert!(app.scout_nodes.is_empty());
+        assert!(app.nodes.is_empty());
+        assert_eq!(app.node_selected, 0);
+        assert_eq!(app.node_detail_scroll, 0);
+    }
+
+    #[test]
+    fn clear_network_state_preserves_query_history_and_filters() {
+        let mut app = App::new("test".into());
+        app.query_input = "demo/**".into();
+        app.query_history.push("demo/**".into());
+        app.query_results.push(ZenohMessage {
+            key_expr: "demo/x".into(),
+            payload: dotori_core::types::MessagePayload::Json(serde_json::json!(1)),
+            timestamp: None,
+            kind: "get".into(),
+            attachment: None,
+        });
+        app.topic_filter = "abc".into();
+        app.stream_filter = "xyz".into();
+        app.stream_follow = false;
+        app.sub_paused = true;
+
+        app.clear_network_state();
+
+        assert_eq!(app.query_input, "demo/**");
+        assert_eq!(app.query_history, vec!["demo/**".to_string()]);
+        assert_eq!(app.query_results.len(), 1);
+        assert_eq!(app.topic_filter, "abc");
+        assert_eq!(app.stream_filter, "xyz");
+        assert!(!app.stream_follow);
+        assert!(app.sub_paused);
     }
 }
