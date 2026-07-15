@@ -533,7 +533,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
 
         Command::Info => {
             let session = zemon_core::session::open_session(&config).await?;
-            let detail = zemon_core::info::session_info(&session).await?;
+            let detail = zemon_core::info::session_info(&session, config.mode).await?;
 
             if cli.json {
                 // `info` is a single resource; wrap it as a one-element
@@ -545,6 +545,10 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             } else {
                 println!("Session ZID:  {}", detail.zid);
                 println!("Mode:         {}", detail.mode);
+                println!(
+                    "Connected:    {}",
+                    if detail.connected { "yes" } else { "no" }
+                );
                 if detail.routers.is_empty() {
                     println!("Routers:      (none)");
                 } else {
