@@ -20,7 +20,8 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use zenoh::Session;
 
-pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
+pub async fn run(mut config: ZemonConfig, refresh: Duration) -> Result<()> {
+    let tick_rate_ms = refresh.as_millis() as u64;
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
