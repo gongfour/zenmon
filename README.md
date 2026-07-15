@@ -1,4 +1,4 @@
-# zemon
+# zenmon
 
 Zenoh network monitor and debugger. CLI + TUI tool built with Rust.
 
@@ -7,14 +7,14 @@ Lightweight terminal-based alternative to web dashboards for monitoring Zenoh ne
 ## Install
 
 ```bash
-cargo install --path crates/zemon-cli
+cargo install --path crates/zenmon-cli
 ```
 
 Or build from source:
 
 ```bash
 cargo build --release
-# Binary at ./target/release/zemon
+# Binary at ./target/release/zenmon
 ```
 
 Requires a Rust toolchain (1.75+).
@@ -23,23 +23,23 @@ Requires a Rust toolchain (1.75+).
 
 ```bash
 # Subscribe to topics (real-time stream)
-zemon sub "forklift/**" --pretty --timestamp
+zenmon sub "forklift/**" --pretty --timestamp
 
 # Publish a message
-zemon pub test/hello '{"msg":"world"}'
+zenmon pub test/hello '{"msg":"world"}'
 
 # Publish with attachment metadata
-zemon pub task/goal '{"action":"move","x":5}' --att '{"request_id":"001","client_id":"zemon"}'
+zenmon pub task/goal '{"action":"move","x":5}' --att '{"request_id":"001","client_id":"zenmon"}'
 
 # List discovered nodes
-zemon nodes
+zenmon nodes
 
 # Query (Zenoh GET — requires queryable responder)
-zemon query "@/*/router"
+zenmon query "@/*/router"
 
 # JSON output (pipe to jq, etc.)
-zemon --json nodes
-zemon --json sub "sensor/**"
+zenmon --json nodes
+zenmon --json sub "sensor/**"
 ```
 
 ### Global Options
@@ -52,12 +52,12 @@ zemon --json sub "sensor/**"
 | `-c, --config` | Path to Zenoh JSON5 config file | - |
 | `--json` | Output in JSON format | - |
 
-Options can also be set via environment variables: `ZEMON_ENDPOINT`, `ZEMON_MODE`, `ZEMON_NAMESPACE`, `ZEMON_CONFIG`.
+Options can also be set via environment variables: `ZENMON_ENDPOINT`, `ZENMON_MODE`, `ZENMON_NAMESPACE`, `ZENMON_CONFIG`.
 
 ## TUI Dashboard
 
 ```bash
-zemon tui
+zenmon tui
 ```
 
 Interactive terminal dashboard with 5 views:
@@ -97,9 +97,9 @@ Cargo workspace with 3 crates:
 
 ```
 crates/
-  zemon-core/    # Zenoh session, subscribe, query, registry (library)
-  zemon-cli/     # clap subcommands, produces `zemon` binary
-  zemon-tui/     # ratatui views and event loop (library)
+  zenmon-core/    # Zenoh session, subscribe, query, registry (library)
+  zenmon-cli/     # clap subcommands, produces `zenmon` binary
+  zenmon-tui/     # ratatui views and event loop (library)
 ```
 
 ### Tech Stack
@@ -112,8 +112,8 @@ crates/
 ## Roadmap
 
 ### Phase 1 — Network Visibility
-1. [ ] `zemon scout` — discover all Zenoh nodes on the network (ZID, type, locators)
-2. [ ] `zemon info` — show current session info, connected peers/routers, locators
+1. [ ] `zenmon scout` — discover all Zenoh nodes on the network (ZID, type, locators)
+2. [ ] `zenmon info` — show current session info, connected peers/routers, locators
 3. [ ] Topic Hz/throughput — display message rate (msgs/sec) per topic in TUI Topics view
 
 ### Phase 2 — Message Metadata
@@ -127,9 +127,9 @@ crates/
 9. [ ] Pub matching — show whether subscribers exist when publishing
 
 ### Phase 4 — Debugging Utilities
-10. [ ] `zemon keyexpr test <A> <B>` — test intersection/inclusion between key expressions
-11. [ ] `zemon pub --rate <HZ>` — repeated publish at fixed frequency for testing
-12. [ ] `zemon pub --congestion block|drop` — congestion control mode selection
+10. [ ] `zenmon keyexpr test <A> <B>` — test intersection/inclusion between key expressions
+11. [ ] `zenmon pub --rate <HZ>` — repeated publish at fixed frequency for testing
+12. [ ] `zenmon pub --congestion block|drop` — congestion control mode selection
 13. [ ] DELETE message display — color-code PUT vs DELETE, filter by kind
 
 ### Phase 5 — Advanced Inspection

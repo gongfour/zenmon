@@ -16,21 +16,21 @@
 
 | File | Change |
 |---|---|
-| `crates/zemon-tui/src/app.rs` | Modify — add fields, `clear_network_state` helper, `handle_mode_modal_key`, `render_mode_modal`, `'m'` key binding, status bar badge, unit tests |
-| `crates/zemon-tui/src/lib.rs` | Modify — initialize `app.current_mode` from config, add `pending_reconnect_mode` block in main loop |
+| `crates/zenmon-tui/src/app.rs` | Modify — add fields, `clear_network_state` helper, `handle_mode_modal_key`, `render_mode_modal`, `'m'` key binding, status bar badge, unit tests |
+| `crates/zenmon-tui/src/lib.rs` | Modify — initialize `app.current_mode` from config, add `pending_reconnect_mode` block in main loop |
 
-No new files. CLI (`crates/zemon-cli/src/main.rs`) is untouched: it already sets `cfg.mode` from the `--mode` flag and passes the full `ZemonConfig` to `zemon_tui::run`.
+No new files. CLI (`crates/zenmon-cli/src/main.rs`) is untouched: it already sets `cfg.mode` from the `--mode` flag and passes the full `ZenmonConfig` to `zenmon_tui::run`.
 
 ---
 
 ## Task 1: Add mode state fields and `clear_network_state` helper
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 1.1: Write failing tests for `clear_network_state`**
 
-Append to the `#[cfg(test)] mod tests` block in `crates/zemon-tui/src/app.rs` (just before the closing `}` at line 1276):
+Append to the `#[cfg(test)] mod tests` block in `crates/zenmon-tui/src/app.rs` (just before the closing `}` at line 1276):
 
 ```rust
     #[test]
@@ -38,7 +38,7 @@ Append to the `#[cfg(test)] mod tests` block in `crates/zemon-tui/src/app.rs` (j
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(null)),
             timestamp: None,
             kind: "put".into(),
             attachment: None,
@@ -50,25 +50,25 @@ Append to the `#[cfg(test)] mod tests` block in `crates/zemon-tui/src/app.rs` (j
         app.topic_selected = 1;
         app.topic_detail_scroll = 4;
         app.sub_selected = 1;
-        app.admin_nodes.push(zemon_core::types::NodeInfo {
+        app.admin_nodes.push(zenmon_core::types::NodeInfo {
             zid: "z1".into(),
             kind: "router".into(),
             locators: vec![],
             metadata: None,
-            sources: zemon_core::types::NodeSources::default(),
+            sources: zenmon_core::types::NodeSources::default(),
             admin_last_seen: None,
             scout_last_seen: None,
         });
-        app.scout_nodes.push(zemon_core::types::NodeInfo {
+        app.scout_nodes.push(zenmon_core::types::NodeInfo {
             zid: "z2".into(),
             kind: "peer".into(),
             locators: vec![],
             metadata: None,
-            sources: zemon_core::types::NodeSources::default(),
+            sources: zenmon_core::types::NodeSources::default(),
             admin_last_seen: None,
             scout_last_seen: None,
         });
-        app.nodes = zemon_core::merge::merge_nodes(&app.admin_nodes, &app.scout_nodes);
+        app.nodes = zenmon_core::merge::merge_nodes(&app.admin_nodes, &app.scout_nodes);
         app.node_selected = 1;
         app.node_detail_scroll = 2;
 
@@ -101,7 +101,7 @@ Append to the `#[cfg(test)] mod tests` block in `crates/zemon-tui/src/app.rs` (j
         app.query_history.push("demo/**".into());
         app.query_results.push(ZenohMessage {
             key_expr: "demo/x".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(1)),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(1)),
             timestamp: None,
             kind: "get".into(),
             attachment: None,
@@ -125,22 +125,22 @@ Append to the `#[cfg(test)] mod tests` block in `crates/zemon-tui/src/app.rs` (j
 
 - [ ] **Step 1.2: Run tests to verify they fail**
 
-Run: `cargo test -p zemon-tui clear_network_state -- --nocapture`
+Run: `cargo test -p zenmon-tui clear_network_state -- --nocapture`
 Expected: FAIL with `no method named 'clear_network_state' found for struct 'App'`
 
 - [ ] **Step 1.3: Add `ConnectMode` import and new `App` fields**
 
-In `crates/zemon-tui/src/app.rs`, modify the import block at line 5 from:
+In `crates/zenmon-tui/src/app.rs`, modify the import block at line 5 from:
 
 ```rust
-use zemon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
+use zenmon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 ```
 
 to:
 
 ```rust
-use zemon_core::config::ConnectMode;
-use zemon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
+use zenmon_core::config::ConnectMode;
+use zenmon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 ```
 
 In the `pub struct App { ... }` block (starts at line 109), add these fields right after `pub scout_port_current: Option<u16>,` (line 157):
@@ -163,7 +163,7 @@ In `App::new` (starts at line 180), add these initializers right after `scout_po
 
 - [ ] **Step 1.4: Add `clear_network_state` method**
 
-In `crates/zemon-tui/src/app.rs`, add this method to the `impl App { ... }` block immediately after `set_error_toast` (before the existing `fn copy_to_clipboard` at line 255):
+In `crates/zenmon-tui/src/app.rs`, add this method to the `impl App { ... }` block immediately after `set_error_toast` (before the existing `fn copy_to_clipboard` at line 255):
 
 ```rust
     pub fn clear_network_state(&mut self) {
@@ -190,18 +190,18 @@ In `crates/zemon-tui/src/app.rs`, add this method to the `impl App { ... }` bloc
 
 - [ ] **Step 1.5: Run tests to verify they pass**
 
-Run: `cargo test -p zemon-tui clear_network_state -- --nocapture`
+Run: `cargo test -p zenmon-tui clear_network_state -- --nocapture`
 Expected: PASS (both tests)
 
 Also run the full test suite to confirm no regressions:
 
-Run: `cargo test -p zemon-tui`
+Run: `cargo test -p zenmon-tui`
 Expected: all tests PASS
 
 - [ ] **Step 1.6: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "$(cat <<'EOF'
 feat(tui): add mode state fields and clear_network_state helper
 
@@ -220,11 +220,11 @@ EOF
 ## Task 2: Mode modal key handler and `m` keybinding
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 2.1: Write failing tests for modal behavior**
 
-Append to the `#[cfg(test)] mod tests` block in `crates/zemon-tui/src/app.rs`:
+Append to the `#[cfg(test)] mod tests` block in `crates/zenmon-tui/src/app.rs`:
 
 ```rust
     use crossterm::event::KeyModifiers;
@@ -313,16 +313,16 @@ Append to the `#[cfg(test)] mod tests` block in `crates/zemon-tui/src/app.rs`:
     }
 ```
 
-This requires `ConnectMode` to derive `PartialEq` and `Eq` for the `assert_eq!` calls — it already does (`crates/zemon-core/src/config.rs:16`).
+This requires `ConnectMode` to derive `PartialEq` and `Eq` for the `assert_eq!` calls — it already does (`crates/zenmon-core/src/config.rs:16`).
 
 - [ ] **Step 2.2: Run tests to verify they fail**
 
-Run: `cargo test -p zemon-tui mode_modal -- --nocapture` and `cargo test -p zemon-tui pressing_m -- --nocapture`
+Run: `cargo test -p zenmon-tui mode_modal -- --nocapture` and `cargo test -p zenmon-tui pressing_m -- --nocapture`
 Expected: FAIL — modal handler does not exist; the `m` key falls through to `handle_view_key` and is ignored.
 
 - [ ] **Step 2.3: Add modal routing and `m` key in `handle_key`**
 
-In `crates/zemon-tui/src/app.rs`, modify `handle_key` (starts at line 352). Replace:
+In `crates/zenmon-tui/src/app.rs`, modify `handle_key` (starts at line 352). Replace:
 
 ```rust
     fn handle_key(&mut self, key: KeyEvent) {
@@ -375,7 +375,7 @@ with:
 
 - [ ] **Step 2.4: Update `is_text_input_active` to include the mode modal**
 
-In `crates/zemon-tui/src/app.rs`, modify `is_text_input_active` (starts at line 384). Replace:
+In `crates/zenmon-tui/src/app.rs`, modify `is_text_input_active` (starts at line 384). Replace:
 
 ```rust
     fn is_text_input_active(&self) -> bool {
@@ -400,7 +400,7 @@ with:
 
 - [ ] **Step 2.5: Add `handle_mode_modal_key`**
 
-In `crates/zemon-tui/src/app.rs`, add this method to the `impl App { ... }` block immediately after `handle_scout_modal_key` (before `fn handle_mouse` at line 454):
+In `crates/zenmon-tui/src/app.rs`, add this method to the `impl App { ... }` block immediately after `handle_scout_modal_key` (before `fn handle_mouse` at line 454):
 
 ```rust
     fn handle_mode_modal_key(&mut self, key: KeyEvent) {
@@ -439,13 +439,13 @@ In `crates/zemon-tui/src/app.rs`, add this method to the `impl App { ... }` bloc
 
 - [ ] **Step 2.6: Run tests to verify they pass**
 
-Run: `cargo test -p zemon-tui`
+Run: `cargo test -p zenmon-tui`
 Expected: all tests PASS, including the new modal tests.
 
 - [ ] **Step 2.7: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "$(cat <<'EOF'
 feat(tui): add 'm' keybinding and mode modal key handler
 
@@ -464,13 +464,13 @@ EOF
 ## Task 3: Render the mode modal
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 This task is rendering only; it has no unit tests. We verify visually in the manual smoke test (Task 6).
 
 - [ ] **Step 3.1: Add `render_mode_modal` method**
 
-In `crates/zemon-tui/src/app.rs`, add this method to the `impl App { ... }` block immediately after `render_scout_port_modal` (i.e. after the closing `}` of that function, before the `}` that closes the `impl App` block — find it just below the existing modal renderer near line ~1130):
+In `crates/zenmon-tui/src/app.rs`, add this method to the `impl App { ... }` block immediately after `render_scout_port_modal` (i.e. after the closing `}` of that function, before the `}` that closes the `impl App` block — find it just below the existing modal renderer near line ~1130):
 
 ```rust
     fn render_mode_modal(&self, frame: &mut Frame, content_area: Rect) {
@@ -545,7 +545,7 @@ In `crates/zemon-tui/src/app.rs`, add this method to the `impl App { ... }` bloc
 
 - [ ] **Step 3.2: Dispatch the modal render in `App::render`**
 
-In `crates/zemon-tui/src/app.rs`, find the existing block in `pub fn render` (around line 933):
+In `crates/zenmon-tui/src/app.rs`, find the existing block in `pub fn render` (around line 933):
 
 ```rust
         if self.scout_port_modal_open {
@@ -566,13 +566,13 @@ Change it to:
 
 - [ ] **Step 3.3: Build to verify**
 
-Run: `cargo build -p zemon-tui`
+Run: `cargo build -p zenmon-tui`
 Expected: compiles cleanly (no warnings about unused imports — `Clear`, `Borders`, `Layout`, `Constraint`, `Paragraph`, `Block`, `Modifier` are already in scope from line 6-9).
 
 - [ ] **Step 3.4: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "$(cat <<'EOF'
 feat(tui): render mode-switch modal
 
@@ -590,11 +590,11 @@ EOF
 ## Task 4: Status bar mode badge and updated key hint
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 4.1: Add the `mode:` badge and update the hint string**
 
-In `crates/zemon-tui/src/app.rs`, find the `port_text` block in `pub fn render` (around line 974) and the status `Line::from(...)` immediately after it (around line 979). Currently:
+In `crates/zenmon-tui/src/app.rs`, find the `port_text` block in `pub fn render` (around line 974) and the status `Line::from(...)` immediately after it (around line 979). Currently:
 
 ```rust
         let port_text = match self.scout_port_current {
@@ -657,13 +657,13 @@ Replace with:
 
 - [ ] **Step 4.2: Build to verify**
 
-Run: `cargo build -p zemon-tui`
+Run: `cargo build -p zenmon-tui`
 Expected: compiles cleanly.
 
 - [ ] **Step 4.3: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "$(cat <<'EOF'
 feat(tui): show active mode in status bar and add m:mode hint
 
@@ -680,14 +680,14 @@ EOF
 ## Task 5: Wire mode reconnect into the main loop
 
 **Files:**
-- Modify: `crates/zemon-tui/src/lib.rs`
+- Modify: `crates/zenmon-tui/src/lib.rs`
 
 - [ ] **Step 5.1: Initialize `app.current_mode` from config in `run`**
 
-In `crates/zemon-tui/src/lib.rs`, find the top of `pub async fn run` (line 23-27):
+In `crates/zenmon-tui/src/lib.rs`, find the top of `pub async fn run` (line 23-27):
 
 ```rust
-pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
+pub async fn run(mut config: ZenmonConfig, tick_rate_ms: u64) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
@@ -696,7 +696,7 @@ pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
 Change it to:
 
 ```rust
-pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
+pub async fn run(mut config: ZenmonConfig, tick_rate_ms: u64) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
@@ -706,7 +706,7 @@ pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
 
 - [ ] **Step 5.2: Add the `pending_reconnect_mode` block in the main loop**
 
-In `crates/zemon-tui/src/lib.rs`, find the existing `pending_reconnect_port` block (line 263-270):
+In `crates/zenmon-tui/src/lib.rs`, find the existing `pending_reconnect_port` block (line 263-270):
 
 ```rust
         if let Some(new_port) = app.pending_reconnect_port.take() {
@@ -747,11 +747,11 @@ Expected: all tests PASS.
 - [ ] **Step 5.5: Commit**
 
 ```bash
-git add crates/zemon-tui/src/lib.rs
+git add crates/zenmon-tui/src/lib.rs
 git commit -m "$(cat <<'EOF'
 feat(tui): wire mode reconnect into the main loop
 
-Initializes app.current_mode from the resolved ZemonConfig and adds a
+Initializes app.current_mode from the resolved ZenmonConfig and adds a
 pending_reconnect_mode handler next to the existing scout-port one.
 On switch: updates config.mode, clears network state, drops the session,
 and re-enters the connect path.
@@ -773,13 +773,13 @@ This task confirms the feature works end-to-end and the UI renders correctly. It
 - [ ] **Step 6.1: Build the release binary**
 
 Run: `cargo build --release`
-Expected: produces `./target/release/zemon`.
+Expected: produces `./target/release/zenmon`.
 
 - [ ] **Step 6.2: Smoke test — peer mode without zenohd**
 
 In Terminal A (no zenohd running anywhere):
 
-Run: `./target/release/zemon --mode peer tui`
+Run: `./target/release/zenmon --mode peer tui`
 
 Verify:
 - Status bar bottom-right shows ` mode:peer ` badge with blue background
@@ -810,7 +810,7 @@ While the TUI from Step 6.2 is running:
 
 Start a publisher in Terminal B (peer mode, so no zenohd needed):
 
-Run: `./target/release/zemon --mode peer pub test/hello '{"msg":"world"}'` (repeat or wrap in a loop)
+Run: `./target/release/zenmon --mode peer pub test/hello '{"msg":"world"}'` (repeat or wrap in a loop)
 
 In the TUI from Step 6.2 (still in peer mode), verify:
 - `test/hello` appears in the Topics view
@@ -841,6 +841,6 @@ If any step fails, fix the underlying code, re-run `cargo test`, and amend or ad
 | Edge cases | Task 2 (handler covers all key paths); Task 5 (reconnect plumbing for fail/retry); Task 6 (manual verification) |
 | Tests listed in spec | Task 1 (Step 1.1) covers `clear_network_state_*`; Task 2 (Step 2.1) covers `mode_modal_*` |
 
-**Type consistency:** `ConnectMode`, `current_mode`, `mode_modal_selection`, `pending_reconnect_mode`, `clear_network_state` are spelled identically across all tasks. `ConnectMode` is `Copy` (already derives `Copy` in `crates/zemon-core/src/config.rs:16`), so the assignments and `==` comparisons in this plan are valid.
+**Type consistency:** `ConnectMode`, `current_mode`, `mode_modal_selection`, `pending_reconnect_mode`, `clear_network_state` are spelled identically across all tasks. `ConnectMode` is `Copy` (already derives `Copy` in `crates/zenmon-core/src/config.rs:16`), so the assignments and `==` comparisons in this plan are valid.
 
 **No placeholders.** Every code-change step shows the exact code.

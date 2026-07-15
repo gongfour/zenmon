@@ -1,7 +1,7 @@
 # Split `app.rs` into Submodules — Design
 
 **Date:** 2026-05-14
-**Scope:** Split the 1604-line `crates/zemon-tui/src/app.rs` into a focused `app/` directory of submodules organized by concern (state, events, input, render). Apply two opportunistic cleanups (`is_text_input_active` rename, workspace-wide `cargo fmt`) in the same effort.
+**Scope:** Split the 1604-line `crates/zenmon-tui/src/app.rs` into a focused `app/` directory of submodules organized by concern (state, events, input, render). Apply two opportunistic cleanups (`is_text_input_active` rename, workspace-wide `cargo fmt`) in the same effort.
 
 ## Motivation
 
@@ -9,8 +9,8 @@ Code reviewers flagged during the TUI mode-switch and project-rename efforts tha
 
 ## Goals
 
-- `crates/zemon-tui/src/app.rs` becomes `crates/zemon-tui/src/app/` with `mod.rs` + 3 sub-files, each ~300–600 lines.
-- Public API observable from `crates/zemon-tui/src/lib.rs` is unchanged. `App`, `ConnectionState`, `QueryStatus` remain accessible as `app::App`, etc.
+- `crates/zenmon-tui/src/app.rs` becomes `crates/zenmon-tui/src/app/` with `mod.rs` + 3 sub-files, each ~300–600 lines.
+- Public API observable from `crates/zenmon-tui/src/lib.rs` is unchanged. `App`, `ConnectionState`, `QueryStatus` remain accessible as `app::App`, etc.
 - All 30 existing tests continue to pass with no behavior change.
 - `is_text_input_active` is renamed to `is_key_capture_active` to reflect that it includes modal flags as well.
 - `cargo fmt --check` passes after the work.
@@ -21,7 +21,7 @@ Code reviewers flagged during the TUI mode-switch and project-rename efforts tha
 - No new tests beyond what already exists.
 - No introduction of `TestBackend` or any rendering test infrastructure.
 - No changes to the `views/` directory beyond what existing imports require.
-- No changes to `crates/zemon-cli/` or `crates/zemon-core/` other than what `cargo fmt` produces.
+- No changes to `crates/zenmon-cli/` or `crates/zenmon-core/` other than what `cargo fmt` produces.
 
 ## Decisions (recorded from brainstorming)
 
@@ -140,7 +140,7 @@ External API (`pub` items observable from `lib.rs`):
 
 **a. `cargo fmt --all`**
 
-Executed once after the split lands. The fmt fixes that already exist on master (long lines in `zemon-cli/src/main.rs`, `zemon-core/src/config.rs`, `zemon-core/src/discover.rs`) plus any new lines introduced or relocated by the split are all corrected by a single `cargo fmt --all` run.
+Executed once after the split lands. The fmt fixes that already exist on master (long lines in `zenmon-cli/src/main.rs`, `zenmon-core/src/config.rs`, `zenmon-core/src/discover.rs`) plus any new lines introduced or relocated by the split are all corrected by a single `cargo fmt --all` run.
 
 **b. `is_text_input_active` → `is_key_capture_active`**
 
@@ -169,7 +169,7 @@ If the move surfaces any unused imports (likely, because each submodule will hav
 The work lands as **two commits**:
 
 1. **`refactor(tui): split app.rs into app/ submodules`**
-   - `git mv crates/zemon-tui/src/app.rs crates/zemon-tui/src/app/mod.rs`
+   - `git mv crates/zenmon-tui/src/app.rs crates/zenmon-tui/src/app/mod.rs`
    - Create `app/events.rs`, `app/input.rs`, `app/render.rs` and move methods/tests into them
    - Apply visibility changes
    - Rename `is_text_input_active` → `is_key_capture_active`
@@ -184,8 +184,8 @@ The work lands as **two commits**:
 
 After commit 1:
 - `cargo build` clean (no errors)
-- `cargo test` shows 30 passing (8 zemon-core + 22 zemon-tui), 0 failures
-- `wc -l crates/zemon-tui/src/app/*.rs` shows each file ~300–600 lines
+- `cargo test` shows 30 passing (8 zenmon-core + 22 zenmon-tui), 0 failures
+- `wc -l crates/zenmon-tui/src/app/*.rs` shows each file ~300–600 lines
 - `grep -rn "is_text_input_active" crates/` returns zero results
 - `grep -rn "fn is_key_capture_active" crates/` returns exactly one definition
 - The `lib.rs` import block (`use app::{App, ConnectionState, QueryStatus};`) still compiles unchanged
@@ -207,13 +207,13 @@ After commit 2:
 
 ## Tests
 
-This refactor adds no new tests. The existing 30 tests (8 in `zemon-core`, 22 in `zemon-tui`) act as the regression gate. Tests are redistributed across submodules as listed above. After the split:
+This refactor adds no new tests. The existing 30 tests (8 in `zenmon-core`, 22 in `zenmon-tui`) act as the regression gate. Tests are redistributed across submodules as listed above. After the split:
 
-- `cargo test -p zemon-tui` → 22 passed
+- `cargo test -p zenmon-tui` → 22 passed
 - `cargo test` (workspace) → 30 passed total
 
 ## Out-of-scope follow-ups
 
 - Introducing `ratatui::backend::TestBackend` for snapshot testing of `render` and the modal renderers.
 - Splitting `views/<view>.rs` to also own per-view input handlers (decomposition axis B from the brainstorming).
-- Restructuring `crates/zemon-cli/src/main.rs` (currently the largest file in the workspace at ~480 lines and with its own pre-existing fmt issues — out of scope for this work, separate spec if desired).
+- Restructuring `crates/zenmon-cli/src/main.rs` (currently the largest file in the workspace at ~480 lines and with its own pre-existing fmt issues — out of scope for this work, separate spec if desired).
