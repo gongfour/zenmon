@@ -154,6 +154,9 @@ fn build_config(cli: &Cli) -> ZemonConfig {
     if cli.scout_port.is_some() {
         cfg.scout_port = cli.scout_port;
     }
+    if cli.connect_timeout.is_some() {
+        cfg.connect_timeout = cli.connect_timeout;
+    }
 
     cfg
 }
