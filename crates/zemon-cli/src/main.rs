@@ -580,6 +580,22 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
+        Command::Keyexpr { a, b } => {
+            // Pure, offline: no session is opened.
+            let rel = zemon_core::keyexpr::compare(&a, &b)?;
+            if cli.json {
+                println!("{}", serde_json::to_string(&rel)?);
+            } else {
+                println!("A:             {}", rel.a);
+                println!("B:             {}", rel.b);
+                println!("intersects:    {}", rel.intersects);
+                println!("A includes B:  {}", rel.a_includes_b);
+                println!("B includes A:  {}", rel.b_includes_a);
+                println!("equal:         {}", rel.equal);
+                println!("relation:      {:?}", rel.relation);
+            }
+        }
+
         Command::Tui { refresh } => {
             zemon_tui::run(config, refresh).await?;
         }

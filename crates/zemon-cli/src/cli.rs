@@ -148,6 +148,15 @@ pub enum Command {
     /// Show current session information
     Info,
 
+    /// Test how two key expressions relate (intersect / include). Pure, no
+    /// network. `a_includes_b` means A contains every key of B.
+    Keyexpr {
+        /// First key expression (A)
+        a: String,
+        /// Second key expression (B)
+        b: String,
+    },
+
     /// Launch interactive TUI dashboard
     Tui {
         /// UI refresh interval (e.g. 100ms, 1s)
