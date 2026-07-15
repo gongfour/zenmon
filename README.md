@@ -37,6 +37,14 @@ zemon nodes
 # Query (Zenoh GET — requires queryable responder)
 zemon query "@/*/router"
 
+# Bounded stream/watch (safe for agent tool calls)
+zemon --json sub "sensor/**" --count 10        # stop after 10 messages
+zemon --json sub "sensor/**" --duration 5s     # stop after 5s
+zemon --json nodes --watch --count 1           # one snapshot then exit
+
+# Test how two key expressions relate (pure, no network)
+zemon --json keyexpr "a/*" "a/b"
+
 # JSON output (pipe to jq, etc.)
 zemon --json nodes
 zemon --json sub "sensor/**"
@@ -50,7 +58,38 @@ zemon --json sub "sensor/**"
 | `-m, --mode` | Connection mode: `peer` or `client` | `client` |
 | `-n, --namespace` | Zenoh namespace (native prefix isolation) | - |
 | `-c, --config` | Path to Zenoh JSON5 config file | - |
+| `--connect-timeout` | Connect deadline (e.g. `5s`); client fails if no router in the window | - |
 | `--json` | Output in JSON format | - |
+
+### Key expression testing (`keyexpr`)
+
+`zemon keyexpr <A> <B>` reports how two key expressions relate, with no
+network. `a_includes_b` means **A contains every key of B** (A ⊇ B); it is
+directional, so order matters:
+
+```bash
+$ zemon --json keyexpr "a/*" "a/b"
+{"a":"a/*","b":"a/b","intersects":true,"a_includes_b":true,"b_includes_a":false,"equal":false,"relation":"a_includes_b"}
+```
+
+Here `a/*` includes `a/b` (every `a/b` is an `a/*`), but not vice-versa. The
+`relation` field summarizes direction as one of `equal`, `a_includes_b`,
+`b_includes_a`, `overlaps`, or `disjoint`.
+
+### Agent-friendly output contracts
+
+- **Duration options** use unit strings (`--timeout 5s`, `--refresh 100ms`,
+  `--duration 500ms`), not bare integers.
+- **Finite queries** (`discover`, `query`, `nodes`, `liveliness`, `scout`,
+  `info`) emit `{"count":N,"items":[...]}` in `--json` mode. A successful empty
+  result is exactly `{"count":0,"items":[]}` and exits `0`.
+- **Streaming/watch** (`sub`, `--watch`) emit NDJSON (one object per line, no
+  ANSI) in `--json` mode.
+- **`pub`** emits `{"ok":true,"status":"accepted","key_expr":...,"bytes":N}`.
+- **Errors** in `--json` mode are a single line on stderr,
+  `{"error":{"kind":"...","message":"..."}}`, with a stable non-zero exit code
+  per kind (`invalid_input`=2, `connection`=3, `timeout`=4, `not_found`=5,
+  `internal`=1).
 
 Options can also be set via environment variables: `ZEMON_ENDPOINT`, `ZEMON_MODE`, `ZEMON_NAMESPACE`, `ZEMON_CONFIG`.
 
@@ -127,7 +166,7 @@ crates/
 9. [ ] Pub matching — show whether subscribers exist when publishing
 
 ### Phase 4 — Debugging Utilities
-10. [ ] `zemon keyexpr test <A> <B>` — test intersection/inclusion between key expressions
+10. [x] `zemon keyexpr <A> <B>` — test intersection/inclusion between key expressions
 11. [ ] `zemon pub --rate <HZ>` — repeated publish at fixed frequency for testing
 12. [ ] `zemon pub --congestion block|drop` — congestion control mode selection
 13. [ ] DELETE message display — color-code PUT vs DELETE, filter by kind
