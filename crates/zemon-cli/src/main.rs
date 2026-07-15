@@ -354,7 +354,18 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             builder
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            if let Some(ref att_json) = att {
+            if cli.json {
+                // Action result on stdout; no duplicate stderr message.
+                let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
+                println!(
+                    "{}",
+                    zemon_core::output::publish_accepted_json(
+                        &key_expr,
+                        value.as_bytes().len(),
+                        attachment_bytes,
+                    )?
+                );
+            } else if let Some(ref att_json) = att {
                 eprintln!("Published to '{}': {} [att: {}]", key_expr, value, att_json);
             } else {
                 eprintln!("Published to '{}': {}", key_expr, value);
