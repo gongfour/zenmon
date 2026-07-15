@@ -1,9 +1,14 @@
+use crate::config::ConnectMode;
 use crate::types::SessionDetail;
 use color_eyre::Result;
 use zenoh::Session;
 
 /// Get detailed information about the current session.
-pub async fn session_info(session: &Session) -> Result<SessionDetail> {
+///
+/// `mode` is the *configured* connection mode. We report it verbatim rather
+/// than guessing from router presence, which previously misclassified a peer
+/// connected to a router (as "client") and a disconnected client (as "peer").
+pub async fn session_info(session: &Session, mode: ConnectMode) -> Result<SessionDetail> {
     let zid = format!("{}", session.info().zid().await);
 
     let mut routers = Vec::new();
@@ -18,15 +23,16 @@ pub async fn session_info(session: &Session) -> Result<SessionDetail> {
         peers.push(format!("{}", pid));
     }
 
-    let mode = if !routers.is_empty() {
-        "client".to_string()
-    } else {
-        "peer".to_string()
+    let mode = match mode {
+        ConnectMode::Client => "client".to_string(),
+        ConnectMode::Peer => "peer".to_string(),
     };
+    let connected = !routers.is_empty() || !peers.is_empty();
 
     Ok(SessionDetail {
         zid,
         mode,
+        connected,
         routers,
         peers,
     })
