@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(name = "zemon", about = "Zenoh network monitor and debugger")]
@@ -65,9 +66,9 @@ pub enum Command {
         #[arg(long)]
         payload: Option<String>,
 
-        /// Query timeout in milliseconds
-        #[arg(long, default_value = "5000")]
-        timeout: u64,
+        /// Query timeout (e.g. 5s, 500ms)
+        #[arg(long, default_value = "5s", value_parser = crate::duration::parse_duration_arg)]
+        timeout: Duration,
     },
 
     /// List discovered Zenoh nodes
@@ -99,9 +100,9 @@ pub enum Command {
         #[arg(long, value_name = "START-END", default_value = "7446-7546")]
         port_range: String,
 
-        /// Per-port scouting timeout in seconds
-        #[arg(long, default_value = "1")]
-        per_port_timeout: u64,
+        /// Per-port scouting timeout (e.g. 1s, 500ms)
+        #[arg(long, default_value = "1s", value_parser = crate::duration::parse_duration_arg)]
+        per_port_timeout: Duration,
     },
 
     /// Query liveliness tokens on the network
@@ -120,8 +121,8 @@ pub enum Command {
 
     /// Launch interactive TUI dashboard
     Tui {
-        /// UI refresh interval in milliseconds
-        #[arg(long, default_value = "100")]
-        refresh: u64,
+        /// UI refresh interval (e.g. 100ms, 1s)
+        #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
+        refresh: Duration,
     },
 }

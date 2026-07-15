@@ -43,13 +43,15 @@ fn print_scout_results(
     results: &[zemon_core::types::PortScoutResult],
     start: u16,
     end: u16,
-    per_port_timeout: u64,
+    per_port_timeout: Duration,
 ) {
     let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
     if hits.is_empty() {
         println!(
-            "No Zenoh nodes found in ports {}-{} ({}s per port)",
-            start, end, per_port_timeout
+            "No Zenoh nodes found in ports {}-{} ({} per port)",
+            start,
+            end,
+            humantime::format_duration(per_port_timeout)
         );
         return;
     }
@@ -251,7 +253,7 @@ async fn main() -> Result<()> {
                 &session,
                 &key_expr,
                 payload.as_deref(),
-                Duration::from_millis(timeout),
+                timeout,
             )
             .await?;
 
@@ -421,7 +423,7 @@ async fn main() -> Result<()> {
                 &config,
                 start,
                 end,
-                Duration::from_secs(per_port_timeout),
+                per_port_timeout,
             )
             .await?;
 
