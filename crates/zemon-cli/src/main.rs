@@ -1,5 +1,6 @@
 mod cli;
 mod duration;
+mod watch;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -93,6 +94,25 @@ fn print_scout_results(
         hits.len(),
         if hits.len() == 1 { "" } else { "s" }
     );
+}
+
+/// Print the nodes table (header, rows, count footer). `note`, when present,
+/// is appended to the footer (e.g. "refreshing every 3s" in watch mode).
+fn print_nodes_table(nodes: &[zemon_core::types::NodeInfo], note: Option<&str>) {
+    println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
+    println!("{}", "-".repeat(70));
+    for node in nodes {
+        println!(
+            "{:<40} {:<10} {}",
+            node.zid,
+            node.kind,
+            node.locators.join(", ")
+        );
+    }
+    match note {
+        Some(n) => println!("\n{} node(s) — {}", nodes.len(), n),
+        None => println!("\n{} node(s)", nodes.len()),
+    }
 }
 
 fn parse_port_range(s: &str) -> Result<(u16, u16), ZemonError> {
@@ -203,49 +223,67 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             key_expr,
             pretty,
             timestamp,
+            count,
+            duration,
         } => {
             let session = zemon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let _handle = zemon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
-            eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
+            if !cli.json {
+                eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
+            }
 
+            // Duration clock starts now that the subscriber is declared.
+            let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
             loop {
+                let deadline = budget.deadline();
                 tokio::select! {
-                    Some(msg) = rx.recv() => {
-                        if cli.json {
-                            println!("{}", serde_json::to_string(&msg)?);
-                        } else {
-                            let ts = if timestamp {
-                                msg.timestamp.as_deref().unwrap_or("--")
+                    biased;
+                    _ = watch::sleep_until_opt(deadline) => break,
+                    _ = tokio::signal::ctrl_c() => {
+                        if !cli.json {
+                            eprintln!("\nStopped.");
+                        }
+                        break;
+                    }
+                    item = rx.recv() => match item {
+                        Some(msg) => {
+                            if cli.json {
+                                println!("{}", serde_json::to_string(&msg)?);
                             } else {
-                                ""
-                            };
-                            let payload_str = if pretty {
-                                match &msg.payload {
-                                    zemon_core::types::MessagePayload::Json(v) => {
-                                        serde_json::to_string_pretty(v)?
+                                let ts = if timestamp {
+                                    msg.timestamp.as_deref().unwrap_or("--")
+                                } else {
+                                    ""
+                                };
+                                let payload_str = if pretty {
+                                    match &msg.payload {
+                                        zemon_core::types::MessagePayload::Json(v) => {
+                                            serde_json::to_string_pretty(v)
+                                                .unwrap_or_else(|_| format!("{}", msg.payload))
+                                        }
+                                        other => format!("{}", other),
                                     }
-                                    other => format!("{}", other),
+                                } else {
+                                    format!("{}", msg.payload)
+                                };
+
+                                let att_str = msg.attachment.as_ref()
+                                    .map(|a| format!(" [att: {}]", a))
+                                    .unwrap_or_default();
+
+                                if timestamp {
+                                    println!("[{}] {} | {}{}", ts, msg.key_expr, payload_str, att_str);
+                                } else {
+                                    println!("{} | {}{}", msg.key_expr, payload_str, att_str);
                                 }
-                            } else {
-                                format!("{}", msg.payload)
-                            };
-
-                            let att_str = msg.attachment.as_ref()
-                                .map(|a| format!(" [att: {}]", a))
-                                .unwrap_or_default();
-
-                            if timestamp {
-                                println!("[{}] {} | {}{}", ts, msg.key_expr, payload_str, att_str);
-                            } else {
-                                println!("{} | {}{}", msg.key_expr, payload_str, att_str);
+                            }
+                            if budget.record() {
+                                break;
                             }
                         }
-                    }
-                    _ = tokio::signal::ctrl_c() => {
-                        eprintln!("\nStopped.");
-                        break;
+                        None => break,
                     }
                 }
             }
@@ -288,51 +326,58 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
-        Command::Nodes { watch } => {
+        Command::Nodes {
+            watch,
+            count,
+            duration,
+        } => {
             let session = zemon_core::session::open_session(&config).await?;
-            let nodes = zemon_core::registry::query_admin_nodes(&session).await?;
 
-            if cli.json {
-                println!("{}", zemon_core::output::to_collection_json(&nodes)?);
-            } else if nodes.is_empty() {
-                println!("No nodes discovered");
-            } else {
-                println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
-                println!("{}", "-".repeat(70));
-                for node in &nodes {
-                    println!(
-                        "{:<40} {:<10} {}",
-                        node.zid,
-                        node.kind,
-                        node.locators.join(", ")
-                    );
+            if !watch {
+                let nodes = zemon_core::registry::query_admin_nodes(&session).await?;
+                if cli.json {
+                    println!("{}", zemon_core::output::to_collection_json(&nodes)?);
+                } else if nodes.is_empty() {
+                    println!("No nodes discovered");
+                } else {
+                    print_nodes_table(&nodes, None);
                 }
-                println!("\n{} node(s)", nodes.len());
-            }
-
-            if watch {
-                eprintln!("Watching for changes... (Ctrl+C to stop)");
+            } else {
+                if !cli.json {
+                    eprintln!("Watching for changes... (Ctrl+C to stop)");
+                }
+                // First interval tick fires immediately, so --count 1 emits one
+                // snapshot and exits. Each snapshot is counted.
                 let mut interval = tokio::time::interval(Duration::from_secs(3));
+                let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
                 loop {
+                    let deadline = budget.deadline();
                     tokio::select! {
-                        _ = interval.tick() => {
-                            let updated = zemon_core::registry::query_admin_nodes(&session).await?;
-                            print!("\x1B[2J\x1B[H");
-                            println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
-                            println!("{}", "-".repeat(70));
-                            for node in &updated {
-                                println!(
-                                    "{:<40} {:<10} {}",
-                                    node.zid,
-                                    node.kind,
-                                    node.locators.join(", ")
-                                );
-                            }
-                            println!("\n{} node(s) — refreshing every 3s", updated.len());
-                        }
+                        biased;
+                        _ = watch::sleep_until_opt(deadline) => break,
                         _ = tokio::signal::ctrl_c() => {
-                            eprintln!("\nStopped.");
+                            if !cli.json {
+                                eprintln!("\nStopped.");
+                            }
                             break;
+                        }
+                        _ = interval.tick() => {
+                            let updated =
+                                zemon_core::registry::query_admin_nodes(&session).await?;
+                            if cli.json {
+                                // NDJSON: one collection envelope per snapshot,
+                                // never ANSI.
+                                println!(
+                                    "{}",
+                                    zemon_core::output::to_collection_json(&updated)?
+                                );
+                            } else {
+                                print!("\x1B[2J\x1B[H");
+                                print_nodes_table(&updated, Some("refreshing every 3s"));
+                            }
+                            if budget.record() {
+                                break;
+                            }
                         }
                     }
                 }
@@ -374,12 +419,23 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
-        Command::Liveliness { key_expr, watch } => {
+        Command::Liveliness {
+            key_expr,
+            watch,
+            count,
+            duration,
+        } => {
             let session = zemon_core::session::open_session(&config).await?;
             let tokens = zemon_core::discover::query_liveliness(&session, &key_expr).await?;
 
+            // The initial token snapshot and the change events are different
+            // shapes. In JSON watch mode we keep the stream a pure event NDJSON
+            // by skipping the initial collection envelope; humans still see the
+            // initial table.
             if cli.json {
-                println!("{}", zemon_core::output::to_collection_json(&tokens)?);
+                if !watch {
+                    println!("{}", zemon_core::output::to_collection_json(&tokens)?);
+                }
             } else if tokens.is_empty() {
                 println!("No liveliness tokens found for '{}'", key_expr);
             } else {
@@ -395,37 +451,51 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             }
 
             if watch {
-                eprintln!("\nWatching liveliness changes... (Ctrl+C to stop)");
+                if !cli.json {
+                    eprintln!("\nWatching liveliness changes... (Ctrl+C to stop)");
+                }
                 let sub = session
                     .liveliness()
                     .declare_subscriber(&key_expr)
                     .await
                     .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
                 loop {
+                    let deadline = budget.deadline();
                     tokio::select! {
-                        Ok(sample) = sub.recv_async() => {
-                            let source = sample.source_info()
-                                .map(|s| format!("{}", s.source_id().zid()))
-                                .unwrap_or_else(|| "-".to_string());
-                            if cli.json {
-                                let event = serde_json::json!({
-                                    "kind": format!("{:?}", sample.kind()),
-                                    "key_expr": sample.key_expr().to_string(),
-                                    "source_zid": source,
-                                });
-                                println!("{}", serde_json::to_string(&event)?);
-                            } else {
-                                println!(
-                                    "[{:?}] {} source_zid={}",
-                                    sample.kind(),
-                                    sample.key_expr(),
-                                    source,
-                                );
-                            }
-                        }
+                        biased;
+                        _ = watch::sleep_until_opt(deadline) => break,
                         _ = tokio::signal::ctrl_c() => {
-                            eprintln!("Stopped.");
+                            if !cli.json {
+                                eprintln!("Stopped.");
+                            }
                             break;
+                        }
+                        res = sub.recv_async() => match res {
+                            Ok(sample) => {
+                                let source = sample.source_info()
+                                    .map(|s| format!("{}", s.source_id().zid()))
+                                    .unwrap_or_else(|| "-".to_string());
+                                if cli.json {
+                                    let event = serde_json::json!({
+                                        "kind": format!("{:?}", sample.kind()),
+                                        "key_expr": sample.key_expr().to_string(),
+                                        "source_zid": source,
+                                    });
+                                    println!("{}", serde_json::to_string(&event)?);
+                                } else {
+                                    println!(
+                                        "[{:?}] {} source_zid={}",
+                                        sample.kind(),
+                                        sample.key_expr(),
+                                        source,
+                                    );
+                                }
+                                if budget.record() {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
                         }
                     }
                 }
