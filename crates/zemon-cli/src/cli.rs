@@ -55,6 +55,14 @@ pub enum Command {
         /// Show timestamps
         #[arg(long)]
         timestamp: bool,
+
+        /// Stop after N received messages
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        count: Option<u64>,
+
+        /// Stop after this much time (e.g. 5s, 500ms)
+        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        duration: Option<Duration>,
     },
 
     /// Send a Zenoh GET query
@@ -76,6 +84,14 @@ pub enum Command {
         /// Watch for changes (live update)
         #[arg(long)]
         watch: bool,
+
+        /// With --watch, stop after N snapshots
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        count: Option<u64>,
+
+        /// With --watch, stop after this much time (e.g. 5s)
+        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        duration: Option<Duration>,
     },
 
     /// Publish a message to a key expression
@@ -114,6 +130,14 @@ pub enum Command {
         /// Watch for changes (live subscribe)
         #[arg(long)]
         watch: bool,
+
+        /// With --watch, stop after N change events
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        count: Option<u64>,
+
+        /// With --watch, stop after this much time (e.g. 5s)
+        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        duration: Option<Duration>,
     },
 
     /// Show current session information
