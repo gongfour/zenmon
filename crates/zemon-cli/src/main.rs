@@ -3,8 +3,8 @@ mod duration;
 
 use clap::Parser;
 use cli::{Cli, Command};
-use color_eyre::Result;
 use zemon_core::config::{ConnectMode, ZemonConfig};
+use zemon_core::error::ZemonError;
 use std::time::Duration;
 
 /// Pick the most useful locator to display: prefer tcp/IPv4 non-loopback,
@@ -95,24 +95,23 @@ fn print_scout_results(
     );
 }
 
-fn parse_port_range(s: &str) -> Result<(u16, u16)> {
+fn parse_port_range(s: &str) -> Result<(u16, u16), ZemonError> {
     let (start_s, end_s) = s
         .split_once('-')
-        .ok_or_else(|| color_eyre::eyre::eyre!("port range must be START-END, got '{}'", s))?;
+        .ok_or_else(|| ZemonError::invalid_input(format!("port range must be START-END, got '{}'", s)))?;
     let start: u16 = start_s
         .trim()
         .parse()
-        .map_err(|e| color_eyre::eyre::eyre!("invalid start port '{}': {}", start_s, e))?;
+        .map_err(|e| ZemonError::invalid_input(format!("invalid start port '{}': {}", start_s, e)))?;
     let end: u16 = end_s
         .trim()
         .parse()
-        .map_err(|e| color_eyre::eyre::eyre!("invalid end port '{}': {}", end_s, e))?;
+        .map_err(|e| ZemonError::invalid_input(format!("invalid end port '{}': {}", end_s, e)))?;
     if start > end {
-        return Err(color_eyre::eyre::eyre!(
+        return Err(ZemonError::invalid_input(format!(
             "start port {} must be <= end port {}",
-            start,
-            end
-        ));
+            start, end
+        )));
     }
     Ok((start, end))
 }
@@ -140,32 +139,45 @@ fn build_config(cli: &Cli) -> ZemonConfig {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    color_eyre::install()?;
-
+async fn main() {
     let cli = Cli::parse();
     let is_tui = matches!(cli.command, Command::Tui { .. });
+    let is_json = cli.json;
 
-    // TUI mode: suppress all logs to avoid corrupting the terminal display
-    // CLI mode: show logs on stderr as normal
-    if is_tui {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "off".into()),
-            )
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "zemon=info,zenoh=warn".into()),
-            )
-            .init();
+    // In JSON mode the only permitted stderr output is the single structured
+    // error object, so we must not install color_eyre's colored/backtrace hook.
+    if !is_json {
+        let _ = color_eyre::install();
     }
+
+    // TUI mode: suppress logs to avoid corrupting the terminal display.
+    // JSON mode: suppress logs to keep stderr a clean single JSON error.
+    // Plain CLI mode: show logs on stderr as normal.
+    let default_filter = if is_tui || is_json {
+        "off"
+    } else {
+        "zemon=info,zenoh=warn"
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_filter.into()),
+        )
+        .init();
 
     let config = build_config(&cli);
 
+    if let Err(e) = run(cli, config).await {
+        if is_json {
+            eprintln!("{}", e.to_json());
+        } else {
+            eprintln!("Error: {}", e);
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
     match cli.command {
         Command::Discover { key_expr } => {
             let session = zemon_core::session::open_session(&config).await?;
