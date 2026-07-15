@@ -1,5 +1,5 @@
 use crate::app::{App, QueryStatus};
-use zemon_core::types::MessagePayload;
+use zenmon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

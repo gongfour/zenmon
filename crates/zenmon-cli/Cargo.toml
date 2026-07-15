@@ -1,15 +1,15 @@
 [package]
-name = "zemon-cli"
+name = "zenmon-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "zemon"
+name = "zenmon"
 path = "src/main.rs"
 
 [dependencies]
-zemon-core.workspace = true
-zemon-tui.workspace = true
+zenmon-core.workspace = true
+zenmon-tui.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

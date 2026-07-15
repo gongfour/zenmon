@@ -3,7 +3,7 @@ mod cli;
 use clap::Parser;
 use cli::{Cli, Command};
 use color_eyre::Result;
-use zemon_core::config::{ConnectMode, ZemonConfig};
+use zenmon_core::config::{ConnectMode, ZenmonConfig};
 use std::time::Duration;
 
 /// Pick the most useful locator to display: prefer tcp/IPv4 non-loopback,
@@ -39,7 +39,7 @@ fn pick_best_locator(locators: &[String]) -> Option<&str> {
 }
 
 fn print_scout_results(
-    results: &[zemon_core::types::PortScoutResult],
+    results: &[zenmon_core::types::PortScoutResult],
     start: u16,
     end: u16,
     per_port_timeout: u64,
@@ -114,8 +114,8 @@ fn parse_port_range(s: &str) -> Result<(u16, u16)> {
     Ok((start, end))
 }
 
-fn build_config(cli: &Cli) -> ZemonConfig {
-    let mut cfg = ZemonConfig::from_env();
+fn build_config(cli: &Cli) -> ZenmonConfig {
+    let mut cfg = ZenmonConfig::from_env();
 
     // CLI flags override env
     cfg.endpoint = cli.endpoint.clone();
@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "zemon=info,zenoh=warn".into()),
+                    .unwrap_or_else(|_| "zenmon=info,zenoh=warn".into()),
             )
             .init();
     }
@@ -165,8 +165,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Discover { key_expr } => {
-            let session = zemon_core::session::open_session(&config).await?;
-            let topics = zemon_core::discover::discover(&session, &key_expr).await?;
+            let session = zenmon_core::session::open_session(&config).await?;
+            let topics = zenmon_core::discover::discover(&session, &key_expr).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&topics)?);
@@ -189,9 +189,9 @@ async fn main() -> Result<()> {
             pretty,
             timestamp,
         } => {
-            let session = zemon_core::session::open_session(&config).await?;
+            let session = zenmon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let _handle = zemon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
+            let _handle = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
             eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
 
@@ -208,7 +208,7 @@ async fn main() -> Result<()> {
                             };
                             let payload_str = if pretty {
                                 match &msg.payload {
-                                    zemon_core::types::MessagePayload::Json(v) => {
+                                    zenmon_core::types::MessagePayload::Json(v) => {
                                         serde_json::to_string_pretty(v)?
                                     }
                                     other => format!("{}", other),
@@ -245,8 +245,8 @@ async fn main() -> Result<()> {
             payload,
             timeout,
         } => {
-            let session = zemon_core::session::open_session(&config).await?;
-            let results = zemon_core::query::get(
+            let session = zenmon_core::session::open_session(&config).await?;
+            let results = zenmon_core::query::get(
                 &session,
                 &key_expr,
                 payload.as_deref(),
@@ -274,8 +274,8 @@ async fn main() -> Result<()> {
         }
 
         Command::Nodes { watch } => {
-            let session = zemon_core::session::open_session(&config).await?;
-            let nodes = zemon_core::registry::query_admin_nodes(&session).await?;
+            let session = zenmon_core::session::open_session(&config).await?;
+            let nodes = zenmon_core::registry::query_admin_nodes(&session).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&nodes)?);
@@ -301,7 +301,7 @@ async fn main() -> Result<()> {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
-                            let updated = zemon_core::registry::query_admin_nodes(&session).await?;
+                            let updated = zenmon_core::registry::query_admin_nodes(&session).await?;
                             print!("\x1B[2J\x1B[H");
                             println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
                             println!("{}", "-".repeat(70));
@@ -329,7 +329,7 @@ async fn main() -> Result<()> {
         }
 
         Command::Pub { key_expr, value, att } => {
-            let session = zemon_core::session::open_session(&config).await?;
+            let session = zenmon_core::session::open_session(&config).await?;
             let mut builder = session.put(&key_expr, value.clone());
             if let Some(ref att_json) = att {
                 builder = builder.attachment(att_json.as_bytes());
@@ -349,8 +349,8 @@ async fn main() -> Result<()> {
         }
 
         Command::Liveliness { key_expr, watch } => {
-            let session = zemon_core::session::open_session(&config).await?;
-            let tokens = zemon_core::discover::query_liveliness(&session, &key_expr).await?;
+            let session = zenmon_core::session::open_session(&config).await?;
+            let tokens = zenmon_core::discover::query_liveliness(&session, &key_expr).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&tokens)?);
@@ -416,7 +416,7 @@ async fn main() -> Result<()> {
             per_port_timeout,
         } => {
             let (start, end) = parse_port_range(&port_range)?;
-            let results = zemon_core::scout::scout_port_range(
+            let results = zenmon_core::scout::scout_port_range(
                 &config,
                 start,
                 end,
@@ -433,8 +433,8 @@ async fn main() -> Result<()> {
         }
 
         Command::Info => {
-            let session = zemon_core::session::open_session(&config).await?;
-            let detail = zemon_core::info::session_info(&session).await?;
+            let session = zenmon_core::session::open_session(&config).await?;
+            let detail = zenmon_core::info::session_info(&session).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&detail)?);
@@ -471,7 +471,7 @@ async fn main() -> Result<()> {
         }
 
         Command::Tui { refresh } => {
-            zemon_tui::run(config, refresh).await?;
+            zenmon_tui::run(config, refresh).await?;
         }
     }
 

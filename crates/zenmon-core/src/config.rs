@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Connection configuration for a Zenoh session.
 #[derive(Debug, Clone)]
-pub struct ZemonConfig {
+pub struct ZenmonConfig {
     pub endpoint: String,
     pub mode: ConnectMode,
     pub namespace: Option<String>,
@@ -19,7 +19,7 @@ pub enum ConnectMode {
     Client,
 }
 
-impl Default for ZemonConfig {
+impl Default for ZenmonConfig {
     fn default() -> Self {
         Self {
             endpoint: "tcp/localhost:7447".to_string(),
@@ -31,8 +31,8 @@ impl Default for ZemonConfig {
     }
 }
 
-impl ZemonConfig {
-    /// Build a Zenoh Config from ZemonConfig.
+impl ZenmonConfig {
+    /// Build a Zenoh Config from ZenmonConfig.
     pub fn to_zenoh_config(&self) -> color_eyre::Result<zenoh::Config> {
         let mut config = match &self.config_file {
             Some(path) => zenoh::Config::from_file(path).map_err(|e| eyre!(e))?,
@@ -71,22 +71,22 @@ impl ZemonConfig {
     pub fn from_env() -> Self {
         let mut cfg = Self::default();
 
-        if let Ok(endpoint) = std::env::var("ZEMON_ENDPOINT") {
+        if let Ok(endpoint) = std::env::var("ZENMON_ENDPOINT") {
             cfg.endpoint = endpoint;
         }
-        if let Ok(mode) = std::env::var("ZEMON_MODE") {
+        if let Ok(mode) = std::env::var("ZENMON_MODE") {
             cfg.mode = match mode.to_lowercase().as_str() {
                 "peer" => ConnectMode::Peer,
                 _ => ConnectMode::Client,
             };
         }
-        if let Ok(ns) = std::env::var("ZEMON_NAMESPACE") {
+        if let Ok(ns) = std::env::var("ZENMON_NAMESPACE") {
             cfg.namespace = Some(ns);
         }
-        if let Ok(config_path) = std::env::var("ZEMON_CONFIG") {
+        if let Ok(config_path) = std::env::var("ZENMON_CONFIG") {
             cfg.config_file = Some(PathBuf::from(config_path));
         }
-        if let Ok(port) = std::env::var("ZEMON_SCOUT_PORT") {
+        if let Ok(port) = std::env::var("ZENMON_SCOUT_PORT") {
             if let Ok(p) = port.parse::<u16>() {
                 cfg.scout_port = Some(p);
             }

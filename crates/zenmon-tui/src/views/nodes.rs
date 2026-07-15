@@ -1,5 +1,5 @@
 use crate::app::App;
-use zemon_core::types::{NodeInfo, NodeSources};
+use zenmon_core::types::{NodeInfo, NodeSources};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

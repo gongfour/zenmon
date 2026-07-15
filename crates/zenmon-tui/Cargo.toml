@@ -1,10 +1,10 @@
 [package]
-name = "zemon-tui"
+name = "zenmon-tui"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-zemon-core.workspace = true
+zenmon-core.workspace = true
 zenoh.workspace = true
 tokio.workspace = true
 serde_json.workspace = true

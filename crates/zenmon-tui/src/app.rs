@@ -1,9 +1,9 @@
 use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use zemon_core::config::ConnectMode;
-use zemon_core::merge::merge_nodes;
-use zemon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
+use zenmon_core::config::ConnectMode;
+use zenmon_core::merge::merge_nodes;
+use zenmon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -325,8 +325,8 @@ impl App {
         }
     }
 
-    fn handle_liveliness(&mut self, event: zemon_core::types::LivelinessEvent) {
-        use zemon_core::types::LivelinessEvent;
+    fn handle_liveliness(&mut self, event: zenmon_core::types::LivelinessEvent) {
+        use zenmon_core::types::LivelinessEvent;
         let (token, is_join) = match event {
             LivelinessEvent::Join(t) => (t, true),
             LivelinessEvent::Leave(t) => (t, false),
@@ -972,7 +972,7 @@ impl App {
         ])
         .areas(frame.area());
 
-        let tabs_block = Block::default().borders(Borders::ALL).title(" zemon ");
+        let tabs_block = Block::default().borders(Borders::ALL).title(" zenmon ");
         let inner = tabs_block.inner(tabs_area);
         frame.render_widget(tabs_block, tabs_area);
 
@@ -1414,7 +1414,7 @@ mod tests {
         app.sub_selected = 0;
         let msg = ZenohMessage {
             key_expr: "a".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(null)),
             timestamp: None,
             kind: "put".into(),
             attachment: None,
@@ -1428,7 +1428,7 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(null)),
             timestamp: None,
             kind: "put".into(),
             attachment: None,
@@ -1447,14 +1447,14 @@ mod tests {
         let mut app = App::new("test".into());
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "robot/pose".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!({"x": 1})),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!({"x": 1})),
             timestamp: None,
             kind: "put".into(),
             attachment: None,
         });
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "robot/status".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!("idle")),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!("idle")),
             timestamp: None,
             kind: "put".into(),
             attachment: None,
@@ -1474,7 +1474,7 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(null)),
             timestamp: None,
             kind: "put".into(),
             attachment: None,
@@ -1516,7 +1516,7 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(null)),
             timestamp: None,
             kind: "put".into(),
             attachment: None,
@@ -1529,25 +1529,25 @@ mod tests {
         app.topic_detail_scroll = 4;
         app.list_scroll_offset = 5;
         app.sub_selected = 1;
-        app.admin_nodes.push(zemon_core::types::NodeInfo {
+        app.admin_nodes.push(zenmon_core::types::NodeInfo {
             zid: "z1".into(),
             kind: "router".into(),
             locators: vec![],
             metadata: None,
-            sources: zemon_core::types::NodeSources::default(),
+            sources: zenmon_core::types::NodeSources::default(),
             admin_last_seen: None,
             scout_last_seen: None,
         });
-        app.scout_nodes.push(zemon_core::types::NodeInfo {
+        app.scout_nodes.push(zenmon_core::types::NodeInfo {
             zid: "z2".into(),
             kind: "peer".into(),
             locators: vec![],
             metadata: None,
-            sources: zemon_core::types::NodeSources::default(),
+            sources: zenmon_core::types::NodeSources::default(),
             admin_last_seen: None,
             scout_last_seen: None,
         });
-        app.nodes = zemon_core::merge::merge_nodes(&app.admin_nodes, &app.scout_nodes);
+        app.nodes = zenmon_core::merge::merge_nodes(&app.admin_nodes, &app.scout_nodes);
         app.node_selected = 1;
         app.node_detail_scroll = 2;
 
@@ -1581,7 +1581,7 @@ mod tests {
         app.query_history.push("demo/**".into());
         app.query_results.push(ZenohMessage {
             key_expr: "demo/x".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(1)),
+            payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(1)),
             timestamp: None,
             kind: "get".into(),
             attachment: None,

@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "zemon", about = "Zenoh network monitor and debugger")]
+#[command(name = "zenmon", about = "Zenoh network monitor and debugger")]
 pub struct Cli {
     /// Zenoh connection endpoint
     #[arg(short, long, default_value = "tcp/localhost:7447")]
@@ -85,7 +85,7 @@ pub enum Command {
         /// JSON payload to publish
         value: String,
 
-        /// JSON attachment metadata (e.g. '{"request_id":"001","client_id":"zemon"}')
+        /// JSON attachment metadata (e.g. '{"request_id":"001","client_id":"zenmon"}')
         #[arg(long)]
         att: Option<String>,
     },
