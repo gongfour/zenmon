@@ -26,6 +26,11 @@ pub struct Cli {
     #[arg(long, value_name = "PORT")]
     pub scout_port: Option<u16>,
 
+    /// Connect deadline (e.g. 5s). In client mode, fail if the router isn't
+    /// reachable within this window. Ignored for peer mode.
+    #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+    pub connect_timeout: Option<Duration>,
+
     /// Output in JSON format
     #[arg(long)]
     pub json: bool,
