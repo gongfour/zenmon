@@ -62,6 +62,19 @@ impl ZemonError {
         Self::new(ErrorKind::Internal, message)
     }
 
+    /// Stable process exit code for this error's kind. `0` is reserved for
+    /// success (including successful zero-result queries), so every kind maps
+    /// to a distinct non-zero code that agents/shells can branch on.
+    pub fn exit_code(&self) -> i32 {
+        match self.kind {
+            ErrorKind::Internal => 1,
+            ErrorKind::InvalidInput => 2,
+            ErrorKind::Connection => 3,
+            ErrorKind::Timeout => 4,
+            ErrorKind::NotFound => 5,
+        }
+    }
+
     /// Render as a single-line JSON error envelope:
     /// `{"error":{"kind":"connection","message":"..."}}`.
     /// Guaranteed to contain no ANSI escapes and no embedded newline.
@@ -158,6 +171,15 @@ mod tests {
         let e: ZemonError = report.into();
         assert_eq!(e.kind, ErrorKind::Internal);
         assert!(e.message.contains("some failure"));
+    }
+
+    #[test]
+    fn exit_codes_are_stable_per_kind() {
+        assert_eq!(ZemonError::internal("x").exit_code(), 1);
+        assert_eq!(ZemonError::invalid_input("x").exit_code(), 2);
+        assert_eq!(ZemonError::connection("x").exit_code(), 3);
+        assert_eq!(ZemonError::timeout("x").exit_code(), 4);
+        assert_eq!(ZemonError::not_found("x").exit_code(), 5);
     }
 
     #[test]
