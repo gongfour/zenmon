@@ -1,4 +1,5 @@
 mod cli;
+mod duration;
 
 use clap::Parser;
 use cli::{Cli, Command};
