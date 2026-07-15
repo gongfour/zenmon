@@ -94,7 +94,12 @@ pub struct PortScoutResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionDetail {
     pub zid: String,
+    /// The session's configured connection mode ("client" or "peer"), not a
+    /// guess from router presence.
     pub mode: String,
+    /// Whether this session currently sees any router or peer. Useful as a
+    /// health signal, interpreted per mode (a peer with none can still be fine).
+    pub connected: bool,
     pub routers: Vec<String>,
     pub peers: Vec<String>,
 }
