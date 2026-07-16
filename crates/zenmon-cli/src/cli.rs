@@ -35,6 +35,11 @@ pub struct Cli {
     #[arg(long)]
     pub json: bool,
 
+    /// Path to a zenmon contract file (YAML). Enables contract-aware enrichment
+    /// of `sub`/`discover`. Falls back to the ZENMON_CONTRACT env var.
+    #[arg(long, value_name = "PATH")]
+    pub contract: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -251,6 +256,36 @@ pub enum Command {
         /// UI refresh interval (e.g. 100ms, 1s)
         #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
         refresh: Duration,
+    },
+
+    /// Inspect a zenmon contract file (offline; no network).
+    Contract {
+        #[command(subcommand)]
+        command: ContractCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ContractCommand {
+    /// Parse the contract and report counts plus structural warnings.
+    Lint {
+        /// Contract path (defaults to --contract / ZENMON_CONTRACT)
+        path: Option<PathBuf>,
+    },
+
+    /// List every declared topic: key, pattern, encoding.
+    List {
+        /// Contract path (defaults to --contract / ZENMON_CONTRACT)
+        path: Option<PathBuf>,
+    },
+
+    /// Show the full contract entry for a topic key (with $ref expanded).
+    Show {
+        /// Observed or declared key expression to look up
+        key: String,
+
+        /// Contract path (defaults to --contract / ZENMON_CONTRACT)
+        path: Option<PathBuf>,
     },
 }
 

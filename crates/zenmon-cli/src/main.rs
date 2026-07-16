@@ -3,12 +3,72 @@ mod duration;
 mod watch;
 
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand, QueryableCommand};
+use cli::{Cli, Command, ConfigCommand, ContractCommand, QueryableCommand};
 use zenmon_core::config::{
     resolve_config, ConfigOverrides, EffectiveConfig, ResolvedConfig, ResolvedValue,
 };
+use zenmon_core::contract::{Contract, Enrichment};
 use zenmon_core::error::ZenmonError;
+use std::path::PathBuf;
 use std::time::Duration;
+
+/// Resolve a contract path: explicit arg → `--contract` flag → `ZENMON_CONTRACT`.
+fn contract_path(explicit: Option<PathBuf>, cli_flag: &Option<PathBuf>) -> Option<PathBuf> {
+    explicit
+        .or_else(|| cli_flag.clone())
+        .or_else(|| std::env::var_os("ZENMON_CONTRACT").map(PathBuf::from))
+}
+
+/// Load the contract for enrichment (`sub`/`discover`): `None` when no path is
+/// configured, hard error when a configured path fails to load.
+fn load_contract_opt(cli_flag: &Option<PathBuf>) -> Result<Option<Contract>, ZenmonError> {
+    match contract_path(None, cli_flag) {
+        Some(p) => Contract::load(p).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Load the contract for the `contract` subcommand, where one is required.
+fn load_contract_required(
+    explicit: Option<PathBuf>,
+    cli_flag: &Option<PathBuf>,
+) -> Result<Contract, ZenmonError> {
+    match contract_path(explicit, cli_flag) {
+        Some(p) => Contract::load(p),
+        None => Err(ZenmonError::invalid_input(
+            "no contract file: pass a path, use --contract, or set ZENMON_CONTRACT",
+        )),
+    }
+}
+
+/// One-line human annotation for an enriched `sub` message.
+fn contract_annotation(e: &Enrichment, observed_encoding: &str) -> String {
+    if !e.declared {
+        return "# ⚠ not declared in contract".to_string();
+    }
+    let mut s = format!("# {}", e.matched_key.as_deref().unwrap_or_default());
+    if let Some(d) = &e.description {
+        s.push_str(" — ");
+        s.push_str(d);
+    }
+    match e.encoding_matches {
+        Some(true) => {
+            s.push_str(&format!(
+                "  [encoding: {} ok]",
+                e.encoding_expected.as_deref().unwrap_or_default()
+            ));
+        }
+        Some(false) => {
+            s.push_str(&format!(
+                "  [encoding: expected {}, got {}]",
+                e.encoding_expected.as_deref().unwrap_or_default(),
+                observed_encoding
+            ));
+        }
+        None => {}
+    }
+    s
+}
 
 /// Pick the most useful locator to display: prefer tcp/IPv4 non-loopback,
 /// then tcp/anything, then the first one. Zenoh peers typically advertise
@@ -291,16 +351,48 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         },
 
         Command::Discover { key_expr } => {
+            // Load before opening the session so a broken contract fails fast.
+            let contract = load_contract_opt(&cli.contract)?;
             let session = zenmon_core::session::open_session(&config).await?;
             let topics = zenmon_core::discover::discover(&session, &key_expr).await?;
 
             if cli.json {
-                println!("{}", zenmon_core::output::to_collection_json(&topics)?);
+                match &contract {
+                    Some(c) => {
+                        // Enriched: annotate each key with its contract context.
+                        // Discover has no payload, so encoding is unknown ("").
+                        let items: Vec<_> = topics
+                            .iter()
+                            .map(|t| {
+                                serde_json::json!({
+                                    "key_expr": t.key_expr,
+                                    "contract": c.enrich(&t.key_expr, ""),
+                                })
+                            })
+                            .collect();
+                        println!("{}", zenmon_core::output::to_collection_json(&items)?);
+                    }
+                    None => println!("{}", zenmon_core::output::to_collection_json(&topics)?),
+                }
             } else if topics.is_empty() {
                 println!("No active keys found for '{}'", key_expr);
             } else {
                 for topic in &topics {
-                    println!("{}", topic.key_expr);
+                    match &contract {
+                        Some(c) => {
+                            let e = c.enrich(&topic.key_expr, "");
+                            let tag = if e.declared {
+                                match e.description.as_deref() {
+                                    Some(d) => format!("  # {}", d),
+                                    None => "  # declared".to_string(),
+                                }
+                            } else {
+                                "  # ⚠ undeclared".to_string()
+                            };
+                            println!("{}{}", topic.key_expr, tag);
+                        }
+                        None => println!("{}", topic.key_expr),
+                    }
                 }
                 println!("\n{} key(s) found", topics.len());
             }
@@ -319,6 +411,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             max_payload_bytes,
         } => {
             let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
+            // Load before opening the session so a broken contract fails fast.
+            let contract = load_contract_opt(&cli.contract)?;
             let session = zenmon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let _handle = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
@@ -343,21 +437,38 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     item = rx.recv() => match item {
                         Some(msg) => {
                             if cli.json {
-                                match max_payload_bytes {
-                                    Some(max) => {
+                                // Fast path preserved byte-for-byte when neither
+                                // a payload cap nor a contract is in play.
+                                if max_payload_bytes.is_none() && contract.is_none() {
+                                    println!("{}", serde_json::to_string(&msg)?);
+                                } else {
+                                    let mut v = serde_json::to_value(&msg)?;
+                                    if let Some(max) = max_payload_bytes {
                                         // Replace payload/attachment with capped
                                         // previews so a large message can't blow
                                         // the output budget.
-                                        let mut v = serde_json::to_value(&msg)?;
                                         v["payload"] = msg.payload.to_view_capped(max);
                                         if let Some(att) = &msg.attachment {
                                             v["attachment"] = att.to_view_capped(max);
                                         }
-                                        println!("{}", serde_json::to_string(&v)?);
                                     }
-                                    None => println!("{}", serde_json::to_string(&msg)?),
+                                    if let Some(c) = &contract {
+                                        v["contract"] = serde_json::to_value(
+                                            c.enrich(&msg.key_expr, &msg.encoding),
+                                        )?;
+                                    }
+                                    println!("{}", serde_json::to_string(&v)?);
                                 }
                             } else {
+                                if let Some(c) = &contract {
+                                    println!(
+                                        "{}",
+                                        contract_annotation(
+                                            &c.enrich(&msg.key_expr, &msg.encoding),
+                                            &msg.encoding,
+                                        )
+                                    );
+                                }
                                 let ts = if timestamp {
                                     msg.timestamp.as_deref().unwrap_or("--")
                                 } else {
@@ -1159,6 +1270,135 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         Command::Tui { refresh } => {
             zenmon_tui::run(config, refresh).await?;
         }
+
+        Command::Contract { command } => match command {
+            ContractCommand::Lint { path } => {
+                let contract = load_contract_required(path, &cli.contract)?;
+                let report = contract.lint();
+                if cli.json {
+                    println!("{}", serde_json::to_string(&report)?);
+                } else {
+                    println!(
+                        "{} topics, {} types, {} services",
+                        report.topics, report.types, report.services
+                    );
+                    if report.warnings.is_empty() {
+                        println!("no warnings");
+                    } else {
+                        println!("warnings ({}):", report.warnings.len());
+                        for w in &report.warnings {
+                            println!("  - {}", w);
+                        }
+                    }
+                }
+            }
+
+            ContractCommand::List { path } => {
+                let contract = load_contract_required(path, &cli.contract)?;
+                if cli.json {
+                    let items: Vec<_> = contract
+                        .topics
+                        .iter()
+                        .map(|t| {
+                            serde_json::json!({
+                                "key": t.key,
+                                "pattern": t.pattern,
+                                "encoding": contract.effective_encoding(t),
+                            })
+                        })
+                        .collect();
+                    println!("{}", zenmon_core::output::to_collection_json(&items)?);
+                } else {
+                    for t in &contract.topics {
+                        println!(
+                            "{:<44} {:<10} {}",
+                            t.key,
+                            t.pattern,
+                            contract.effective_encoding(t)
+                        );
+                    }
+                    println!("\n{} topic(s)", contract.topics.len());
+                }
+            }
+
+            ContractCommand::Show { key, path } => {
+                let contract = load_contract_required(path, &cli.contract)?;
+                let topic = contract.lookup(&key).ok_or_else(|| {
+                    ZenmonError::not_found(format!("'{}' is not declared in the contract", key))
+                })?;
+                let resolve = |v: &Option<serde_json::Value>| v.as_ref().map(|s| contract.resolve_refs(s));
+                let payload = resolve(&topic.payload);
+                let phases = resolve(&topic.phases);
+                let request = resolve(&topic.request);
+                let response = resolve(&topic.response);
+
+                if cli.json {
+                    let mut obj = serde_json::json!({
+                        "key": topic.key,
+                        "pattern": topic.pattern,
+                        "encoding": contract.effective_encoding(topic),
+                        "enveloped": contract.effective_enveloped(topic),
+                        "producers": topic.producers,
+                        "consumers": topic.consumers,
+                    });
+                    if let Some(s) = &topic.status {
+                        obj["status"] = serde_json::json!(s);
+                    }
+                    if let Some(d) = &topic.description {
+                        obj["description"] = serde_json::json!(d);
+                    }
+                    for (k, v) in [
+                        ("payload", &payload),
+                        ("phases", &phases),
+                        ("request", &request),
+                        ("response", &response),
+                    ] {
+                        if let Some(v) = v {
+                            obj[k] = v.clone();
+                        }
+                    }
+                    println!("{}", serde_json::to_string(&obj)?);
+                } else {
+                    println!("key:         {}", topic.key);
+                    println!("pattern:     {}", topic.pattern);
+                    println!(
+                        "encoding:    {} ({})",
+                        contract.effective_encoding(topic),
+                        if contract.effective_enveloped(topic) {
+                            "enveloped"
+                        } else {
+                            "bare"
+                        }
+                    );
+                    if let Some(s) = &topic.status {
+                        println!("status:      {}", s);
+                    }
+                    if !topic.producers.is_empty() {
+                        println!("producers:   {}", topic.producers.join(", "));
+                    }
+                    if !topic.consumers.is_empty() {
+                        println!("consumers:   {}", topic.consumers.join(", "));
+                    }
+                    if let Some(d) = &topic.description {
+                        println!("description: {}", d);
+                    }
+                    for (label, v) in [
+                        ("payload", &payload),
+                        ("phases", &phases),
+                        ("request", &request),
+                        ("response", &response),
+                    ] {
+                        if let Some(v) = v {
+                            println!("{}:", label);
+                            let pretty = serde_json::to_string_pretty(v).unwrap_or_default();
+                            for line in pretty.lines() {
+                                println!("  {}", line);
+                            }
+                        }
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
@@ -1168,6 +1408,45 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
 mod tests {
     use super::*;
     use tracing::level_filters::LevelFilter;
+
+    fn enr(declared: bool, matches: Option<bool>) -> Enrichment {
+        Enrichment {
+            declared,
+            matched_key: declared.then(|| "topic/x".to_string()),
+            description: declared.then(|| "desc".to_string()),
+            encoding_expected: declared.then(|| "application/json".to_string()),
+            encoding_matches: matches,
+            enveloped: declared.then_some(true),
+        }
+    }
+
+    #[test]
+    fn annotation_flags_undeclared_topic() {
+        let s = contract_annotation(&enr(false, None), "application/json");
+        assert_eq!(s, "# ⚠ not declared in contract");
+    }
+
+    #[test]
+    fn annotation_reports_matching_encoding() {
+        let s = contract_annotation(&enr(true, Some(true)), "application/json");
+        assert_eq!(s, "# topic/x — desc  [encoding: application/json ok]");
+    }
+
+    #[test]
+    fn annotation_reports_encoding_mismatch_with_observed() {
+        let s = contract_annotation(&enr(true, Some(false)), "application/octet-stream");
+        assert_eq!(
+            s,
+            "# topic/x — desc  [encoding: expected application/json, got application/octet-stream]"
+        );
+    }
+
+    #[test]
+    fn annotation_omits_encoding_when_unknown() {
+        // Discover has no payload encoding, so encoding_matches is None.
+        let s = contract_annotation(&enr(true, None), "");
+        assert_eq!(s, "# topic/x — desc");
+    }
 
     #[test]
     fn scout_heading_describes_a_scouting_port_without_a_domain() {
