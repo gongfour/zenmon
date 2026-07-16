@@ -7,6 +7,7 @@
 //! completion.
 
 use serde_json::{json, Map, Value};
+use zenoh::key_expr::keyexpr;
 
 /// One observed message, already stamped with its relative time and with the
 /// causal metadata (`correlation_id`, `request_id`) extracted from the
@@ -230,48 +231,88 @@ pub fn build_tracks(events: &[ScenarioEvent], specs: &[TrackSpec]) -> Value {
 
     let mut out = Map::new();
     for spec in specs {
-        let mut series: Vec<Value> = Vec::new();
-        let mut values: Vec<Value> = Vec::new();
-        let mut times: Vec<u64> = Vec::new();
-        for e in &ordered {
-            if e.key_expr != spec.key {
-                continue;
+        // A wildcard key expands to one entry per matching concrete key seen in
+        // the events; an exact key is a single entry.
+        if spec.key.contains('*') {
+            for ck in matching_concrete_keys(&ordered, &spec.key, &spec.field) {
+                let entry = build_one_track(&ordered, &ck, &spec.field);
+                out.insert(format!("{}:{}", ck, spec.field), entry);
             }
-            if let Some(v) = resolve_field(&e.payload, &spec.field) {
-                series.push(json!([e.t_rel_ms, v]));
-                values.push(v);
-                times.push(e.t_rel_ms);
-            }
+        } else {
+            let entry = build_one_track(&ordered, &spec.key, &spec.field);
+            out.insert(format!("{}:{}", spec.key, spec.field), entry);
         }
-
-        let mut entry = json!({ "count": values.len(), "series": series });
-        if let (Some(first), Some(last)) = (values.first(), values.last()) {
-            entry["first"] = first.clone();
-            entry["last"] = last.clone();
-            if let (Some(a), Some(b)) = (first.as_f64(), last.as_f64()) {
-                entry["delta"] = json!(b - a);
-            }
-        }
-
-        let distinct: std::collections::BTreeSet<String> =
-            values.iter().map(|v| v.to_string()).collect();
-        if distinct.len() <= MAX_DISTINCT_FOR_TRANSITIONS {
-            let mut transitions: Vec<Value> = Vec::new();
-            for i in 1..values.len() {
-                if values[i] != values[i - 1] {
-                    transitions.push(json!({
-                        "t_rel_ms": times[i],
-                        "from": values[i - 1],
-                        "to": values[i],
-                    }));
-                }
-            }
-            entry["transitions"] = json!(transitions);
-        }
-
-        out.insert(format!("{}:{}", spec.key, spec.field), entry);
     }
     Value::Object(out)
+}
+
+/// Distinct concrete keys (in first-seen order) whose events match the wildcard
+/// `pattern` and carry `field`.
+fn matching_concrete_keys(
+    ordered: &[&ScenarioEvent],
+    pattern: &str,
+    field: &str,
+) -> Vec<String> {
+    let Ok(pat) = keyexpr::new(pattern) else {
+        return Vec::new();
+    };
+    let mut seen: Vec<String> = Vec::new();
+    for e in ordered {
+        let Ok(ek) = keyexpr::new(e.key_expr.as_str()) else {
+            continue;
+        };
+        if pat.includes(ek)
+            && resolve_field(&e.payload, field).is_some()
+            && !seen.iter().any(|s| s == &e.key_expr)
+        {
+            seen.push(e.key_expr.clone());
+        }
+    }
+    seen
+}
+
+/// Build one track's `{count, first, last, delta?, series, transitions?}` from
+/// the events on exactly `key` carrying `field`.
+fn build_one_track(ordered: &[&ScenarioEvent], key: &str, field: &str) -> Value {
+    let mut series: Vec<Value> = Vec::new();
+    let mut values: Vec<Value> = Vec::new();
+    let mut times: Vec<u64> = Vec::new();
+    for e in ordered {
+        if e.key_expr != key {
+            continue;
+        }
+        if let Some(v) = resolve_field(&e.payload, field) {
+            series.push(json!([e.t_rel_ms, v]));
+            values.push(v);
+            times.push(e.t_rel_ms);
+        }
+    }
+
+    let mut entry = json!({ "count": values.len(), "series": series });
+    if let (Some(first), Some(last)) = (values.first(), values.last()) {
+        entry["first"] = first.clone();
+        entry["last"] = last.clone();
+        if let (Some(a), Some(b)) = (first.as_f64(), last.as_f64()) {
+            entry["delta"] = json!(b - a);
+        }
+    }
+
+    let distinct: std::collections::BTreeSet<String> =
+        values.iter().map(|v| v.to_string()).collect();
+    if distinct.len() <= MAX_DISTINCT_FOR_TRANSITIONS {
+        let mut transitions: Vec<Value> = Vec::new();
+        for i in 1..values.len() {
+            if values[i] != values[i - 1] {
+                transitions.push(json!({
+                    "t_rel_ms": times[i],
+                    "from": values[i - 1],
+                    "to": values[i],
+                }));
+            }
+        }
+        entry["transitions"] = json!(transitions);
+    }
+    entry
 }
 
 /// The mission-stall diagnosis topic set (relative suffixes, prefix applied by
@@ -514,6 +555,21 @@ mod tests {
     fn track_no_specs_is_empty_object() {
         let events = vec![ev(10, "a", None, None, json!({ "x": 1 }))];
         assert_eq!(build_tracks(&events, &[]), json!({}));
+    }
+
+    #[test]
+    fn track_wildcard_expands_to_one_entry_per_concrete_key() {
+        let events = vec![
+            ev(10, "safety/policy/a", None, None, json!({ "kind": 1 })),
+            ev(20, "safety/policy/b", None, None, json!({ "kind": 2 })),
+            ev(30, "safety/policy/a", None, None, json!({ "kind": 3 })),
+        ];
+        let t = build_tracks(&events, &[spec("safety/policy/*", "kind")]);
+        assert_eq!(t["safety/policy/a:kind"]["count"], 2);
+        assert_eq!(t["safety/policy/a:kind"]["last"], 3);
+        assert_eq!(t["safety/policy/b:kind"]["count"], 1);
+        // The wildcard spec itself is not a track key.
+        assert!(t.get("safety/policy/*:kind").is_none());
     }
 
     #[test]
