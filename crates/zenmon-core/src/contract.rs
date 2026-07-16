@@ -359,12 +359,39 @@ pub fn validate_against_schema(schema: &Value, provided: &Value) -> Vec<String> 
         }
     }
     for (key, spec) in schema {
-        let optional = spec.as_str().is_some_and(|s| s.trim_end().ends_with('?'));
-        if !optional && !provided.contains_key(key) {
-            warnings.push(format!("missing field '{}'", key));
+        let spec_str = spec.as_str();
+        let optional = spec_str.is_some_and(|s| s.trim_end().ends_with('?'));
+        match provided.get(key) {
+            None => {
+                if !optional {
+                    warnings.push(format!("missing field '{}'", key));
+                }
+            }
+            Some(value) => {
+                // Enum notation `A|B|C`: the provided value must be one of them.
+                if let Some(opts) = spec_str.and_then(enum_options) {
+                    let got = value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string());
+                    if !opts.contains(&got.as_str()) {
+                        warnings.push(format!(
+                            "field '{}' must be one of [{}], got '{}'",
+                            key,
+                            opts.join(", "),
+                            got
+                        ));
+                    }
+                }
+            }
         }
     }
     warnings
+}
+
+/// Parse pipe-delimited enum notation from a schema string value
+/// (`"waypoint|traversal|action"`, optionally trailing `?`). Returns `None` when
+/// the value is not an enum.
+fn enum_options(spec: &str) -> Option<Vec<&str>> {
+    let s = spec.strip_suffix('?').unwrap_or(spec).trim();
+    s.contains('|').then(|| s.split('|').map(str::trim).collect())
 }
 
 #[cfg(test)]
@@ -427,6 +454,30 @@ topics:
     fn validate_clean_request_has_no_warnings() {
         let schema = json!({ "active": "bool" });
         assert!(validate_against_schema(&schema, &json!({ "active": true })).is_empty());
+    }
+
+    #[test]
+    fn validate_flags_value_not_in_enum() {
+        let schema = json!({ "type": "waypoint|traversal|action" });
+        let w = validate_against_schema(&schema, &json!({ "type": "node" }));
+        assert!(
+            w.iter()
+                .any(|m| m.contains("type") && m.contains("one of") && m.contains("node")),
+            "got {w:?}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_enum_value() {
+        let schema = json!({ "type": "waypoint|traversal|action" });
+        assert!(validate_against_schema(&schema, &json!({ "type": "traversal" })).is_empty());
+    }
+
+    #[test]
+    fn validate_optional_enum_absent_is_ok_but_invalid_when_present() {
+        let schema = json!({ "dir": "forward|back?" });
+        assert!(validate_against_schema(&schema, &json!({})).is_empty());
+        assert!(!validate_against_schema(&schema, &json!({ "dir": "sideways" })).is_empty());
     }
 
     const SAMPLE: &str = r#"
