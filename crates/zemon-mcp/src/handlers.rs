@@ -214,8 +214,8 @@ pub async fn pub_json(
     builder
         .await
         .map_err(|e| ZemonError::internal(format!("publish failed: {e}")))?;
-    let attachment_bytes = att.map(|a| a.as_bytes().len());
-    zemon_core::output::publish_accepted_json(key_expr, value.as_bytes().len(), attachment_bytes)
+    let attachment_bytes = att.map(|a| a.len());
+    zemon_core::output::publish_accepted_json(key_expr, value.len(), attachment_bytes)
         .map_err(|e| ZemonError::internal(format!("serialize pub result: {e}")))
 }
 

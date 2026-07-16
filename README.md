@@ -148,6 +148,22 @@ Interactive terminal dashboard with 5 views:
 - **Attachment display** — Zenoh attachments shown in magenta across all views
 - **Non-blocking** — Reconnection and queries run in background, UI stays responsive
 
+## MCP server (for AI agents)
+
+`zemon mcp` runs an MCP (Model Context Protocol) server over stdio, exposing the
+read-only monitoring surface (plus `pub` for test injection) as typed tools. It
+binds to one network for its lifetime, resolved from the same flags/env as every
+other command.
+
+Register it with an MCP client, e.g.:
+
+    { "command": "zemon", "args": ["mcp"] }
+
+Tools: `discover`, `query`, `nodes`, `liveliness`, `scout`, `doctor`, `keyexpr`,
+`info`, `config_show`, `sub_snapshot` (bounded: `count` and/or `duration_ms`), and
+`pub`. Responses use the same JSON shapes as the CLI `--json` mode. Streaming is
+bounded (snapshot); there is no server-push in this version.
+
 ## Architecture
 
 Cargo workspace with 3 crates:

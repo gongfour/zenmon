@@ -292,6 +292,17 @@ impl ZemonMcpServer {
             }
         }
     }
+
+    /// Names of all registered tools, sorted (per `ToolRouter::list_all`).
+    /// Used by the tool-registry test to assert the full 11-tool surface
+    /// without spinning up a transport.
+    pub fn list_tool_names(&self) -> Vec<String> {
+        self.tool_router
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect()
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
