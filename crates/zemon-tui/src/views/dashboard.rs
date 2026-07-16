@@ -14,6 +14,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(body_area);
 
+    // Remember the summary-panel rects so clicks can navigate into the views.
+    app.dash_node_rect = Some(left_area);
+    app.dash_topic_rect = Some(right_area);
+
     let (conn_str, conn_color) = match &app.connection_state {
         ConnectionState::Connected(zid) => (format!("Connected ({})", &zid[..zid.len().min(16)]), Color::Green),
         ConnectionState::Connecting => ("Connecting...".to_string(), Color::Yellow),
