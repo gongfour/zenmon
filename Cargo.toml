@@ -23,3 +23,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 color-eyre = "0.6"
 bitflags = "2"
 humantime = "2"
+base64 = "0.22"
