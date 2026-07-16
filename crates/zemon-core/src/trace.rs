@@ -7,9 +7,10 @@
 //!
 //! [`CaptureRecord`]: crate::capture::CaptureRecord
 
+use crate::capture::CaptureRecord;
 use crate::error::ZemonError;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -230,6 +231,64 @@ fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// A record with its location in the store and parsed receive time.
+#[derive(Debug, Clone)]
+pub struct PositionedRecord {
+    pub segment: String,
+    pub index: u64,
+    pub record: CaptureRecord,
+    pub received: Option<SystemTime>,
+}
+
+/// Parse `received_at` (RFC3339) to `SystemTime`. v1 records (None) → None.
+fn parse_received(rec: &CaptureRecord) -> Option<SystemTime> {
+    rec.received_at
+        .as_deref()
+        .and_then(|s| humantime::parse_rfc3339(s).ok())
+}
+
+/// Load all records of one segment file, tagged with their 0-based index and
+/// receive time. When `tolerate_partial_last_line` is set, a final line that
+/// fails to parse (a truncated in-flight write in the active segment) is
+/// dropped instead of erroring; any earlier bad line is always a hard error.
+pub fn load_segment(
+    path: &Path,
+    tolerate_partial_last_line: bool,
+) -> Result<Vec<PositionedRecord>, ZemonError> {
+    let segment = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let file = std::fs::File::open(path)
+        .map_err(|e| ZemonError::internal(format!("cannot open {}: {}", path.display(), e)))?;
+    let reader = BufReader::new(file);
+    let lines: Vec<String> = reader
+        .lines()
+        .collect::<std::io::Result<_>>()
+        .map_err(|e| ZemonError::internal(format!("read failed: {}", e)))?;
+
+    let mut out = Vec::with_capacity(lines.len());
+    let last = lines.len().saturating_sub(1);
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match CaptureRecord::parse_line(line, i + 1) {
+            Ok(record) => {
+                let received = parse_received(&record);
+                out.push(PositionedRecord { segment: segment.clone(), index: i as u64, record, received });
+            }
+            Err(e) => {
+                if tolerate_partial_last_line && i == last {
+                    break; // truncated final write in the active segment
+                }
+                return Err(e);
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +482,46 @@ mod tests {
         write_segment(&dir, 1000, 0, &["0123456789"]);
         let deleted = enforce_retention(&dir, Some(1), Some(Duration::from_secs(0)), t(9_999_999)).unwrap();
         assert_eq!(deleted, 0); // newest/active is protected
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn rec_line(key: &str, received_secs: u64) -> String {
+        let m = crate::types::ZenohMessage {
+            key_expr: key.to_string(),
+            payload: crate::types::MessagePayload::from_bytes(b"{}".to_vec()),
+            encoding: "application/json".to_string(),
+            payload_bytes: 2,
+            timestamp: None,
+            kind: "PUT".to_string(),
+            attachment: None,
+            attachment_bytes: None,
+        };
+        serde_json::to_string(&CaptureRecord::from_message(&m, Duration::ZERO, t(received_secs))).unwrap()
+    }
+
+    #[test]
+    fn load_segment_positions_and_parses_received_at() {
+        let dir = tempdir_unique("load");
+        let path = write_segment(&dir, 1000, 0, &[&rec_line("a/b", 1000), &rec_line("c/d", 1001)]);
+        let recs = load_segment(&path, true).unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].index, 0);
+        assert_eq!(recs[0].record.key_expr, "a/b");
+        assert_eq!(recs[0].received, Some(t(1000)));
+        assert_eq!(recs[1].index, 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_segment_tolerates_trailing_partial_line_when_allowed() {
+        let dir = tempdir_unique("partial");
+        let path = dir.join(segment_file_name(t(1000), 0));
+        // valid line + a partial (no newline, truncated json) as if mid-write.
+        std::fs::write(&path, format!("{}\n{{\"schema_v", rec_line("a/b", 1000))).unwrap();
+        let recs = load_segment(&path, true).unwrap();
+        assert_eq!(recs.len(), 1); // partial dropped, no error
+        // But when NOT tolerated, the corrupt line is an error.
+        assert!(load_segment(&path, false).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 }
