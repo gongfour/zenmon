@@ -1420,12 +1420,13 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             settle,
             track,
             no_timeline,
+            explain,
         } => {
             // A resolved contract lets --task surface & validate its request schema.
             let contract = load_contract_opt(&cli.contract)?;
             run_scenario(
                 cli.json, &config, observe, preset, prefix, pub_, task, pub_rate, pub_for,
-                pub_count, for_, settle, track, no_timeline, contract,
+                pub_count, for_, settle, track, no_timeline, explain, contract,
             )
             .await?;
         }
@@ -1546,6 +1547,7 @@ async fn run_scenario(
     settle: Option<Duration>,
     track: Vec<String>,
     no_timeline: bool,
+    explain: bool,
     contract: Option<Contract>,
 ) -> Result<(), ZenmonError> {
     use std::time::Instant;
@@ -1665,6 +1667,45 @@ async fn run_scenario(
             keys.push(p[0].as_str());
         }
         warn_redundant_namespace(keys, config.namespace.as_deref());
+    }
+
+    let trigger_desc = if let Some(p) = &task {
+        format!("task -> {}/request", p[0].trim_end_matches('/'))
+    } else if let Some(p) = &pub_ {
+        format!("pub -> {}", p[0])
+    } else {
+        "none".to_string()
+    };
+    let track_specs: Vec<String> = specs.iter().map(|s| format!("{}:{}", s.key, s.field)).collect();
+
+    // --explain: print the resolved plan and stop before any network side effect.
+    if explain {
+        if json {
+            let plan = serde_json::json!({
+                "trigger": trigger_desc,
+                "observed": observed,
+                "tracks": track_specs,
+                "for_ms": for_.as_millis() as u64,
+                "settle_ms": settle.map(|s| s.as_millis() as u64).unwrap_or(0),
+            });
+            println!("{}", serde_json::to_string(&plan)?);
+        } else {
+            println!("scenario plan (dry run):");
+            println!("  trigger: {trigger_desc}");
+            println!("  observe ({}):", observed.len());
+            for k in &observed {
+                println!("    {k}");
+            }
+            if !track_specs.is_empty() {
+                println!("  track: {}", track_specs.join(", "));
+            }
+            println!(
+                "  window: {}ms (+{}ms settle)",
+                for_.as_millis(),
+                settle.map(|s| s.as_millis()).unwrap_or(0)
+            );
+        }
+        return Ok(());
     }
 
     let session = zenmon_core::session::open_session(config).await?;
