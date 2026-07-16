@@ -47,7 +47,7 @@ fn print_scout_results(
     let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
     if hits.is_empty() {
         println!(
-            "No Zenoh nodes found in ports {}-{} ({}s per port)",
+            "No Zenoh nodes found on scouting ports {}-{} ({}s per port)",
             start, end, per_port_timeout
         );
         return;
@@ -59,14 +59,7 @@ fn print_scout_results(
         if i > 0 {
             println!();
         }
-        let domain = result.port.saturating_sub(7446);
-        println!(
-            "Port {}  (domain {}, {} node{})",
-            result.port,
-            domain,
-            result.nodes.len(),
-            if result.nodes.len() == 1 { "" } else { "s" }
-        );
+        println!("{}", scouting_port_heading(result.port, result.nodes.len()));
         println!("{}", "─".repeat(78));
         println!("  {:<8} {:<34} {}", "TYPE", "ZID", "LOCATOR");
         for node in &result.nodes {
@@ -82,7 +75,7 @@ fn print_scout_results(
 
     println!();
     println!(
-        "Scanned {}-{} · {} node{} on {} port{}",
+        "Scanned scouting ports {}-{} · {} node{} on {} port{}",
         start,
         end,
         total,
@@ -90,6 +83,15 @@ fn print_scout_results(
         hits.len(),
         if hits.len() == 1 { "" } else { "s" }
     );
+}
+
+fn scouting_port_heading(port: u16, node_count: usize) -> String {
+    format!(
+        "Scouting port {}  ({} node{})",
+        port,
+        node_count,
+        if node_count == 1 { "" } else { "s" }
+    )
 }
 
 fn parse_port_range(s: &str) -> Result<(u16, u16)> {
@@ -476,4 +478,17 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scout_heading_describes_a_scouting_port_without_a_domain() {
+        let heading = scouting_port_heading(7446, 2);
+
+        assert_eq!(heading, "Scouting port 7446  (2 nodes)");
+        assert!(!heading.to_lowercase().contains("domain"));
+    }
 }
