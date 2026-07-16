@@ -594,6 +594,41 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
+        Command::Doctor { timeout } => {
+            let report = zemon_core::doctor::run(&config, timeout).await;
+
+            if cli.json {
+                // A single result object on stdout; a failing diagnostic is a
+                // successful report with status "fail", not an error envelope.
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                use zemon_core::doctor::CheckStatus;
+                for c in &report.checks {
+                    let mark = match c.status {
+                        CheckStatus::Pass => "PASS",
+                        CheckStatus::Warn => "WARN",
+                        CheckStatus::Fail => "FAIL",
+                    };
+                    print!("[{}] {:<11} {}ms", mark, c.name, c.latency_ms);
+                    if let Some(m) = &c.message {
+                        print!("  {}", m);
+                    }
+                    println!();
+                    if let Some(h) = &c.hint {
+                        if c.status != CheckStatus::Pass {
+                            println!("       hint: {}", h);
+                        }
+                    }
+                }
+                println!("\nOverall: {:?}", report.status);
+            }
+
+            let code = report.exit_code();
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+
         Command::Keyexpr { a, b } => {
             // Pure, offline: no session is opened.
             let rel = zemon_core::keyexpr::compare(&a, &b)?;
