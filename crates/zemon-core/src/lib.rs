@@ -8,6 +8,7 @@ pub mod session;
 pub mod types;
 pub mod discover;
 pub mod subscriber;
+pub mod topology;
 pub mod query;
 pub mod queryable;
 pub mod registry;

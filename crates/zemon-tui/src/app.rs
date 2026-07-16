@@ -13,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
 
 /// Return the tab index hit by a click at `(col, row)`, or `None`.
-pub(crate) fn tab_hit(rects: &[Option<Rect>; 6], col: u16, row: u16) -> Option<usize> {
+pub(crate) fn tab_hit(rects: &[Option<Rect>; 7], col: u16, row: u16) -> Option<usize> {
     for (i, maybe) in rects.iter().enumerate() {
         if let Some(r) = maybe {
             if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
@@ -90,7 +90,8 @@ pub(crate) fn domain_port_label(port: u16) -> String {
     }
 }
 
-const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
+const TAB_TITLES: [&str; 7] =
+    ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness", "Network"];
 
 /// One key binding, used as the single source of truth for both the compact
 /// status-bar hint and the `?` help overlay so they can't drift apart.
@@ -153,6 +154,10 @@ pub(crate) fn view_hints(view: ActiveView) -> &'static [KeyHint] {
         KeyHint::new("J/K", "scroll event log"),
         KeyHint::new("y", "copy key"),
     ];
+    const NETWORK: &[KeyHint] = &[
+        KeyHint::new("J/K", "scroll graph"),
+        KeyHint::new("5", "node details"),
+    ];
     match view {
         ActiveView::Dashboard => DASHBOARD,
         ActiveView::Topics => TOPICS,
@@ -160,6 +165,7 @@ pub(crate) fn view_hints(view: ActiveView) -> &'static [KeyHint] {
         ActiveView::Query => QUERY,
         ActiveView::Nodes => NODES,
         ActiveView::Liveliness => LIVELINESS,
+        ActiveView::Network => NETWORK,
     }
 }
 
@@ -198,7 +204,7 @@ pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static s
 /// Compact status-bar hint: quit + view switch + the top few view bindings,
 /// always ending with `?:help`. Wide terminals show more; the rest live in `?`.
 pub(crate) fn compact_hint(view: ActiveView) -> String {
-    let mut parts: Vec<String> = vec!["q:quit".into(), "1-6:view".into()];
+    let mut parts: Vec<String> = vec!["q:quit".into(), "1-7:view".into()];
     for h in view_hints(view).iter().take(3) {
         parts.push(format!("{}:{}", h.keys, h.desc.split(['/', ' ']).next().unwrap_or(h.desc)));
     }
@@ -214,6 +220,7 @@ pub enum ActiveView {
     Query,
     Nodes,
     Liveliness,
+    Network,
 }
 
 impl ActiveView {
@@ -225,6 +232,7 @@ impl ActiveView {
             ActiveView::Query => 3,
             ActiveView::Nodes => 4,
             ActiveView::Liveliness => 5,
+            ActiveView::Network => 6,
         }
     }
 }
@@ -260,7 +268,7 @@ pub struct App {
     pub should_quit: bool,
     pub connection_state: ConnectionState,
     pub endpoint: String,
-    pub tab_rects: [Option<ratatui::layout::Rect>; 6],
+    pub tab_rects: [Option<ratatui::layout::Rect>; 7],
 
     pub topics: Vec<TopicInfo>,
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
@@ -334,6 +342,8 @@ pub struct App {
     /// Dashboard summary-panel rects, for click-to-navigate.
     pub dash_node_rect: Option<ratatui::layout::Rect>,
     pub dash_topic_rect: Option<ratatui::layout::Rect>,
+
+    pub network_scroll: u16,
 }
 
 impl App {
@@ -343,7 +353,7 @@ impl App {
             should_quit: false,
             connection_state: ConnectionState::Connecting,
             endpoint,
-            tab_rects: [None; 6],
+            tab_rects: [None; 7],
             topics: Vec::new(),
             topic_latest: HashMap::new(),
             admin_nodes: Vec::new(),
@@ -403,6 +413,7 @@ impl App {
             help_scroll: 0,
             dash_node_rect: None,
             dash_topic_rect: None,
+            network_scroll: 0,
         }
     }
 
@@ -587,6 +598,7 @@ impl App {
                 KeyCode::Char('4') => self.active_view = ActiveView::Query,
                 KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
                 KeyCode::Char('6') => self.active_view = ActiveView::Liveliness,
+                KeyCode::Char('7') => self.active_view = ActiveView::Network,
                 KeyCode::Esc => {
                     self.active_view = ActiveView::Dashboard;
                 }
@@ -758,6 +770,7 @@ impl App {
                 3 => ActiveView::Query,
                 4 => ActiveView::Nodes,
                 5 => ActiveView::Liveliness,
+                6 => ActiveView::Network,
                 _ => self.active_view,
             };
             return;
@@ -797,7 +810,7 @@ impl App {
             ActiveView::Query => self.query_results.len(),
             ActiveView::Nodes => self.nodes.len(),
             ActiveView::Liveliness => self.liveliness_tokens.len(),
-            ActiveView::Dashboard => return,
+            ActiveView::Dashboard | ActiveView::Network => return,
         };
         let Some(idx) = list_hit(
             rect,
@@ -820,7 +833,7 @@ impl App {
                 self.liveliness_selected = idx;
                 self.liveliness_log_scroll = 0;
             }
-            ActiveView::Dashboard => {}
+            ActiveView::Dashboard | ActiveView::Network => {}
         }
     }
 
@@ -841,6 +854,9 @@ impl App {
             }
             ActiveView::Liveliness => {
                 self.liveliness_selected = self.liveliness_selected.saturating_sub(1);
+            }
+            ActiveView::Network => {
+                self.network_scroll = self.network_scroll.saturating_sub(1);
             }
             ActiveView::Dashboard => {}
         }
@@ -878,6 +894,9 @@ impl App {
                 if self.liveliness_selected < max {
                     self.liveliness_selected += 1;
                 }
+            }
+            ActiveView::Network => {
+                self.network_scroll = self.network_scroll.saturating_add(1);
             }
             ActiveView::Dashboard => {}
         }
@@ -943,6 +962,9 @@ impl App {
                 ActiveView::Liveliness => {
                     self.liveliness_log_scroll =
                         apply_detail_scroll(self.liveliness_log_scroll, action)
+                }
+                ActiveView::Network => {
+                    self.network_scroll = apply_detail_scroll(self.network_scroll, action)
                 }
                 _ => {}
             }
@@ -1278,6 +1300,7 @@ impl App {
             ActiveView::Query => views::query::render(self, frame, content_area),
             ActiveView::Nodes => views::nodes::render(self, frame, content_area),
             ActiveView::Liveliness => views::liveliness::render(self, frame, content_area),
+            ActiveView::Network => views::network::render(self, frame, content_area),
         }
 
         if self.scout_port_modal_open {
@@ -1642,6 +1665,16 @@ mod tests {
     }
 
     #[test]
+    fn key_7_switches_to_network_view() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('7')));
+        assert_eq!(app.active_view, ActiveView::Network);
+        // J/K scroll the graph in the Network view.
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.network_scroll, 3);
+    }
+
+    #[test]
     fn dashboard_click_targets_node_and_topic_rows() {
         let mut app = App::new("t".into());
         app.nodes = vec![node("a"), node("b")];
@@ -1851,6 +1884,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         ];
         assert_eq!(tab_hit(&rects, 2, 1), Some(0));
         assert_eq!(tab_hit(&rects, 20, 1), Some(1));
@@ -1859,7 +1893,7 @@ mod tests {
 
     #[test]
     fn tab_hit_outside_returns_none() {
-        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None, None];
+        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None, None, None];
         assert_eq!(tab_hit(&rects, 50, 1), None);
         assert_eq!(tab_hit(&rects, 2, 5), None);
     }
