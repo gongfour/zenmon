@@ -146,9 +146,9 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             }
 
             let scroll_hint = if app.topic_detail_scroll > 0 {
-                format!(" Latest Value (Shift+J/K scroll, line {}) ", app.topic_detail_scroll)
+                format!(" Latest Value (J/K:scroll, line {}) ", app.topic_detail_scroll)
             } else {
-                " Latest Value (Shift+J/K scroll) ".to_string()
+                " Latest Value (J/K:scroll) ".to_string()
             };
             let detail = Paragraph::new(lines)
                 .block(Block::default().borders(Borders::ALL).title(scroll_hint))

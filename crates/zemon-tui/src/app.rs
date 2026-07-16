@@ -51,6 +51,33 @@ fn payload_to_string(p: &MessagePayload) -> String {
     p.pretty()
 }
 
+/// A detail-panel scroll request. Uppercase `J`/`K` scroll the detail panel in
+/// every view; we accept the uppercase char regardless of how the terminal
+/// reports the Shift modifier, so the contract is portable and consistent.
+/// Lowercase `j`/`k` remain list navigation and are not handled here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DetailScroll {
+    Down,
+    Up,
+}
+
+pub(crate) fn detail_scroll_action(key: KeyEvent) -> Option<DetailScroll> {
+    match key.code {
+        KeyCode::Char('J') => Some(DetailScroll::Down),
+        KeyCode::Char('K') => Some(DetailScroll::Up),
+        _ => None,
+    }
+}
+
+/// Apply a detail-scroll action to a scroll offset (3 lines per step,
+/// saturating at 0).
+pub(crate) fn apply_detail_scroll(scroll: u16, action: DetailScroll) -> u16 {
+    match action {
+        DetailScroll::Down => scroll.saturating_add(3),
+        DetailScroll::Up => scroll.saturating_sub(3),
+    }
+}
+
 const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,6 +723,24 @@ impl App {
     }
 
     fn handle_view_key(&mut self, key: KeyEvent) {
+        // Detail-panel scroll (uppercase J/K) is uniform across views.
+        if let Some(action) = detail_scroll_action(key) {
+            match self.active_view {
+                ActiveView::Topics => {
+                    self.topic_detail_scroll = apply_detail_scroll(self.topic_detail_scroll, action)
+                }
+                ActiveView::Nodes => {
+                    self.node_detail_scroll = apply_detail_scroll(self.node_detail_scroll, action)
+                }
+                ActiveView::Liveliness => {
+                    self.liveliness_log_scroll =
+                        apply_detail_scroll(self.liveliness_log_scroll, action)
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match self.active_view {
             ActiveView::Topics => match (key.modifiers, key.code) {
                 (_, KeyCode::Char('/')) => self.topics_filtering = true,
@@ -719,12 +764,6 @@ impl App {
                         drop(filtered);
                         self.copy_to_clipboard(text, "key_expr");
                     }
-                }
-                (m, KeyCode::Char('J')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
-                    self.topic_detail_scroll = self.topic_detail_scroll.saturating_add(3);
-                }
-                (m, KeyCode::Char('K')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
-                    self.topic_detail_scroll = self.topic_detail_scroll.saturating_sub(3);
                 }
                 (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
                     self.topic_selected = self.topic_selected.saturating_sub(1);
@@ -818,12 +857,6 @@ impl App {
                         self.node_detail_scroll = 0;
                     }
                 }
-                KeyCode::Char('J') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_add(3);
-                }
-                KeyCode::Char('K') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_sub(3);
-                }
                 KeyCode::Char('s') => {
                     if !self.scout_in_progress {
                         self.pending_scout_request = true;
@@ -847,12 +880,6 @@ impl App {
                     if self.liveliness_selected < max {
                         self.liveliness_selected += 1;
                     }
-                }
-                KeyCode::Char('J') => {
-                    self.liveliness_log_scroll = self.liveliness_log_scroll.saturating_add(3);
-                }
-                KeyCode::Char('K') => {
-                    self.liveliness_log_scroll = self.liveliness_log_scroll.saturating_sub(3);
                 }
                 _ => {}
             },
@@ -1282,6 +1309,40 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn uppercase_j_k_map_to_detail_scroll_without_shift() {
+        // Uppercase J/K scroll regardless of whether Shift is reported.
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('J'))), Some(DetailScroll::Down));
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('K'))), Some(DetailScroll::Up));
+        assert_eq!(
+            detail_scroll_action(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT)),
+            Some(DetailScroll::Down)
+        );
+    }
+
+    #[test]
+    fn lowercase_j_k_are_not_detail_scroll() {
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('j'))), None);
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
+    }
+
+    #[test]
+    fn apply_detail_scroll_saturates_at_zero() {
+        assert_eq!(apply_detail_scroll(0, DetailScroll::Up), 0);
+        assert_eq!(apply_detail_scroll(0, DetailScroll::Down), 3);
+        assert_eq!(apply_detail_scroll(5, DetailScroll::Up), 2);
+    }
+
+    #[test]
+    fn topics_detail_scroll_works_without_shift_modifier() {
+        let mut app = App::new("test".into());
+        app.active_view = ActiveView::Topics;
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.topic_detail_scroll, 3);
+        app.handle_key(key(KeyCode::Char('K')));
+        assert_eq!(app.topic_detail_scroll, 0);
     }
 
     #[test]
