@@ -2,7 +2,7 @@ use crate::app::App;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Sparkline, Wrap};
 use ratatui::Frame;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -128,6 +128,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                         format!("{:.1} Hz", app.topic_hz.get(key.as_str()).copied().unwrap_or(0.0)),
                         Style::default().fg(Color::Green),
                     ),
+                    Span::raw("  "),
+                    Span::styled("Bandwidth: ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        crate::app::format_bytes_per_sec(app.topic_bytes_per_sec(key.as_str())),
+                        Style::default().fg(Color::Green),
+                    ),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled("Payload:", Style::default().fg(Color::Gray))),
@@ -160,11 +166,33 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             } else {
                 " Latest Value (J/K:scroll) ".to_string()
             };
+            // Reserve a small strip at the bottom for a bandwidth sparkline when
+            // the panel is tall enough; otherwise fall back to text only.
+            let spark = app.topic_rate_series(key.as_str());
+            let show_spark = detail_area.height >= 8 && spark.iter().any(|&b| b > 0);
+            let main_area = if show_spark {
+                let [top, bottom] =
+                    Layout::vertical([Constraint::Fill(1), Constraint::Length(3)])
+                        .areas(detail_area);
+                let sparkline = Sparkline::default()
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(" Bandwidth (bytes/s, last 30s) "),
+                    )
+                    .data(&spark)
+                    .style(Style::default().fg(Color::Green));
+                frame.render_widget(sparkline, bottom);
+                top
+            } else {
+                detail_area
+            };
+
             let detail = Paragraph::new(lines)
                 .block(Block::default().borders(Borders::ALL).title(scroll_hint))
                 .wrap(Wrap { trim: false })
                 .scroll((app.topic_detail_scroll, 0));
-            frame.render_widget(detail, detail_area);
+            frame.render_widget(detail, main_area);
         } else {
             let detail = Paragraph::new(Line::from(Span::styled(
                 "No data received yet",

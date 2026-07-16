@@ -169,6 +169,59 @@ pub(crate) fn view_hints(view: ActiveView) -> &'static [KeyHint] {
     }
 }
 
+/// How many 1-second buckets of rate history to keep for sparklines.
+const RATE_WINDOW_SECS: usize = 30;
+
+/// A bounded ring buffer of per-second byte counts, used for bandwidth
+/// sparklines. Idle seconds are recorded as `0` buckets so a topic that goes
+/// quiet shows a real dip rather than a stale value.
+#[derive(Debug, Clone)]
+pub(crate) struct RateWindow {
+    samples: std::collections::VecDeque<u64>,
+    cap: usize,
+}
+
+impl RateWindow {
+    pub(crate) fn new(cap: usize) -> Self {
+        Self {
+            samples: std::collections::VecDeque::new(),
+            cap,
+        }
+    }
+
+    /// Record one completed 1-second bucket, evicting the oldest beyond `cap`.
+    pub(crate) fn push(&mut self, bytes: u64) {
+        self.samples.push_back(bytes);
+        while self.samples.len() > self.cap {
+            self.samples.pop_front();
+        }
+    }
+
+    pub(crate) fn latest(&self) -> u64 {
+        self.samples.back().copied().unwrap_or(0)
+    }
+
+    pub(crate) fn is_all_zero(&self) -> bool {
+        self.samples.iter().all(|&b| b == 0)
+    }
+
+    pub(crate) fn series(&self) -> Vec<u64> {
+        self.samples.iter().copied().collect()
+    }
+}
+
+/// Human-readable application-payload bandwidth (not protocol overhead).
+pub(crate) fn format_bytes_per_sec(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= 1_048_576.0 {
+        format!("{:.1} MB/s", b / 1_048_576.0)
+    } else if b >= 1024.0 {
+        format!("{:.1} KB/s", b / 1024.0)
+    } else {
+        format!("{} B/s", bytes)
+    }
+}
+
 /// Why a view is showing nothing — so empty states explain the cause and the
 /// next action instead of an ambiguous blank panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +351,13 @@ pub struct App {
     pub total_msg_count: u32,
     pub total_hz: f64,
 
+    // Application-payload bandwidth accounting (bytes since last bucket) and
+    // per-second history for sparklines.
+    pub(crate) topic_byte_counts: HashMap<String, u64>,
+    pub(crate) total_byte_count: u64,
+    pub(crate) total_rate: RateWindow,
+    pub(crate) topic_rates: HashMap<String, RateWindow>,
+
     pub query_input: String,
     pub query_results: Vec<ZenohMessage>,
     pub query_history: Vec<String>,
@@ -379,6 +439,10 @@ impl App {
             last_hz_update: Instant::now(),
             total_msg_count: 0,
             total_hz: 0.0,
+            topic_byte_counts: HashMap::new(),
+            total_byte_count: 0,
+            total_rate: RateWindow::new(RATE_WINDOW_SECS),
+            topic_rates: HashMap::new(),
             query_input: String::new(),
             query_results: Vec::new(),
             query_history: Vec::new(),
@@ -1142,6 +1206,12 @@ impl App {
         *self.topic_msg_counts.entry(msg.key_expr.clone()).or_insert(0) += 1;
         self.total_msg_count += 1;
 
+        // Application payload bytes (not protocol overhead), from the lossless
+        // wire byte counts captured at receive time.
+        let bytes = (msg.payload_bytes + msg.attachment_bytes.unwrap_or(0)) as u64;
+        *self.topic_byte_counts.entry(msg.key_expr.clone()).or_insert(0) += bytes;
+        self.total_byte_count += bytes;
+
         self.recent_messages.push_front(msg.clone());
         if self.recent_messages.len() > 100 {
             self.recent_messages.pop_back();
@@ -1165,14 +1235,57 @@ impl App {
 
     pub fn update_hz(&mut self) {
         let elapsed = self.last_hz_update.elapsed().as_secs_f64();
-        if elapsed >= 1.0 {
-            for (key, count) in self.topic_msg_counts.drain() {
-                self.topic_hz.insert(key, count as f64 / elapsed);
-            }
-            self.total_hz = self.total_msg_count as f64 / elapsed;
-            self.total_msg_count = 0;
-            self.last_hz_update = Instant::now();
+        if elapsed < 1.0 {
+            return;
         }
+
+        // Every topic we already track a rate for gets a bucket this interval —
+        // even if it received nothing (a 0 bucket) — so sparklines show real
+        // dips and idle Hz decays to 0 instead of sticking at its last value.
+        let mut keys: std::collections::HashSet<String> =
+            self.topic_rates.keys().cloned().collect();
+        keys.extend(self.topic_msg_counts.keys().cloned());
+
+        for key in keys {
+            let msgs = self.topic_msg_counts.get(&key).copied().unwrap_or(0);
+            let bytes = self.topic_byte_counts.get(&key).copied().unwrap_or(0);
+            self.topic_hz.insert(key.clone(), msgs as f64 / elapsed);
+            self.topic_rates
+                .entry(key.clone())
+                .or_insert_with(|| RateWindow::new(RATE_WINDOW_SECS))
+                .push(bytes);
+            // Evict topics idle for the whole window to bound memory.
+            if self.topic_rates.get(&key).is_some_and(|w| w.is_all_zero()) {
+                self.topic_rates.remove(&key);
+                self.topic_hz.remove(&key);
+            }
+        }
+
+        self.topic_msg_counts.clear();
+        self.topic_byte_counts.clear();
+
+        self.total_rate.push(self.total_byte_count);
+        self.total_hz = self.total_msg_count as f64 / elapsed;
+        self.total_msg_count = 0;
+        self.total_byte_count = 0;
+        self.last_hz_update = Instant::now();
+    }
+
+    /// Latest total application bandwidth in bytes/sec (last completed bucket).
+    pub(crate) fn total_bytes_per_sec(&self) -> u64 {
+        self.total_rate.latest()
+    }
+
+    /// Latest bandwidth + history for a specific topic (empty if idle/evicted).
+    pub(crate) fn topic_rate_series(&self, key: &str) -> Vec<u64> {
+        self.topic_rates
+            .get(key)
+            .map(|w| w.series())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn topic_bytes_per_sec(&self, key: &str) -> u64 {
+        self.topic_rates.get(key).map(|w| w.latest()).unwrap_or(0)
     }
 
     /// Connection-level empty reason (connecting/disconnected), or `None` when
@@ -1694,6 +1807,29 @@ mod tests {
             admin_last_seen: None,
             scout_last_seen: None,
         }
+    }
+
+    #[test]
+    fn rate_window_evicts_beyond_cap_and_detects_idle() {
+        let mut w = RateWindow::new(3);
+        w.push(10);
+        w.push(20);
+        w.push(30);
+        w.push(40); // evicts the 10
+        assert_eq!(w.series(), vec![20, 30, 40]);
+        assert_eq!(w.latest(), 40);
+        assert!(!w.is_all_zero());
+        let mut idle = RateWindow::new(2);
+        idle.push(0);
+        idle.push(0);
+        assert!(idle.is_all_zero());
+    }
+
+    #[test]
+    fn format_bytes_per_sec_scales_units() {
+        assert_eq!(format_bytes_per_sec(500), "500 B/s");
+        assert_eq!(format_bytes_per_sec(2048), "2.0 KB/s");
+        assert_eq!(format_bytes_per_sec(3_145_728), "3.0 MB/s");
     }
 
     #[test]
