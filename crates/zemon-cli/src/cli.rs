@@ -91,11 +91,11 @@ pub enum Command {
     },
 
     /// Scout the network for Zenoh nodes (no router needed).
-    /// Scans a multicast port range in parallel; each port maps to
-    /// Zenoh domain id = port - 7446.
+    /// Scans multicast scouting ports in parallel to discover nodes on
+    /// separately configured discovery networks.
     Scout {
         /// Multicast port range, START-END inclusive.
-        /// Default covers domain ids 0..=100.
+        /// Default starts at Zenoh's default scouting port and scans 101 ports.
         #[arg(long, value_name = "START-END", default_value = "7446-7546")]
         port_range: String,
 
@@ -124,4 +124,21 @@ pub enum Command {
         #[arg(long, default_value = "100")]
         refresh: u64,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn scout_help_uses_scouting_port_terminology() {
+        let mut command = Cli::command();
+        let scout = command.find_subcommand_mut("scout").unwrap();
+        let help = scout.render_long_help().to_string().to_lowercase();
+
+        assert!(help.contains("scouting port"));
+        assert!(!help.contains("domain"));
+    }
 }
