@@ -8,8 +8,10 @@
 //! [`CaptureRecord`]: crate::capture::CaptureRecord
 
 use crate::error::ZemonError;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 const SEG_PREFIX: &str = "zemon-trace-";
 const SEG_EXT: &str = ".ndjson";
@@ -84,11 +86,90 @@ pub fn segment_upper_bound(segs: &[Segment], i: usize) -> Option<SystemTime> {
     segs.get(i + 1).map(|s| s.first)
 }
 
+/// Appends NDJSON lines into rotating segment files under a directory.
+pub struct SegmentWriter {
+    dir: PathBuf,
+    rotate_size: u64,
+    rotate_interval: Duration,
+    writer: Option<BufWriter<File>>,
+    seg_first: SystemTime,
+    seg_bytes: u64,
+    next_seq: u32,
+}
+
+impl SegmentWriter {
+    pub fn open(dir: PathBuf, rotate_size: u64, rotate_interval: Duration) -> Result<Self, ZemonError> {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            ZemonError::invalid_input(format!("cannot create {}: {}", dir.display(), e))
+        })?;
+        // Continue the seq space after any existing segments in the dir.
+        let next_seq = discover_segments(&dir)?
+            .iter()
+            .map(|s| s.seq)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        Ok(Self {
+            dir,
+            rotate_size,
+            rotate_interval,
+            writer: None,
+            seg_first: SystemTime::UNIX_EPOCH,
+            seg_bytes: 0,
+            next_seq,
+        })
+    }
+
+    fn should_rotate(&self, now: SystemTime) -> bool {
+        if self.writer.is_none() {
+            return true;
+        }
+        if self.seg_bytes >= self.rotate_size {
+            return true;
+        }
+        now.duration_since(self.seg_first)
+            .map(|elapsed| elapsed >= self.rotate_interval)
+            .unwrap_or(false)
+    }
+
+    fn rotate(&mut self, now: SystemTime) -> Result<(), ZemonError> {
+        if let Some(mut w) = self.writer.take() {
+            w.flush().map_err(|e| ZemonError::internal(format!("flush failed: {}", e)))?;
+        }
+        let name = segment_file_name(now, self.next_seq);
+        self.next_seq += 1;
+        let path = self.dir.join(name);
+        let file = File::create(&path)
+            .map_err(|e| ZemonError::internal(format!("cannot create {}: {}", path.display(), e)))?;
+        self.writer = Some(BufWriter::new(file));
+        self.seg_first = now;
+        self.seg_bytes = 0;
+        Ok(())
+    }
+
+    /// Append one line (a newline is added). Rotates first if the current
+    /// segment is full or too old.
+    pub fn write_line(&mut self, line: &str, now: SystemTime) -> Result<(), ZemonError> {
+        if self.should_rotate(now) {
+            self.rotate(now)?;
+        }
+        let w = self.writer.as_mut().expect("writer present after rotate");
+        writeln!(w, "{}", line).map_err(|e| ZemonError::internal(format!("write failed: {}", e)))?;
+        self.seg_bytes += line.len() as u64 + 1;
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<(), ZemonError> {
+        if let Some(w) = self.writer.as_mut() {
+            w.flush().map_err(|e| ZemonError::internal(format!("flush failed: {}", e)))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
-    use std::time::Duration;
 
     fn t(secs: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -197,6 +278,50 @@ mod tests {
         let segs = discover_segments(&dir).unwrap();
         assert_eq!(segment_upper_bound(&segs, 0), Some(t(3000)));
         assert_eq!(segment_upper_bound(&segs, 1), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn count_segments(dir: &Path) -> usize {
+        discover_segments(dir).unwrap().len()
+    }
+
+    #[test]
+    fn rotates_on_size() {
+        let dir = tempdir_unique("rotsize");
+        // rotate after ~20 bytes; interval huge so only size triggers.
+        let mut w = SegmentWriter::open(dir.clone(), 20, Duration::from_secs(3600)).unwrap();
+        let line = "0123456789"; // 11 bytes incl newline
+        w.write_line(line, t(1000)).unwrap(); // seg A: 11
+        w.write_line(line, t(1000)).unwrap(); // seg A: 22 -> next write rotates
+        w.write_line(line, t(1000)).unwrap(); // seg B
+        w.flush().unwrap();
+        assert_eq!(count_segments(&dir), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotates_on_interval() {
+        let dir = tempdir_unique("rotint");
+        let mut w = SegmentWriter::open(dir.clone(), 1 << 30, Duration::from_secs(60)).unwrap();
+        w.write_line("a", t(1000)).unwrap();
+        w.write_line("b", t(1000 + 30)).unwrap(); // within interval -> same seg
+        w.write_line("c", t(1000 + 61)).unwrap(); // past interval -> new seg
+        w.flush().unwrap();
+        assert_eq!(count_segments(&dir), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn same_second_uses_distinct_seq() {
+        let dir = tempdir_unique("seq");
+        let mut w = SegmentWriter::open(dir.clone(), 1, Duration::from_secs(3600)).unwrap();
+        // rotate_size=1 forces a new segment on every write, all at t=1000.
+        w.write_line("a", t(1000)).unwrap();
+        w.write_line("b", t(1000)).unwrap();
+        w.flush().unwrap();
+        let segs = discover_segments(&dir).unwrap();
+        assert_eq!(segs.len(), 2);
+        assert_ne!(segs[0].seq, segs[1].seq); // distinct seq despite same second
         std::fs::remove_dir_all(&dir).ok();
     }
 }
