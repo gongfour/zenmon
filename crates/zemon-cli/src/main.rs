@@ -136,8 +136,8 @@ fn parse_port_range(s: &str) -> Result<(u16, u16), ZemonError> {
     Ok((start, end))
 }
 
-fn build_config(cli: &Cli) -> ZemonConfig {
-    let mut cfg = ZemonConfig::from_env();
+fn build_config(cli: &Cli) -> Result<ZemonConfig, ZemonError> {
+    let mut cfg = ZemonConfig::from_env()?;
 
     // CLI flags override env
     cfg.endpoint = cli.endpoint.clone();
@@ -158,7 +158,7 @@ fn build_config(cli: &Cli) -> ZemonConfig {
         cfg.connect_timeout = cli.connect_timeout;
     }
 
-    cfg
+    Ok(cfg)
 }
 
 #[tokio::main]
@@ -188,15 +188,22 @@ async fn main() {
         )
         .init();
 
-    let config = build_config(&cli);
-
-    if let Err(e) = run(cli, config).await {
+    let emit_error = |e: ZemonError| -> ! {
         if is_json {
             eprintln!("{}", e.to_json());
         } else {
             eprintln!("Error: {}", e);
         }
         std::process::exit(e.exit_code());
+    };
+
+    let config = match build_config(&cli) {
+        Ok(config) => config,
+        Err(e) => emit_error(e),
+    };
+
+    if let Err(e) = run(cli, config).await {
+        emit_error(e);
     }
 }
 
