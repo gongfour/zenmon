@@ -612,4 +612,55 @@ mod tests {
         assert!(!record_in_window(&pr, &f3).unwrap()); // key mismatch
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn record_in_window_boundaries_since_inclusive_until_exclusive() {
+        let dir = tempdir_unique("winb");
+        let path = write_segment(&dir, 1000, 0, &[&rec_line("a/b", 1000)]); // received == t(1000)
+        let pr = load_segment(&path, true).unwrap().remove(0);
+        // received == since  -> INCLUDED (since is inclusive)
+        let f_in = ReadFilter { key: "**".into(), since: Some(t(1000)), until: None };
+        assert!(record_in_window(&pr, &f_in).unwrap());
+        // received == until  -> EXCLUDED (until is exclusive)
+        let f_ex = ReadFilter { key: "**".into(), since: None, until: Some(t(1000)) };
+        assert!(!record_in_window(&pr, &f_ex).unwrap());
+        // received in [since, until) -> INCLUDED
+        let f_within = ReadFilter { key: "**".into(), since: Some(t(1000)), until: Some(t(1001)) };
+        assert!(record_in_window(&pr, &f_within).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn record_in_window_v1_none_is_time_unbounded() {
+        let dir = tempdir_unique("winv1");
+        // A genuine v1 line: schema_version 1, NO received_at field.
+        let v1 = r#"{"schema_version":1,"key_expr":"a/b","payload_base64":"","encoding":"","received_offset_ms":0,"kind":"PUT"}"#;
+        let path = dir.join(segment_file_name(t(1000), 0));
+        std::fs::write(&path, format!("{}\n", v1)).unwrap();
+        let pr = load_segment(&path, true).unwrap().remove(0);
+        assert!(pr.received.is_none(), "v1 record must have no received time");
+        // A time window that would exclude any dated record still passes (unbounded).
+        let f = ReadFilter { key: "a/*".into(), since: Some(t(5000)), until: Some(t(6000)) };
+        assert!(record_in_window(&pr, &f).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn key_matches_unparseable_record_key_is_false() {
+        // "a//b" (empty chunk) is an invalid key expression; as a RECORD key it must
+        // yield Ok(false), never an error.
+        assert!(!key_matches("a/*", "a//b").unwrap());
+    }
+
+    #[test]
+    fn parse_time_bound_pre_epoch_underflow_is_error() {
+        // `SystemTime::checked_sub` only fails once the result falls outside the
+        // platform's representable range (e.g. before 1601-01-01 on Windows,
+        // whose FILETIME epoch backs SystemTime there); a plain few-seconds
+        // pre-epoch offset is representable on every target and would not
+        // exercise this branch. 400 years comfortably underflows everywhere.
+        let now = t(5); // 5s after UNIX_EPOCH
+        let err = parse_time_bound("400y", now).unwrap_err();
+        assert_eq!(err.kind, crate::error::ErrorKind::InvalidInput);
+    }
 }
