@@ -98,13 +98,17 @@ pub enum Command {
         #[arg(long)]
         watch: bool,
 
-        /// With --watch, stop after N snapshots
+        /// With --watch, stop after N snapshots (or change events with --changes-only)
         #[arg(long, value_parser = crate::duration::parse_count_arg)]
         count: Option<u64>,
 
         /// With --watch, stop after this much time (e.g. 5s)
         #[arg(long, value_parser = crate::duration::parse_duration_arg)]
         duration: Option<Duration>,
+
+        /// With --watch, emit only added/changed/removed diffs (pair with --duration)
+        #[arg(long)]
+        changes_only: bool,
     },
 
     /// Publish a message to a key expression
@@ -151,6 +155,10 @@ pub enum Command {
         /// With --watch, stop after this much time (e.g. 5s)
         #[arg(long, value_parser = crate::duration::parse_duration_arg)]
         duration: Option<Duration>,
+
+        /// With --watch, suppress the initial snapshot and stream only join/leave events
+        #[arg(long)]
+        changes_only: bool,
     },
 
     /// Show current session information
