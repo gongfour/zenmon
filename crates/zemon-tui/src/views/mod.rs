@@ -1,5 +1,6 @@
 pub mod dashboard;
 pub mod liveliness;
+pub mod network;
 pub mod nodes;
 pub mod query;
 pub mod stream;
