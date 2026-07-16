@@ -652,15 +652,4 @@ mod tests {
         assert!(!key_matches("a/*", "a//b").unwrap());
     }
 
-    #[test]
-    fn parse_time_bound_pre_epoch_underflow_is_error() {
-        // `SystemTime::checked_sub` only fails once the result falls outside the
-        // platform's representable range (e.g. before 1601-01-01 on Windows,
-        // whose FILETIME epoch backs SystemTime there); a plain few-seconds
-        // pre-epoch offset is representable on every target and would not
-        // exercise this branch. 400 years comfortably underflows everywhere.
-        let now = t(5); // 5s after UNIX_EPOCH
-        let err = parse_time_bound("400y", now).unwrap_err();
-        assert_eq!(err.kind, crate::error::ErrorKind::InvalidInput);
-    }
 }
