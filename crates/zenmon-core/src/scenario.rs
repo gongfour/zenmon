@@ -119,6 +119,7 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
                 entry["count"] = json!(count);
                 // ordered is sorted by t_rel_ms, so the last seen is the latest.
                 entry["last_t_rel_ms"] = json!(e.t_rel_ms);
+                entry["latest"] = e.payload.clone();
             }
             None => {
                 topics.insert(
@@ -127,6 +128,7 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
                         "count": 1,
                         "first_t_rel_ms": e.t_rel_ms,
                         "last_t_rel_ms": e.t_rel_ms,
+                        "latest": e.payload.clone(),
                     }),
                 );
             }
@@ -350,6 +352,18 @@ mod tests {
         assert_eq!(ep["topics"]["b/y"]["first_t_rel_ms"], 20);
         assert_eq!(ep["topics"]["b/y"]["last_t_rel_ms"], 20);
         assert_eq!(ep["meta"]["message_count"], 3);
+    }
+
+    #[test]
+    fn topics_include_latest_payload() {
+        // Out-of-order arrival; `latest` must be the highest-t_rel_ms payload.
+        let events = vec![
+            ev(10, "a/x", None, None, json!({ "n": 1 })),
+            ev(30, "a/x", None, None, json!({ "n": 2 })),
+            ev(20, "a/x", None, None, json!({ "n": 99 })),
+        ];
+        let ep = build_episode(&meta(), &events);
+        assert_eq!(ep["topics"]["a/x"]["latest"], json!({ "n": 2 }));
     }
 
     #[test]
