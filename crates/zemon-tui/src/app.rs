@@ -7,7 +7,7 @@ use zemon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResu
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
@@ -91,6 +91,88 @@ pub(crate) fn domain_port_label(port: u16) -> String {
 }
 
 const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
+
+/// One key binding, used as the single source of truth for both the compact
+/// status-bar hint and the `?` help overlay so they can't drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeyHint {
+    pub keys: &'static str,
+    pub desc: &'static str,
+}
+
+impl KeyHint {
+    const fn new(keys: &'static str, desc: &'static str) -> Self {
+        Self { keys, desc }
+    }
+}
+
+/// Bindings available in every view.
+pub(crate) fn global_hints() -> &'static [KeyHint] {
+    const HINTS: &[KeyHint] = &[
+        KeyHint::new("1-6", "switch view"),
+        KeyHint::new("?", "toggle this help"),
+        KeyHint::new("m", "connection mode"),
+        KeyHint::new("P", "domain scan & switch"),
+        KeyHint::new("Esc", "back to Dashboard"),
+        KeyHint::new("q", "quit"),
+    ];
+    HINTS
+}
+
+/// Bindings specific to the given view.
+pub(crate) fn view_hints(view: ActiveView) -> &'static [KeyHint] {
+    const DASHBOARD: &[KeyHint] = &[KeyHint::new("click", "open item in its view")];
+    const TOPICS: &[KeyHint] = &[
+        KeyHint::new("j/k", "select topic"),
+        KeyHint::new("J/K", "scroll detail"),
+        KeyHint::new("Enter", "open in Stream"),
+        KeyHint::new("/", "filter"),
+        KeyHint::new("y/Y", "copy payload / key"),
+    ];
+    const STREAM: &[KeyHint] = &[
+        KeyHint::new("j/k", "scroll messages"),
+        KeyHint::new("Space", "pause / resume"),
+        KeyHint::new("f", "follow latest"),
+        KeyHint::new("/", "filter"),
+        KeyHint::new("y/Y", "copy payload / key"),
+    ];
+    const QUERY: &[KeyHint] = &[
+        KeyHint::new("i or /", "edit query"),
+        KeyHint::new("Enter", "run query"),
+        KeyHint::new("j/k", "select result"),
+        KeyHint::new("y", "copy payload"),
+    ];
+    const NODES: &[KeyHint] = &[
+        KeyHint::new("j/k", "select node"),
+        KeyHint::new("J/K", "scroll detail"),
+        KeyHint::new("s", "discover / refresh nodes"),
+        KeyHint::new("y", "copy ZID"),
+    ];
+    const LIVELINESS: &[KeyHint] = &[
+        KeyHint::new("j/k", "select token"),
+        KeyHint::new("J/K", "scroll event log"),
+        KeyHint::new("y", "copy key"),
+    ];
+    match view {
+        ActiveView::Dashboard => DASHBOARD,
+        ActiveView::Topics => TOPICS,
+        ActiveView::Stream => STREAM,
+        ActiveView::Query => QUERY,
+        ActiveView::Nodes => NODES,
+        ActiveView::Liveliness => LIVELINESS,
+    }
+}
+
+/// Compact status-bar hint: quit + view switch + the top few view bindings,
+/// always ending with `?:help`. Wide terminals show more; the rest live in `?`.
+pub(crate) fn compact_hint(view: ActiveView) -> String {
+    let mut parts: Vec<String> = vec!["q:quit".into(), "1-6:view".into()];
+    for h in view_hints(view).iter().take(3) {
+        parts.push(format!("{}:{}", h.keys, h.desc.split(['/', ' ']).next().unwrap_or(h.desc)));
+    }
+    parts.push("?:help".into());
+    parts.join("  ")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveView {
@@ -216,6 +298,9 @@ pub struct App {
     pub liveliness_selected: usize,
     pub liveliness_events: VecDeque<LivelinessEventRecord>,
     pub liveliness_log_scroll: u16,
+
+    pub help_open: bool,
+    pub help_scroll: u16,
 }
 
 impl App {
@@ -282,6 +367,8 @@ impl App {
             liveliness_selected: 0,
             liveliness_events: VecDeque::with_capacity(LIVELINESS_EVENT_CAP),
             liveliness_log_scroll: 0,
+            help_open: false,
+            help_scroll: 0,
         }
     }
 
@@ -427,6 +514,10 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.help_open {
+            self.handle_help_key(key);
+            return;
+        }
         if self.scout_port_modal_open {
             self.handle_scout_modal_key(key);
             return;
@@ -437,6 +528,11 @@ impl App {
         }
         if !self.is_text_input_active() {
             match key.code {
+                KeyCode::Char('?') => {
+                    self.help_open = true;
+                    self.help_scroll = 0;
+                    return;
+                }
                 KeyCode::Char('q') => {
                     self.should_quit = true;
                     return;
@@ -464,6 +560,22 @@ impl App {
             }
         } else {
             self.handle_text_input_key(key);
+        }
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                self.help_open = false;
+                self.help_scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.help_scroll = self.help_scroll.saturating_add(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.help_scroll = self.help_scroll.saturating_sub(1);
+            }
+            _ => {}
         }
     }
 
@@ -1080,6 +1192,9 @@ impl App {
         if self.mode_modal_open {
             self.render_mode_modal(frame, content_area);
         }
+        if self.help_open {
+            self.render_help_overlay(frame, content_area);
+        }
 
         let (conn_text, conn_style) = match &self.connection_state {
             ConnectionState::Connected(zid) => (
@@ -1144,11 +1259,64 @@ impl App {
             ),
             middle_span,
             Span::styled(
-                " q:quit  1-6:view  /:filter  y:copy  P:domain-scan  m:mode ",
+                format!(" {} ", compact_hint(self.active_view)),
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
         frame.render_widget(status, status_area);
+    }
+
+    fn render_help_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 60.min(content_area.width.saturating_sub(2));
+        let height = 24.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let view_name = TAB_TITLES[self.active_view.index()];
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Keybindings — {} ", view_name))
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let mut lines: Vec<Line> = Vec::new();
+        let section = |lines: &mut Vec<Line>, name: &str, hints: &[KeyHint]| {
+            lines.push(Line::from(Span::styled(
+                name.to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for h in hints {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {:<9}", h.keys),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::styled(h.desc.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        };
+        section(&mut lines, &format!("{} view", view_name), view_hints(self.active_view));
+        section(&mut lines, "Global", global_hints());
+        lines.push(Line::from(Span::styled(
+            "j/k or ↑↓ to scroll · Esc/q/? to close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+        let scroll = self.help_scroll.min(max_scroll);
+        let para = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0));
+        frame.render_widget(para, inner);
     }
 
     fn render_scout_port_modal(&self, frame: &mut Frame, content_area: Rect) {
@@ -1365,6 +1533,55 @@ mod tests {
     fn lowercase_j_k_are_not_detail_scroll() {
         assert_eq!(detail_scroll_action(key(KeyCode::Char('j'))), None);
         assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
+    }
+
+    #[test]
+    fn question_mark_toggles_help_in_normal_mode() {
+        let mut app = App::new("test".into());
+        assert!(!app.help_open);
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(app.help_open);
+        // q closes the overlay (does not quit)
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(!app.help_open);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn question_mark_is_literal_during_text_input() {
+        let mut app = App::new("test".into());
+        app.active_view = ActiveView::Query;
+        app.query_editing = true; // text input active
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(!app.help_open, "? must not open help while editing");
+    }
+
+    #[test]
+    fn help_scrolls_and_esc_closes() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('?')));
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.help_scroll, 1);
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.help_scroll, 0);
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.help_open);
+    }
+
+    #[test]
+    fn every_view_has_hints_and_compact_ends_with_help() {
+        for v in [
+            ActiveView::Dashboard,
+            ActiveView::Topics,
+            ActiveView::Stream,
+            ActiveView::Query,
+            ActiveView::Nodes,
+            ActiveView::Liveliness,
+        ] {
+            assert!(!view_hints(v).is_empty(), "{v:?} has no hints");
+            assert!(compact_hint(v).ends_with("?:help"));
+        }
+        assert!(global_hints().iter().any(|h| h.keys == "q"));
     }
 
     #[test]
