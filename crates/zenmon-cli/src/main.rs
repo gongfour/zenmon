@@ -1411,10 +1411,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             pub_count,
             for_,
             settle,
+            track,
         } => {
             run_scenario(
                 cli.json, &config, observe, preset, prefix, pub_, task, pub_rate, pub_for,
-                pub_count, for_, settle,
+                pub_count, for_, settle, track,
             )
             .await?;
         }
@@ -1484,11 +1485,32 @@ async fn run_scenario(
     pub_count: Option<u64>,
     for_: Duration,
     settle: Option<Duration>,
+    track: Vec<String>,
 ) -> Result<(), ZenmonError> {
     use std::time::Instant;
     use zenmon_core::scenario::{
-        build_episode, expand_preset, EndedReason, ScenarioEvent, ScenarioMeta, TriggerInfo,
+        build_episode, build_tracks, expand_preset, EndedReason, ScenarioEvent, ScenarioMeta,
+        TrackSpec, TriggerInfo,
     };
+
+    // Parse --track KEY:FIELD specs up front so a malformed one fails before we
+    // open a session.
+    let mut specs: Vec<TrackSpec> = Vec::with_capacity(track.len());
+    for t in &track {
+        let (key, field) = t.split_once(':').ok_or_else(|| {
+            ZenmonError::invalid_input(format!("--track must be KEY:FIELD, got '{}'", t))
+        })?;
+        if key.is_empty() || field.is_empty() {
+            return Err(ZenmonError::invalid_input(format!(
+                "--track KEY and FIELD must be non-empty, got '{}'",
+                t
+            )));
+        }
+        specs.push(TrackSpec {
+            key: key.to_string(),
+            field: field.to_string(),
+        });
+    }
 
     // Resolve the observed key set: --observe, then --preset expansion, then the
     // two task-derived topics. Deduplicate while preserving order.
@@ -1704,7 +1726,10 @@ async fn run_scenario(
         observed,
         ended_reason,
     };
-    let episode = build_episode(&meta, &events);
+    let mut episode = build_episode(&meta, &events);
+    if !specs.is_empty() {
+        episode["tracks"] = build_tracks(&events, &specs);
+    }
 
     if json {
         println!("{}", serde_json::to_string(&episode)?);
