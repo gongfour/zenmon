@@ -59,6 +59,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 Style::default().fg(Color::Green),
             ),
             Span::raw("  "),
+            Span::styled("Bandwidth: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                crate::app::format_bytes_per_sec(app.total_bytes_per_sec()),
+                Style::default().fg(Color::Green),
+            ),
+            Span::raw("  "),
             Span::styled("Active topics: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}", app.topic_hz.values().filter(|&&hz| hz > 0.0).count()),
