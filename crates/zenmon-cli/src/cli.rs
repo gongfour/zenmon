@@ -293,6 +293,19 @@ pub enum Command {
         #[arg(long, value_names = ["PREFIX", "REQUEST_JSON"], num_args = 2, conflicts_with = "pub_")]
         task: Option<Vec<String>>,
 
+        /// Sustain the --pub actuation: republish at this rate (Hz) instead of
+        /// once. Requires --pub and one of --pub-for/--pub-count.
+        #[arg(long = "pub-rate", requires = "pub_", requires = "pub_bound", value_parser = crate::duration::parse_rate_hz_arg)]
+        pub_rate: Option<f64>,
+
+        /// With --pub-rate, stop republishing after this long (e.g. 10s)
+        #[arg(long = "pub-for", group = "pub_bound", requires = "pub_rate", value_parser = crate::duration::parse_duration_arg)]
+        pub_for: Option<Duration>,
+
+        /// With --pub-rate, stop republishing after N messages
+        #[arg(long = "pub-count", group = "pub_bound", requires = "pub_rate", value_parser = crate::duration::parse_count_arg)]
+        pub_count: Option<u64>,
+
         /// Capture window (e.g. 8s). Required.
         #[arg(long = "for", value_parser = crate::duration::parse_duration_arg)]
         for_: Duration,
@@ -550,6 +563,57 @@ mod tests {
         // --pub with only one value is rejected (num_args = 2).
         assert!(Cli::try_parse_from([
             "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "onlykey",
+        ])
+        .is_err());
+    }
+
+    /// `--pub-rate` sustains the `--pub` actuation; it is meaningless without a
+    /// `--pub` trigger and must be rejected then.
+    #[test]
+    fn scenario_pub_rate_requires_pub() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub-rate", "10",
+            "--pub-for", "5s",
+        ])
+        .is_err());
+    }
+
+    /// `--pub-rate` republishes forever without a bound; require --pub-for or
+    /// --pub-count so an agent can't launch an unbounded publisher.
+    #[test]
+    fn scenario_pub_rate_requires_bound() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
+            "--pub-rate", "10",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn scenario_pub_rate_allowed_with_pub_and_bound() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "11s", "--pub", "cmd/go",
+            "{\"go\":true}", "--pub-rate", "10", "--pub-for", "10s",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
+            "--pub-rate", "10", "--pub-count", "50",
+        ])
+        .is_ok());
+    }
+
+    /// A plain `--pub` (no --pub-rate) still publishes once; the bounds are
+    /// meaningless alone and must be rejected.
+    #[test]
+    fn scenario_pub_one_shot_still_ok_and_bounds_require_rate() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
+            "--pub-for", "5s",
         ])
         .is_err());
     }
