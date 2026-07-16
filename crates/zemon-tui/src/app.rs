@@ -333,6 +333,10 @@ pub struct App {
 
     pub help_open: bool,
     pub help_scroll: u16,
+
+    /// Dashboard summary-panel rects, for click-to-navigate.
+    pub dash_node_rect: Option<ratatui::layout::Rect>,
+    pub dash_topic_rect: Option<ratatui::layout::Rect>,
 }
 
 impl App {
@@ -401,6 +405,8 @@ impl App {
             liveliness_log_scroll: 0,
             help_open: false,
             help_scroll: 0,
+            dash_node_rect: None,
+            dash_topic_rect: None,
         }
     }
 
@@ -723,6 +729,30 @@ impl App {
         }
     }
 
+    /// Which Dashboard summary row (if any) a click landed on. Returns the
+    /// target view and the item index; `None` for borders / empty rows / clicks
+    /// outside both panels.
+    pub(crate) fn dashboard_click_target(&self, col: u16, row: u16) -> Option<(ActiveView, usize)> {
+        let in_rect = |rect: ratatui::layout::Rect| {
+            col >= rect.x && col < rect.x + rect.width
+        };
+        if let Some(rect) = self.dash_node_rect {
+            if in_rect(rect) {
+                if let Some(idx) = list_hit(rect, row, 0, self.nodes.len(), rect.y + 1) {
+                    return Some((ActiveView::Nodes, idx));
+                }
+            }
+        }
+        if let Some(rect) = self.dash_topic_rect {
+            if in_rect(rect) {
+                if let Some(idx) = list_hit(rect, row, 0, self.topics.len(), rect.y + 1) {
+                    return Some((ActiveView::Topics, idx));
+                }
+            }
+        }
+        None
+    }
+
     fn handle_click(&mut self, col: u16, row: u16) {
         if let Some(idx) = tab_hit(&self.tab_rects, col, row) {
             self.active_view = match idx {
@@ -734,6 +764,28 @@ impl App {
                 5 => ActiveView::Liveliness,
                 _ => self.active_view,
             };
+            return;
+        }
+
+        // Dashboard summary panels are the entry point into the detailed views.
+        if self.active_view == ActiveView::Dashboard {
+            if let Some((view, idx)) = self.dashboard_click_target(col, row) {
+                match view {
+                    ActiveView::Nodes => {
+                        self.active_view = ActiveView::Nodes;
+                        self.node_selected = idx;
+                        self.node_detail_scroll = 0;
+                    }
+                    ActiveView::Topics => {
+                        // Clear any filter so the clicked index maps directly.
+                        self.topic_filter.clear();
+                        self.active_view = ActiveView::Topics;
+                        self.topic_selected = idx;
+                        self.topic_detail_scroll = 0;
+                    }
+                    _ => {}
+                }
+            }
             return;
         }
 
@@ -1607,6 +1659,39 @@ mod tests {
     fn lowercase_j_k_are_not_detail_scroll() {
         assert_eq!(detail_scroll_action(key(KeyCode::Char('j'))), None);
         assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
+    }
+
+    fn node(zid: &str) -> NodeInfo {
+        NodeInfo {
+            zid: zid.into(),
+            kind: "peer".into(),
+            locators: vec![],
+            metadata: None,
+            sources: zemon_core::types::NodeSources::ADMIN,
+            admin_last_seen: None,
+            scout_last_seen: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_click_targets_node_and_topic_rows() {
+        let mut app = App::new("t".into());
+        app.nodes = vec![node("a"), node("b")];
+        app.topics = vec![
+            TopicInfo { key_expr: "x".into() },
+            TopicInfo { key_expr: "y".into() },
+        ];
+        app.dash_node_rect = Some(Rect::new(0, 5, 40, 10));
+        app.dash_topic_rect = Some(Rect::new(40, 5, 40, 10));
+
+        // First item row is rect.y + 1 = 6.
+        assert_eq!(app.dashboard_click_target(5, 6), Some((ActiveView::Nodes, 0)));
+        assert_eq!(app.dashboard_click_target(5, 7), Some((ActiveView::Nodes, 1)));
+        assert_eq!(app.dashboard_click_target(45, 6), Some((ActiveView::Topics, 0)));
+        // Border row → no-op.
+        assert_eq!(app.dashboard_click_target(5, 5), None);
+        // Past the last item → no-op.
+        assert_eq!(app.dashboard_click_target(5, 8), None);
     }
 
     #[test]
