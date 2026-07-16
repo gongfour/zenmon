@@ -69,9 +69,26 @@ pub fn parse_rate_hz_arg(s: &str) -> Result<f64, String> {
     Ok(v)
 }
 
+/// Convert a positive rate in hertz to the tick interval for a fixed-rate
+/// publish loop. Feeds a `tokio::time::interval`, so ticks stay phase-locked to
+/// the schedule instead of drifting by the per-message send latency. The rate
+/// is validated by [`parse_rate_hz_arg`] first, so this only guards against a
+/// non-positive value slipping through.
+pub fn rate_tick_interval(hz: f64) -> Duration {
+    debug_assert!(hz.is_finite() && hz > 0.0, "rate must be > 0");
+    Duration::from_secs_f64(1.0 / hz)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rate_tick_interval_is_reciprocal() {
+        assert_eq!(rate_tick_interval(10.0), Duration::from_millis(100));
+        assert_eq!(rate_tick_interval(2.0), Duration::from_millis(500));
+        assert_eq!(rate_tick_interval(1.0), Duration::from_secs(1));
+    }
 
     #[test]
     fn parses_speed() {

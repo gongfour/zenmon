@@ -99,6 +99,41 @@ pub fn publish_accepted_json(
     })
 }
 
+/// Render the summary of a fixed-rate `pub --rate` run: the same shape as
+/// [`publish_accepted_json`] plus `"published":<count>` (messages actually put)
+/// and `"rate_hz":<R>` (the requested frequency). Emitted once, after the loop
+/// finishes or is interrupted, so a consumer learns how many puts the local
+/// stack accepted. Kept separate from [`publish_accepted_json`] so the
+/// single-publish shape stays byte-for-byte identical.
+pub fn publish_rate_summary_json(
+    key_expr: &str,
+    bytes: usize,
+    attachment_bytes: Option<usize>,
+    published: u64,
+    rate_hz: f64,
+) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct PublishRateSummary<'a> {
+        ok: bool,
+        status: &'a str,
+        key_expr: &'a str,
+        bytes: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attachment_bytes: Option<usize>,
+        published: u64,
+        rate_hz: f64,
+    }
+    serde_json::to_string(&PublishRateSummary {
+        ok: true,
+        status: "accepted",
+        key_expr,
+        bytes,
+        attachment_bytes,
+        published,
+        rate_hz,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +229,24 @@ mod tests {
         assert_eq!(
             json,
             r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"attachment_bytes":9}"#
+        );
+    }
+
+    #[test]
+    fn publish_rate_summary_without_attachment() {
+        let json = publish_rate_summary_json("test/hello", 17, None, 30, 10.0).unwrap();
+        assert_eq!(
+            json,
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"published":30,"rate_hz":10.0}"#
+        );
+    }
+
+    #[test]
+    fn publish_rate_summary_with_attachment() {
+        let json = publish_rate_summary_json("test/hello", 17, Some(9), 5, 2.5).unwrap();
+        assert_eq!(
+            json,
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"attachment_bytes":9,"published":5,"rate_hz":2.5}"#
         );
     }
 }
