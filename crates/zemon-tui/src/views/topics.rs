@@ -76,6 +76,16 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     );
     frame.render_widget(list, list_area);
 
+    if filtered.is_empty() {
+        let inner = ratatui::layout::Rect {
+            x: list_area.x + 2,
+            y: list_area.y + 1,
+            width: list_area.width.saturating_sub(4),
+            height: list_area.height.saturating_sub(2),
+        };
+        super::render_empty_state(frame, inner, app.topics_empty_reason());
+    }
+
     // Detail panel (right) — latest value of selected topic
     let selected_key = filtered.get(app.topic_selected).map(|t| &t.key_expr);
 
