@@ -126,6 +126,9 @@ pub struct App {
     pub sub_selected: usize,
     pub stream_follow: bool,
     pub stream_filter: String,
+    /// Exact key selected through Topics → Stream navigation. When present,
+    /// this takes precedence over the general substring filter.
+    pub stream_key_filter: Option<String>,
     pub stream_filtering: bool,
 
     pub topic_filter: String,
@@ -200,6 +203,7 @@ impl App {
             sub_selected: 0,
             stream_follow: true,
             stream_filter: String::new(),
+            stream_key_filter: None,
             stream_filtering: false,
             topic_filter: String::new(),
             topic_selected: 0,
@@ -680,6 +684,7 @@ impl App {
                 if self.topics_filtering {
                     self.topic_filter.push(c);
                 } else if self.stream_filtering {
+                    self.stream_key_filter = None;
                     self.stream_filter.push(c);
                     self.clamp_stream_selection();
                 } else if self.query_editing {
@@ -690,6 +695,7 @@ impl App {
                 if self.topics_filtering {
                     self.topic_filter.pop();
                 } else if self.stream_filtering {
+                    self.stream_key_filter = None;
                     self.stream_filter.pop();
                     self.clamp_stream_selection();
                 } else if self.query_editing {
@@ -743,12 +749,17 @@ impl App {
                     self.topic_detail_scroll = 0;
                 }
                 (_, KeyCode::Enter) => {
-                    self.active_view = ActiveView::Stream;
+                    self.open_selected_topic_in_stream();
                 }
                 _ => {}
             },
             ActiveView::Stream => match key.code {
-                KeyCode::Char('/') => self.stream_filtering = true,
+                KeyCode::Char('/') => {
+                    if let Some(key) = &self.stream_key_filter {
+                        self.stream_filter = key.clone();
+                    }
+                    self.stream_filtering = true;
+                }
                 KeyCode::Char('f') => self.follow_stream(),
                 KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
                 KeyCode::Char('y') => {
@@ -931,6 +942,10 @@ impl App {
     }
 
     fn stream_message_matches(&self, msg: &ZenohMessage) -> bool {
+        if let Some(key) = &self.stream_key_filter {
+            return msg.key_expr == *key;
+        }
+
         if self.stream_filter.is_empty() {
             return true;
         }
@@ -942,6 +957,23 @@ impl App {
                 .as_ref()
                 .map(|att| payload_to_string(att).contains(&self.stream_filter))
                 .unwrap_or(false)
+    }
+
+    fn open_selected_topic_in_stream(&mut self) {
+        let key = self
+            .filtered_topics()
+            .get(self.topic_selected)
+            .map(|topic| topic.key_expr.clone());
+        let Some(key) = key else {
+            return;
+        };
+
+        self.stream_filter.clear();
+        self.stream_key_filter = Some(key.clone());
+        self.stream_filtering = false;
+        self.follow_stream();
+        self.active_view = ActiveView::Stream;
+        self.set_toast(format!("Stream filtered to exact topic: {}", key));
     }
 
     fn clamp_stream_selection(&mut self) {
@@ -1467,6 +1499,99 @@ mod tests {
         app.stream_filter = "idle".into();
         assert_eq!(app.filtered_sub_messages().len(), 1);
         assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/status");
+    }
+
+    #[test]
+    fn topics_enter_replaces_stream_filter_with_selected_exact_key() {
+        let mut app = App::new("test".into());
+        let make = |key: &str| ZenohMessage {
+            key_expr: key.into(),
+            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        };
+        app.handle_zenoh_message(make("alpha/topic"));
+        app.handle_zenoh_message(make("beta/topic"));
+        app.topic_filter = "beta".into();
+        app.topic_selected = 0;
+        app.stream_filter = "old filter".into();
+        app.stream_follow = false;
+        app.sub_selected = 1;
+        app.active_view = ActiveView::Topics;
+
+        app.handle_view_key(KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!(app.active_view, ActiveView::Stream);
+        assert_eq!(app.stream_key_filter.as_deref(), Some("beta/topic"));
+        assert!(app.stream_filter.is_empty());
+        assert!(app.stream_follow);
+        assert_eq!(app.sub_selected, 0);
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("beta/topic")));
+    }
+
+    #[test]
+    fn topic_jump_filter_does_not_match_payload_on_another_key() {
+        let mut app = App::new("test".into());
+        app.handle_zenoh_message(ZenohMessage {
+            key_expr: "selected/topic".into(),
+            payload: zemon_core::types::MessagePayload::Json(serde_json::json!("selected")),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        });
+        app.handle_zenoh_message(ZenohMessage {
+            key_expr: "other/topic".into(),
+            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(
+                "selected/topic"
+            )),
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+        });
+        app.topic_filter = "selected/topic".into();
+        app.active_view = ActiveView::Topics;
+
+        app.handle_view_key(KeyEvent::from(KeyCode::Enter));
+
+        let messages = app.filtered_sub_messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].key_expr, "selected/topic");
+    }
+
+    #[test]
+    fn topics_enter_with_no_topic_is_a_no_op() {
+        let mut app = App::new("test".into());
+        app.active_view = ActiveView::Topics;
+        app.stream_filter = "existing".into();
+
+        app.handle_view_key(KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!(app.active_view, ActiveView::Topics);
+        assert_eq!(app.stream_filter, "existing");
+        assert!(app.stream_key_filter.is_none());
+    }
+
+    #[test]
+    fn exact_topic_filter_changes_mode_only_after_an_edit() {
+        let mut app = App::new("test".into());
+        app.active_view = ActiveView::Stream;
+        app.stream_key_filter = Some("selected/topic".into());
+
+        app.handle_view_key(KeyEvent::from(KeyCode::Char('/')));
+        assert_eq!(app.stream_filter, "selected/topic");
+        assert_eq!(app.stream_key_filter.as_deref(), Some("selected/topic"));
+
+        app.handle_text_input_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.stream_key_filter.as_deref(), Some("selected/topic"));
+
+        app.handle_view_key(KeyEvent::from(KeyCode::Char('/')));
+        app.handle_text_input_key(KeyEvent::from(KeyCode::Backspace));
+        assert!(app.stream_key_filter.is_none());
+        assert_eq!(app.stream_filter, "selected/topi");
     }
 
     #[test]

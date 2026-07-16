@@ -50,6 +50,8 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
 
     let filter_text = if app.stream_filtering {
         format!("/{}_", app.stream_filter)
+    } else if let Some(key) = &app.stream_key_filter {
+        format!("Exact topic: {} (/ to edit)", key)
     } else if app.stream_filter.is_empty() {
         "Press / to filter stream".to_string()
     } else {
