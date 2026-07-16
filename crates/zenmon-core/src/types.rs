@@ -79,6 +79,26 @@ impl MessagePayload {
         serde_json::from_slice(&self.bytes).ok()
     }
 
+    /// The payload conservatively decoded from MessagePack, if it is one.
+    ///
+    /// Accepts only when the bytes decode cleanly, the decode **consumes the
+    /// whole buffer**, and the **top level is a map or array**. Bare scalars are
+    /// rejected — a stray binary byte like `0x05` is a valid msgpack integer, so
+    /// requiring a container avoids showing garbage for arbitrary binary. This
+    /// matches how dotori serializes payloads (`nlohmann::json::to_msgpack` of a
+    /// JSON object → a msgpack map).
+    fn as_msgpack(&self) -> Option<serde_json::Value> {
+        let mut cursor: &[u8] = &self.bytes;
+        let value = rmpv::decode::read_value(&mut cursor).ok()?;
+        if !cursor.is_empty() {
+            return None; // trailing bytes: not a single self-contained value
+        }
+        match value {
+            rmpv::Value::Map(_) | rmpv::Value::Array(_) => Some(rmpv_to_json(value)),
+            _ => None,
+        }
+    }
+
     /// Structured view for JSON output: parsed JSON if it parses, else a string
     /// if valid UTF-8, else a base64 object `{"binary_base64":..,"bytes":N}`.
     pub fn to_view(&self) -> serde_json::Value {
@@ -87,6 +107,9 @@ impl MessagePayload {
         }
         if let Some(s) = self.as_str() {
             return serde_json::Value::String(s.to_string());
+        }
+        if let Some(v) = self.as_msgpack() {
+            return v;
         }
         serde_json::json!({
             "binary_base64": base64::engine::general_purpose::STANDARD.encode(&self.bytes),
@@ -136,7 +159,64 @@ impl MessagePayload {
         if let Some(s) = self.as_str() {
             return s.to_string();
         }
+        if let Some(v) = self.as_msgpack() {
+            return serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string());
+        }
         format!("<{} bytes>", self.bytes.len())
+    }
+}
+
+/// Convert an arbitrary decoded MessagePack value into JSON for display.
+///
+/// Binary blobs become base64 strings (JSON-safe) and non-string map keys are
+/// stringified, since JSON object keys must be strings.
+fn rmpv_to_json(value: rmpv::Value) -> serde_json::Value {
+    use rmpv::Value;
+    match value {
+        Value::Nil => serde_json::Value::Null,
+        Value::Boolean(b) => serde_json::Value::Bool(b),
+        Value::Integer(i) => {
+            if let Some(u) = i.as_u64() {
+                serde_json::Value::from(u)
+            } else if let Some(s) = i.as_i64() {
+                serde_json::Value::from(s)
+            } else if let Some(f) = i.as_f64() {
+                serde_json::json!(f)
+            } else {
+                serde_json::Value::Null
+            }
+        }
+        Value::F32(f) => serde_json::json!(f),
+        Value::F64(f) => serde_json::json!(f),
+        Value::String(s) => match s.into_str() {
+            Some(s) => serde_json::Value::String(s),
+            None => serde_json::Value::Null,
+        },
+        Value::Binary(b) | Value::Ext(_, b) => serde_json::Value::String(
+            base64::engine::general_purpose::STANDARD.encode(&b),
+        ),
+        Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(rmpv_to_json).collect())
+        }
+        Value::Map(pairs) => {
+            let map = pairs
+                .into_iter()
+                .map(|(k, v)| (rmpv_key_to_string(k), rmpv_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
+/// Render a MessagePack map key as a JSON object key (must be a string).
+fn rmpv_key_to_string(key: rmpv::Value) -> String {
+    use rmpv::Value;
+    match key {
+        Value::String(s) => s.into_str().unwrap_or_default(),
+        Value::Binary(b) | Value::Ext(_, b) => {
+            base64::engine::general_purpose::STANDARD.encode(&b)
+        }
+        other => rmpv_to_json(other).to_string(),
     }
 }
 
@@ -146,6 +226,8 @@ impl std::fmt::Display for MessagePayload {
             write!(f, "{}", v)
         } else if let Some(s) = self.as_str() {
             write!(f, "{}", s)
+        } else if let Some(v) = self.as_msgpack() {
+            write!(f, "{}", v)
         } else {
             write!(f, "<{} bytes>", self.bytes.len())
         }
@@ -362,6 +444,68 @@ mod tests {
         assert_eq!(v["original_bytes"], 6);
         // base64 of first 4 bytes [0,159,146,150]
         assert_eq!(v["payload_preview"], "AJ+Slg==");
+    }
+
+    // MessagePack wire bytes below are hand-encoded (dotori serializes payloads
+    // via nlohmann::json::to_msgpack). A JSON object becomes a msgpack map, and a
+    // small map is a fixmap leading with 0x8_ — an invalid UTF-8 leading byte, so
+    // it falls through the UTF-8 step and reaches the msgpack decode step.
+
+    #[test]
+    fn payload_msgpack_map_decodes_to_json() {
+        // fixmap{ "a": 1 } = 0x81 0xa1 'a' 0x01
+        let p = MessagePayload::from_bytes(vec![0x81, 0xa1, 0x61, 0x01]);
+        assert!(p.as_json().is_none(), "must not be valid JSON");
+        assert!(p.as_str().is_none(), "must not be valid UTF-8");
+        assert_eq!(p.to_view(), serde_json::json!({ "a": 1 }));
+    }
+
+    #[test]
+    fn payload_msgpack_map_pretty_prints_json() {
+        let p = MessagePayload::from_bytes(vec![0x81, 0xa1, 0x61, 0x01]);
+        assert_eq!(p.pretty(), "{\n  \"a\": 1\n}");
+    }
+
+    #[test]
+    fn payload_msgpack_scalar_rejected_falls_back_to_base64() {
+        // uint16 256 = 0xcd 0x01 0x00 — valid msgpack, but a bare scalar. The
+        // conservative rule rejects non-container top levels.
+        let p = MessagePayload::from_bytes(vec![0xcd, 0x01, 0x00]);
+        let v = p.to_view();
+        assert_eq!(v["bytes"], 3);
+        assert_eq!(v["binary_base64"], "zQEA");
+    }
+
+    #[test]
+    fn payload_msgpack_trailing_bytes_rejected() {
+        // fixmap{ "a": 1 } followed by 2 garbage bytes — decode does not consume
+        // the whole buffer, so it is rejected.
+        let p = MessagePayload::from_bytes(vec![0x81, 0xa1, 0x61, 0x01, 0xff, 0xff]);
+        let v = p.to_view();
+        assert!(v["binary_base64"].is_string(), "expected base64 fallback, got {v}");
+        assert_eq!(v["bytes"], 6);
+    }
+
+    #[test]
+    fn payload_msgpack_binary_field_becomes_base64_string() {
+        // fixmap{ "b": bin8[0x00,0x01] } = 0x81 0xa1 'b' 0xc4 0x02 0x00 0x01
+        let p = MessagePayload::from_bytes(vec![0x81, 0xa1, 0x62, 0xc4, 0x02, 0x00, 0x01]);
+        // base64 of [0x00, 0x01] is "AAE="
+        assert_eq!(p.to_view(), serde_json::json!({ "b": "AAE=" }));
+    }
+
+    #[test]
+    fn payload_msgpack_non_string_key_is_stringified() {
+        // fixmap{ 1: 2 } = 0x81 0x01 0x02 — integer key stringified to "1".
+        let p = MessagePayload::from_bytes(vec![0x81, 0x01, 0x02]);
+        assert_eq!(p.to_view(), serde_json::json!({ "1": 2 }));
+    }
+
+    #[test]
+    fn payload_valid_utf8_not_treated_as_msgpack() {
+        // Plain text stays text even though its bytes could be read as msgpack.
+        let p = MessagePayload::from_bytes(b"hello".to_vec());
+        assert_eq!(p.to_view(), serde_json::json!("hello"));
     }
 
     fn node_with(sources: NodeSources, scout_last_seen: Option<SystemTime>) -> NodeInfo {

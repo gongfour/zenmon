@@ -13,3 +13,4 @@ color-eyre.workspace = true
 bitflags.workspace = true
 humantime.workspace = true
 base64.workspace = true
+rmpv.workspace = true
