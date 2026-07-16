@@ -48,14 +48,19 @@ zemon --json keyexpr "a/*" "a/b"
 # JSON output (pipe to jq, etc.)
 zemon --json nodes
 zemon --json sub "sensor/**"
+
+# Validate and inspect the merged configuration without connecting
+zemon config validate
+zemon config show --effective
+zemon --json config show --effective
 ```
 
 ### Global Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-e, --endpoint` | Zenoh connection endpoint | `tcp/localhost:7447` |
-| `-m, --mode` | Connection mode: `peer` or `client` | `client` |
+| `-e, --endpoint` | Zenoh connection endpoint | `tcp/localhost:7447` (effective default) |
+| `-m, --mode` | Connection mode: `peer` or `client` | `client` (effective default) |
 | `-n, --namespace` | Zenoh namespace (native prefix isolation) | - |
 | `-c, --config` | Path to Zenoh JSON5 config file | - |
 | `--connect-timeout` | Connect deadline (e.g. `5s`); client fails if no router in the window | - |
@@ -91,7 +96,20 @@ Here `a/*` includes `a/b` (every `a/b` is an `a/*`), but not vice-versa. The
   per kind (`invalid_input`=2, `connection`=3, `timeout`=4, `not_found`=5,
   `internal`=1).
 
-Options can also be set via environment variables: `ZEMON_ENDPOINT`, `ZEMON_MODE`, `ZEMON_NAMESPACE`, `ZEMON_CONFIG`.
+Options can also be set via environment variables: `ZEMON_ENDPOINT`, `ZEMON_MODE`,
+`ZEMON_NAMESPACE`, `ZEMON_CONFIG`, `ZEMON_SCOUT_PORT`, `ZEMON_CONNECT_TIMEOUT`.
+
+Configuration is resolved in this order, with later sources overriding earlier ones:
+
+1. Built-in defaults
+2. Zenoh config file (`ZEMON_CONFIG` or `--config`)
+3. Environment variables
+4. Explicit CLI flags
+
+Use `zemon config show --effective` to see the resolved value and source for each
+zemon-managed setting. The command prints only an allow-list of settings and never dumps
+the raw Zenoh config, so plugin credentials and private keys are not exposed. `zemon
+config validate` performs the same merge and validation without opening a network session.
 
 ## TUI Dashboard
 
