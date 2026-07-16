@@ -136,6 +136,17 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
         }
     }
 
+    // rate_hz: publish rate per key, from the count over its observed span.
+    for entry in topics.values_mut() {
+        let count = entry["count"].as_u64().unwrap_or(0);
+        let first = entry["first_t_rel_ms"].as_u64().unwrap_or(0);
+        let last = entry["last_t_rel_ms"].as_u64().unwrap_or(0);
+        if count > 1 && last > first {
+            let span_s = (last - first) as f64 / 1000.0;
+            entry["rate_hz"] = json!((count - 1) as f64 / span_s);
+        }
+    }
+
     // correlations: group only events that carry a correlation_id, in time order.
     let mut correlations: Map<String, Value> = Map::new();
     for e in &ordered {
@@ -393,6 +404,25 @@ mod tests {
         assert_eq!(ep["topics"]["b/y"]["first_t_rel_ms"], 20);
         assert_eq!(ep["topics"]["b/y"]["last_t_rel_ms"], 20);
         assert_eq!(ep["meta"]["message_count"], 3);
+    }
+
+    #[test]
+    fn topics_include_rate_hz() {
+        // 4 events over 300 ms = 3 intervals / 0.3 s = 10 Hz.
+        let events = vec![
+            ev(0, "a", None, None, json!({})),
+            ev(100, "a", None, None, json!({})),
+            ev(200, "a", None, None, json!({})),
+            ev(300, "a", None, None, json!({})),
+        ];
+        let ep = build_episode(&meta(), &events);
+        assert_eq!(ep["topics"]["a"]["rate_hz"], json!(10.0));
+    }
+
+    #[test]
+    fn topics_rate_hz_omitted_for_single_event() {
+        let ep = build_episode(&meta(), &[ev(0, "a", None, None, json!({}))]);
+        assert!(ep["topics"]["a"].get("rate_hz").is_none());
     }
 
     #[test]
