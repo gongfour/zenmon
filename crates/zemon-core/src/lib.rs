@@ -1,4 +1,5 @@
 pub mod config;
+pub mod doctor;
 pub mod error;
 pub mod keyexpr;
 pub mod output;
