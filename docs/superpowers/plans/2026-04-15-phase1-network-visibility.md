@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add network discovery (`zemon scout`), session introspection (`zemon info`), and per-topic message rate (Hz) display to CLI and TUI.
+**Goal:** Add network discovery (`zenmon scout`), session introspection (`zenmon info`), and per-topic message rate (Hz) display to CLI and TUI.
 
 **Architecture:** Two new core modules (`scout.rs`, `info.rs`) with corresponding CLI subcommands. Hz tracking is computed client-side in TUI app state by counting messages per topic per second. All three features are independent — scout doesn't need a session, info reads session metadata, Hz is purely local computation.
 
@@ -14,26 +14,26 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `crates/zemon-core/src/scout.rs` | Create | `zenoh::scout()` wrapper, returns `Vec<ScoutInfo>` |
-| `crates/zemon-core/src/info.rs` | Create | Session info extraction (own ZID, routers, peers) |
-| `crates/zemon-core/src/types.rs` | Modify | Add `ScoutInfo`, `SessionDetail` types |
-| `crates/zemon-core/src/lib.rs` | Modify | Register new modules |
-| `crates/zemon-cli/src/cli.rs` | Modify | Add `Scout`, `Info` subcommands |
-| `crates/zemon-cli/src/main.rs` | Modify | Add command handlers for scout and info |
-| `crates/zemon-tui/src/app.rs` | Modify | Add `topic_hz: HashMap<String, f64>`, `topic_msg_counts` for Hz calculation |
-| `crates/zemon-tui/src/views/topics.rs` | Modify | Show Hz next to each topic in left panel |
-| `crates/zemon-tui/src/views/dashboard.rs` | Modify | Show total msg/s in overview |
+| `crates/zenmon-core/src/scout.rs` | Create | `zenoh::scout()` wrapper, returns `Vec<ScoutInfo>` |
+| `crates/zenmon-core/src/info.rs` | Create | Session info extraction (own ZID, routers, peers) |
+| `crates/zenmon-core/src/types.rs` | Modify | Add `ScoutInfo`, `SessionDetail` types |
+| `crates/zenmon-core/src/lib.rs` | Modify | Register new modules |
+| `crates/zenmon-cli/src/cli.rs` | Modify | Add `Scout`, `Info` subcommands |
+| `crates/zenmon-cli/src/main.rs` | Modify | Add command handlers for scout and info |
+| `crates/zenmon-tui/src/app.rs` | Modify | Add `topic_hz: HashMap<String, f64>`, `topic_msg_counts` for Hz calculation |
+| `crates/zenmon-tui/src/views/topics.rs` | Modify | Show Hz next to each topic in left panel |
+| `crates/zenmon-tui/src/views/dashboard.rs` | Modify | Show total msg/s in overview |
 
 ---
 
 ### Task 1: Core types — ScoutInfo and SessionDetail
 
 **Files:**
-- Modify: `crates/zemon-core/src/types.rs`
+- Modify: `crates/zenmon-core/src/types.rs`
 
 - [ ] **Step 1: Add ScoutInfo and SessionDetail types**
 
-Append to `crates/zemon-core/src/types.rs` (after the existing `NodeInfo` struct):
+Append to `crates/zenmon-core/src/types.rs` (after the existing `NodeInfo` struct):
 
 ```rust
 /// Information about a Zenoh node discovered via scouting.
@@ -57,13 +57,13 @@ pub struct SessionDetail {
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p zemon-core
+cargo check -p zenmon-core
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/zemon-core/src/types.rs
+git add crates/zenmon-core/src/types.rs
 git commit -m "feat(core): add ScoutInfo and SessionDetail types"
 ```
 
@@ -72,12 +72,12 @@ git commit -m "feat(core): add ScoutInfo and SessionDetail types"
 ### Task 2: Core — scout module
 
 **Files:**
-- Create: `crates/zemon-core/src/scout.rs`
-- Modify: `crates/zemon-core/src/lib.rs`
+- Create: `crates/zenmon-core/src/scout.rs`
+- Modify: `crates/zenmon-core/src/lib.rs`
 
 - [ ] **Step 1: Register module in lib.rs**
 
-Add `pub mod scout;` to `crates/zemon-core/src/lib.rs`:
+Add `pub mod scout;` to `crates/zenmon-core/src/lib.rs`:
 
 ```rust
 pub mod config;
@@ -92,10 +92,10 @@ pub mod scout;
 
 - [ ] **Step 2: Write scout module**
 
-Create `crates/zemon-core/src/scout.rs`:
+Create `crates/zenmon-core/src/scout.rs`:
 
 ```rust
-use crate::config::ZemonConfig;
+use crate::config::ZenmonConfig;
 use crate::types::ScoutInfo;
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
@@ -105,7 +105,7 @@ use zenoh::config::WhatAmI;
 /// Scout the network for Zenoh nodes.
 /// This does NOT require a session — it uses multicast scouting directly.
 /// Returns after `timeout` duration.
-pub async fn scout(config: &ZemonConfig, timeout: Duration) -> Result<Vec<ScoutInfo>> {
+pub async fn scout(config: &ZenmonConfig, timeout: Duration) -> Result<Vec<ScoutInfo>> {
     let zenoh_config = config.to_zenoh_config()?;
     let receiver = zenoh::scout(WhatAmI::Router | WhatAmI::Peer | WhatAmI::Client, zenoh_config)
         .await
@@ -136,13 +136,13 @@ pub async fn scout(config: &ZemonConfig, timeout: Duration) -> Result<Vec<ScoutI
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cargo check -p zemon-core
+cargo check -p zenmon-core
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/zemon-core/src/scout.rs crates/zemon-core/src/lib.rs
+git add crates/zenmon-core/src/scout.rs crates/zenmon-core/src/lib.rs
 git commit -m "feat(core): add scout module — multicast network discovery"
 ```
 
@@ -151,12 +151,12 @@ git commit -m "feat(core): add scout module — multicast network discovery"
 ### Task 3: Core — info module
 
 **Files:**
-- Create: `crates/zemon-core/src/info.rs`
-- Modify: `crates/zemon-core/src/lib.rs`
+- Create: `crates/zenmon-core/src/info.rs`
+- Modify: `crates/zenmon-core/src/lib.rs`
 
 - [ ] **Step 1: Register module in lib.rs**
 
-Add `pub mod info;` to `crates/zemon-core/src/lib.rs` (after `pub mod scout;`):
+Add `pub mod info;` to `crates/zenmon-core/src/lib.rs` (after `pub mod scout;`):
 
 ```rust
 pub mod config;
@@ -172,7 +172,7 @@ pub mod info;
 
 - [ ] **Step 2: Write info module**
 
-Create `crates/zemon-core/src/info.rs`:
+Create `crates/zenmon-core/src/info.rs`:
 
 ```rust
 use crate::types::SessionDetail;
@@ -213,13 +213,13 @@ pub async fn session_info(session: &Session) -> Result<SessionDetail> {
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cargo check -p zemon-core
+cargo check -p zenmon-core
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/zemon-core/src/info.rs crates/zemon-core/src/lib.rs
+git add crates/zenmon-core/src/info.rs crates/zenmon-core/src/lib.rs
 git commit -m "feat(core): add info module — session introspection"
 ```
 
@@ -228,12 +228,12 @@ git commit -m "feat(core): add info module — session introspection"
 ### Task 4: CLI — scout and info subcommands
 
 **Files:**
-- Modify: `crates/zemon-cli/src/cli.rs`
-- Modify: `crates/zemon-cli/src/main.rs`
+- Modify: `crates/zenmon-cli/src/cli.rs`
+- Modify: `crates/zenmon-cli/src/main.rs`
 
 - [ ] **Step 1: Add Scout and Info to Command enum**
 
-In `crates/zemon-cli/src/cli.rs`, add two new variants to `Command` enum (before the `Tui` variant):
+In `crates/zenmon-cli/src/cli.rs`, add two new variants to `Command` enum (before the `Tui` variant):
 
 ```rust
     /// Scout the network for Zenoh nodes (no router needed)
@@ -249,11 +249,11 @@ In `crates/zemon-cli/src/cli.rs`, add two new variants to `Command` enum (before
 
 - [ ] **Step 2: Add scout handler to main.rs**
 
-In `crates/zemon-cli/src/main.rs`, add the `Scout` match arm (before `Command::Tui`):
+In `crates/zenmon-cli/src/main.rs`, add the `Scout` match arm (before `Command::Tui`):
 
 ```rust
         Command::Scout { timeout } => {
-            let nodes = zemon_core::scout::scout(
+            let nodes = zenmon_core::scout::scout(
                 &config,
                 Duration::from_secs(timeout),
             )
@@ -281,12 +281,12 @@ In `crates/zemon-cli/src/main.rs`, add the `Scout` match arm (before `Command::T
 
 - [ ] **Step 3: Add info handler to main.rs**
 
-In `crates/zemon-cli/src/main.rs`, add the `Info` match arm (after `Command::Scout`):
+In `crates/zenmon-cli/src/main.rs`, add the `Info` match arm (after `Command::Scout`):
 
 ```rust
         Command::Info => {
-            let session = zemon_core::session::open_session(&config).await?;
-            let detail = zemon_core::info::session_info(&session).await?;
+            let session = zenmon_core::session::open_session(&config).await?;
+            let detail = zenmon_core::info::session_info(&session).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&detail)?);
@@ -336,7 +336,7 @@ cargo check
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/zemon-cli/
+git add crates/zenmon-cli/
 git commit -m "feat(cli): add scout and info subcommands"
 ```
 
@@ -345,11 +345,11 @@ git commit -m "feat(cli): add scout and info subcommands"
 ### Task 5: TUI — topic Hz calculation
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 1: Add Hz tracking fields to App**
 
-In `crates/zemon-tui/src/app.rs`, add these fields to the `App` struct (after `topic_detail_scroll`):
+In `crates/zenmon-tui/src/app.rs`, add these fields to the `App` struct (after `topic_detail_scroll`):
 
 ```rust
     pub topic_msg_counts: HashMap<String, u32>,
@@ -411,13 +411,13 @@ Change the `AppEvent::Tick` handler in `handle_event`:
 - [ ] **Step 6: Verify it compiles**
 
 ```bash
-cargo check -p zemon-tui
+cargo check -p zenmon-tui
 ```
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): add per-topic Hz rate calculation"
 ```
 
@@ -426,11 +426,11 @@ git commit -m "feat(tui): add per-topic Hz rate calculation"
 ### Task 6: TUI Topics view — show Hz
 
 **Files:**
-- Modify: `crates/zemon-tui/src/views/topics.rs`
+- Modify: `crates/zenmon-tui/src/views/topics.rs`
 
 - [ ] **Step 1: Add Hz display to topic list items**
 
-In `crates/zemon-tui/src/views/topics.rs`, replace the topic list item rendering (the `.map(|(i, topic)| { ... })` closure inside the `items` Vec builder) with:
+In `crates/zenmon-tui/src/views/topics.rs`, replace the topic list item rendering (the `.map(|(i, topic)| { ... })` closure inside the `items` Vec builder) with:
 
 ```rust
         .map(|(i, topic)| {
@@ -478,13 +478,13 @@ In the same file, in the detail panel section, add Hz display after the "Kind:" 
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cargo check -p zemon-tui
+cargo check -p zenmon-tui
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/zemon-tui/src/views/topics.rs
+git add crates/zenmon-tui/src/views/topics.rs
 git commit -m "feat(tui): show Hz rate per topic in Topics view"
 ```
 
@@ -493,11 +493,11 @@ git commit -m "feat(tui): show Hz rate per topic in Topics view"
 ### Task 7: TUI Dashboard — show total msg/s
 
 **Files:**
-- Modify: `crates/zemon-tui/src/views/dashboard.rs`
+- Modify: `crates/zenmon-tui/src/views/dashboard.rs`
 
 - [ ] **Step 1: Add total Hz to dashboard overview**
 
-In `crates/zemon-tui/src/views/dashboard.rs`, add a third line to `info_text` (after the Topics/Nodes/Messages line):
+In `crates/zenmon-tui/src/views/dashboard.rs`, add a third line to `info_text` (after the Topics/Nodes/Messages line):
 
 ```rust
         Line::from(vec![
@@ -518,13 +518,13 @@ In `crates/zemon-tui/src/views/dashboard.rs`, add a third line to `info_text` (a
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p zemon-tui
+cargo check -p zenmon-tui
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/zemon-tui/src/views/dashboard.rs
+git add crates/zenmon-tui/src/views/dashboard.rs
 git commit -m "feat(tui): show total throughput in Dashboard overview"
 ```
 
@@ -542,20 +542,20 @@ cargo build --release
 
 ```bash
 # With zenohd running:
-./target/release/zemon scout
-./target/release/zemon scout --timeout 2
-./target/release/zemon --json scout
+./target/release/zenmon scout
+./target/release/zenmon scout --timeout 2
+./target/release/zenmon --json scout
 
 # Without zenohd (should return empty, not crash):
-./target/release/zemon scout --timeout 1
+./target/release/zenmon scout --timeout 1
 ```
 
 - [ ] **Step 3: Test info**
 
 ```bash
 # With zenohd running:
-./target/release/zemon info
-./target/release/zemon --json info
+./target/release/zenmon info
+./target/release/zenmon --json info
 ```
 
 - [ ] **Step 4: Test Hz in TUI**
@@ -564,11 +564,11 @@ Start TUI, publish messages at ~1Hz, verify Topics view shows rate:
 
 ```bash
 # Terminal 1:
-./target/release/zemon tui
+./target/release/zenmon tui
 
 # Terminal 2:
 for i in $(seq 1 20); do
-  ./target/release/zemon pub test/hz '{"i":'$i'}' 2>/dev/null
+  ./target/release/zenmon pub test/hz '{"i":'$i'}' 2>/dev/null
   sleep 0.5
 done
 ```

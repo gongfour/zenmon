@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans. Steps use checkbox syntax.
 
-**Goal:** In `--json` mode, failures emit exactly one JSON object `{"error":{"kind":...,"message":...}}` on stderr with a non-zero exit and no ANSI/backtrace/tracing noise. A typed `ZemonError`/`ErrorKind` lives at the core/CLI boundary.
+**Goal:** In `--json` mode, failures emit exactly one JSON object `{"error":{"kind":...,"message":...}}` on stderr with a non-zero exit and no ANSI/backtrace/tracing noise. A typed `ZenmonError`/`ErrorKind` lives at the core/CLI boundary.
 
-**Architecture:** Add `zemon-core::error` with `ErrorKind` (serde snake_case) and `ZemonError`. `open_session` returns `ZemonError` (Connection). `main` splits into a thin entrypoint (parses CLI, configures logging/color, renders errors) and an inner `run() -> Result<(), ZemonError>` holding the command match. Untyped `color_eyre::Report` and `serde_json::Error` convert to `Internal`; user-input parse errors map to `InvalidInput`.
+**Architecture:** Add `zenmon-core::error` with `ErrorKind` (serde snake_case) and `ZenmonError`. `open_session` returns `ZenmonError` (Connection). `main` splits into a thin entrypoint (parses CLI, configures logging/color, renders errors) and an inner `run() -> Result<(), ZenmonError>` holding the command match. Untyped `color_eyre::Report` and `serde_json::Error` convert to `Internal`; user-input parse errors map to `InvalidInput`.
 
 **Tech Stack:** Rust, serde, serde_json, color-eyre.
 
@@ -17,18 +17,18 @@
 
 ---
 
-### Task 1: `ZemonError` / `ErrorKind` in core with tests
+### Task 1: `ZenmonError` / `ErrorKind` in core with tests
 
 **Files:**
-- Create: `crates/zemon-core/src/error.rs`
-- Modify: `crates/zemon-core/src/lib.rs` (add `pub mod error;`)
+- Create: `crates/zenmon-core/src/error.rs`
+- Modify: `crates/zenmon-core/src/lib.rs` (add `pub mod error;`)
 
 **Interfaces:**
-- Produces: `zemon_core::error::{ErrorKind, ZemonError}`; constructors `connection/timeout/invalid_input/not_found/internal`; `ZemonError::to_json(&self) -> String`; `From<color_eyre::Report>` and `From<serde_json::Error>` (both → `Internal`); `Display` = message; `impl std::error::Error`.
+- Produces: `zenmon_core::error::{ErrorKind, ZenmonError}`; constructors `connection/timeout/invalid_input/not_found/internal`; `ZenmonError::to_json(&self) -> String`; `From<color_eyre::Report>` and `From<serde_json::Error>` (both → `Internal`); `Display` = message; `impl std::error::Error`.
 
 - [ ] **Step 1: Write error.rs with inline tests** (full code in implementation).
 - [ ] **Step 2: Wire `pub mod error;` in lib.rs.**
-- [ ] **Step 3: `cargo test -p zemon-core error::` → all pass.**
+- [ ] **Step 3: `cargo test -p zenmon-core error::` → all pass.**
 - [ ] **Step 4: Commit.**
 
 Tests: kind serde strings; `to_json` exact string + no `\x1b` + no `\n`; `From<Report>`→Internal; `From<serde_json::Error>`→Internal.
@@ -36,11 +36,11 @@ Tests: kind serde strings; `to_json` exact string + no `\x1b` + no `\n`; `From<R
 ### Task 2: `open_session` + `parse_port_range` return typed errors
 
 **Files:**
-- Modify: `crates/zemon-core/src/session.rs`
-- Modify: `crates/zemon-cli/src/main.rs` (`parse_port_range` → `ZemonError::invalid_input`)
+- Modify: `crates/zenmon-core/src/session.rs`
+- Modify: `crates/zenmon-cli/src/main.rs` (`parse_port_range` → `ZenmonError::invalid_input`)
 
 **Interfaces:**
-- Produces: `open_session(&ZemonConfig) -> Result<Session, ZemonError>` (Connection on open failure, InvalidInput on config error); `parse_port_range(&str) -> Result<(u16,u16), ZemonError>`.
+- Produces: `open_session(&ZenmonConfig) -> Result<Session, ZenmonError>` (Connection on open failure, InvalidInput on config error); `parse_port_range(&str) -> Result<(u16,u16), ZenmonError>`.
 
 - [ ] Change signatures, map errors. tui caller uses `format!("{}", e)` (Display) — unaffected. Build.
 - [ ] Commit.
@@ -48,20 +48,20 @@ Tests: kind serde strings; `to_json` exact string + no `\x1b` + no `\n`; `From<R
 ### Task 3: Split `main` into entrypoint + `run()`, render errors
 
 **Files:**
-- Modify: `crates/zemon-cli/src/main.rs`
+- Modify: `crates/zenmon-cli/src/main.rs`
 
 - [ ] `main` (no `Result` return): parse CLI, `color_eyre::install()` only when `!is_json`, tracing filter `off` when `is_tui || is_json`, call `run`, on `Err` render JSON (`e.to_json()`) or human (`Error: {e}`) to stderr + `process::exit(1)`.
-- [ ] `run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError>` wraps the existing command match unchanged (the `?` conversions handle typing).
+- [ ] `run(cli: Cli, config: ZenmonConfig) -> Result<(), ZenmonError>` wraps the existing command match unchanged (the `?` conversions handle typing).
 - [ ] Build + `cargo test`.
 - [ ] Commit.
 
 ### Task 4: Deterministic integration test (no router)
 
 **Files:**
-- Create: `crates/zemon-cli/tests/json_errors.rs`
+- Create: `crates/zenmon-cli/tests/json_errors.rs`
 
-- [ ] Test: `zemon --json scout --port-range not-a-range` → exit != 0, stderr is single-line JSON, `error.kind == "invalid_input"`, stderr contains no `\x1b`. Uses `env!("CARGO_BIN_EXE_zemon")`.
-- [ ] `cargo test -p zemon-cli --test json_errors` → pass.
+- [ ] Test: `zenmon --json scout --port-range not-a-range` → exit != 0, stderr is single-line JSON, `error.kind == "invalid_input"`, stderr contains no `\x1b`. Uses `env!("CARGO_BIN_EXE_zenmon")`.
+- [ ] `cargo test -p zenmon-cli --test json_errors` → pass.
 - [ ] Commit.
 
 ## Self-Review

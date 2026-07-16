@@ -4,7 +4,7 @@
 
 **Goal:** Unify all user-facing time options on `humantime` duration strings (`5s`, `100ms`) parsed at the CLI boundary, replacing the current mixed bare-integer units (`query=ms`, `scout=s`, `tui=ms`).
 
-**Architecture:** Add one pure parser function `parse_duration_arg` in a new `zemon-cli/src/duration.rs`, wire it into clap via `value_parser`, and change the three affected options to hold `std::time::Duration`. Core functions already take `Duration`, so only the CLI boundary and the `tui::run` signature change.
+**Architecture:** Add one pure parser function `parse_duration_arg` in a new `zenmon-cli/src/duration.rs`, wire it into clap via `value_parser`, and change the three affected options to hold `std::time::Duration`. Core functions already take `Duration`, so only the CLI boundary and the `tui::run` signature change.
 
 **Tech Stack:** Rust, clap v4 derive, `humantime` crate, `std::time::Duration`.
 
@@ -21,9 +21,9 @@
 ### Task 1: Duration parser with tests
 
 **Files:**
-- Create: `crates/zemon-cli/src/duration.rs`
-- Modify: `crates/zemon-cli/Cargo.toml` (add `humantime`), root `Cargo.toml` (workspace dep)
-- Modify: `crates/zemon-cli/src/main.rs` (add `mod duration;`)
+- Create: `crates/zenmon-cli/src/duration.rs`
+- Modify: `crates/zenmon-cli/Cargo.toml` (add `humantime`), root `Cargo.toml` (workspace dep)
+- Modify: `crates/zenmon-cli/src/main.rs` (add `mod duration;`)
 
 **Interfaces:**
 - Produces: `pub fn parse_duration_arg(s: &str) -> Result<std::time::Duration, String>` — parses humantime strings, rejects zero and (implicitly, via humantime) unit-less integers. `Err` is a human message suitable for clap.
@@ -31,11 +31,11 @@
 - [ ] **Step 1: Add humantime dependency**
 
 Root `Cargo.toml` `[workspace.dependencies]`: add `humantime = "2"`.
-`crates/zemon-cli/Cargo.toml` `[dependencies]`: add `humantime.workspace = true`.
+`crates/zenmon-cli/Cargo.toml` `[dependencies]`: add `humantime.workspace = true`.
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `crates/zemon-cli/src/duration.rs`:
+Create `crates/zenmon-cli/src/duration.rs`:
 
 ```rust
 use std::time::Duration;
@@ -90,16 +90,16 @@ mod tests {
 
 - [ ] **Step 3: Run tests to verify they fail (module not wired)**
 
-Run: `cargo test -p zemon-cli duration::`
+Run: `cargo test -p zenmon-cli duration::`
 Expected: compile error until `mod duration;` added.
 
 - [ ] **Step 4: Wire the module**
 
-In `crates/zemon-cli/src/main.rs` add `mod duration;` near `mod cli;`.
+In `crates/zenmon-cli/src/main.rs` add `mod duration;` near `mod cli;`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p zemon-cli duration::`
+Run: `cargo test -p zenmon-cli duration::`
 Expected: 6 passing.
 
 - [ ] **Step 6: Commit**
@@ -114,13 +114,13 @@ git commit -m "feat(cli): add humantime duration parser with tests"
 ### Task 2: Wire parser into clap and change option types
 
 **Files:**
-- Modify: `crates/zemon-cli/src/cli.rs` (Query.timeout, Scout.per_port_timeout, Tui.refresh)
-- Modify: `crates/zemon-cli/src/main.rs` (call sites, tui run call)
-- Modify: `crates/zemon-tui/src/lib.rs` (`run` takes `Duration`)
+- Modify: `crates/zenmon-cli/src/cli.rs` (Query.timeout, Scout.per_port_timeout, Tui.refresh)
+- Modify: `crates/zenmon-cli/src/main.rs` (call sites, tui run call)
+- Modify: `crates/zenmon-tui/src/lib.rs` (`run` takes `Duration`)
 
 **Interfaces:**
 - Consumes: `crate::duration::parse_duration_arg`.
-- Produces: `Command::Query { timeout: Duration, .. }`, `Command::Scout { per_port_timeout: Duration, .. }`, `Command::Tui { refresh: Duration }`, `zemon_tui::run(config, refresh: Duration)`.
+- Produces: `Command::Query { timeout: Duration, .. }`, `Command::Scout { per_port_timeout: Duration, .. }`, `Command::Tui { refresh: Duration }`, `zenmon_tui::run(config, refresh: Duration)`.
 
 - [ ] **Step 1: Change clap option types in `cli.rs`**
 
@@ -155,11 +155,11 @@ Tui:
   Also `print_scout_results` currently takes `per_port_timeout: u64` for the "Xs per port"
   message — change its signature to `per_port_timeout: Duration` and format via
   `humantime::format_duration(per_port_timeout)`.
-- Tui arm: `zemon_tui::run(config, refresh).await?` (now a Duration).
+- Tui arm: `zenmon_tui::run(config, refresh).await?` (now a Duration).
 
 - [ ] **Step 3: Change `tui::run` signature**
 
-In `crates/zemon-tui/src/lib.rs`, change `pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64)` to `pub async fn run(mut config: ZemonConfig, refresh: Duration)`. Inside, wherever `tick_rate_ms` built a `Duration` (e.g. `Duration::from_millis(tick_rate_ms)`), use `refresh` directly. Confirm `Duration` is imported (it is).
+In `crates/zenmon-tui/src/lib.rs`, change `pub async fn run(mut config: ZenmonConfig, tick_rate_ms: u64)` to `pub async fn run(mut config: ZenmonConfig, refresh: Duration)`. Inside, wherever `tick_rate_ms` built a `Duration` (e.g. `Duration::from_millis(tick_rate_ms)`), use `refresh` directly. Confirm `Duration` is imported (it is).
 
 - [ ] **Step 4: Build and run all tests**
 

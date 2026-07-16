@@ -1,4 +1,4 @@
-# zemon
+# zenmon
 
 Zenoh network monitor and debugger. CLI + TUI tool built with Rust.
 
@@ -7,14 +7,14 @@ Lightweight terminal-based alternative to web dashboards for monitoring Zenoh ne
 ## Install
 
 ```bash
-cargo install --path crates/zemon-cli
+cargo install --path crates/zenmon-cli
 ```
 
 Or build from source:
 
 ```bash
 cargo build --release
-# Binary at ./target/release/zemon
+# Binary at ./target/release/zenmon
 ```
 
 Requires a Rust toolchain (1.75+).
@@ -23,36 +23,36 @@ Requires a Rust toolchain (1.75+).
 
 ```bash
 # Subscribe to topics (real-time stream)
-zemon sub "forklift/**" --pretty --timestamp
+zenmon sub "forklift/**" --pretty --timestamp
 
 # Publish a message
-zemon pub test/hello '{"msg":"world"}'
+zenmon pub test/hello '{"msg":"world"}'
 
 # Publish with attachment metadata
-zemon pub task/goal '{"action":"move","x":5}' --att '{"request_id":"001","client_id":"zemon"}'
+zenmon pub task/goal '{"action":"move","x":5}' --att '{"request_id":"001","client_id":"zenmon"}'
 
 # List discovered nodes
-zemon nodes
+zenmon nodes
 
 # Query (Zenoh GET — requires queryable responder)
-zemon query "@/*/router"
+zenmon query "@/*/router"
 
 # Bounded stream/watch (safe for agent tool calls)
-zemon --json sub "sensor/**" --count 10        # stop after 10 messages
-zemon --json sub "sensor/**" --duration 5s     # stop after 5s
-zemon --json nodes --watch --count 1           # one snapshot then exit
+zenmon --json sub "sensor/**" --count 10        # stop after 10 messages
+zenmon --json sub "sensor/**" --duration 5s     # stop after 5s
+zenmon --json nodes --watch --count 1           # one snapshot then exit
 
 # Test how two key expressions relate (pure, no network)
-zemon --json keyexpr "a/*" "a/b"
+zenmon --json keyexpr "a/*" "a/b"
 
 # JSON output (pipe to jq, etc.)
-zemon --json nodes
-zemon --json sub "sensor/**"
+zenmon --json nodes
+zenmon --json sub "sensor/**"
 
 # Validate and inspect the merged configuration without connecting
-zemon config validate
-zemon config show --effective
-zemon --json config show --effective
+zenmon config validate
+zenmon config show --effective
+zenmon --json config show --effective
 ```
 
 ### Global Options
@@ -68,12 +68,12 @@ zemon --json config show --effective
 
 ### Key expression testing (`keyexpr`)
 
-`zemon keyexpr <A> <B>` reports how two key expressions relate, with no
+`zenmon keyexpr <A> <B>` reports how two key expressions relate, with no
 network. `a_includes_b` means **A contains every key of B** (A ⊇ B); it is
 directional, so order matters:
 
 ```bash
-$ zemon --json keyexpr "a/*" "a/b"
+$ zenmon --json keyexpr "a/*" "a/b"
 {"a":"a/*","b":"a/b","intersects":true,"a_includes_b":true,"b_includes_a":false,"equal":false,"relation":"a_includes_b"}
 ```
 
@@ -96,25 +96,25 @@ Here `a/*` includes `a/b` (every `a/b` is an `a/*`), but not vice-versa. The
   per kind (`invalid_input`=2, `connection`=3, `timeout`=4, `not_found`=5,
   `internal`=1).
 
-Options can also be set via environment variables: `ZEMON_ENDPOINT`, `ZEMON_MODE`,
-`ZEMON_NAMESPACE`, `ZEMON_CONFIG`, `ZEMON_SCOUT_PORT`, `ZEMON_CONNECT_TIMEOUT`.
+Options can also be set via environment variables: `ZENMON_ENDPOINT`, `ZENMON_MODE`,
+`ZENMON_NAMESPACE`, `ZENMON_CONFIG`, `ZENMON_SCOUT_PORT`, `ZENMON_CONNECT_TIMEOUT`.
 
 Configuration is resolved in this order, with later sources overriding earlier ones:
 
 1. Built-in defaults
-2. Zenoh config file (`ZEMON_CONFIG` or `--config`)
+2. Zenoh config file (`ZENMON_CONFIG` or `--config`)
 3. Environment variables
 4. Explicit CLI flags
 
-Use `zemon config show --effective` to see the resolved value and source for each
-zemon-managed setting. The command prints only an allow-list of settings and never dumps
-the raw Zenoh config, so plugin credentials and private keys are not exposed. `zemon
+Use `zenmon config show --effective` to see the resolved value and source for each
+zenmon-managed setting. The command prints only an allow-list of settings and never dumps
+the raw Zenoh config, so plugin credentials and private keys are not exposed. `zenmon
 config validate` performs the same merge and validation without opening a network session.
 
 ## TUI Dashboard
 
 ```bash
-zemon tui
+zenmon tui
 ```
 
 Interactive terminal dashboard with 5 views:
@@ -154,9 +154,9 @@ Cargo workspace with 3 crates:
 
 ```
 crates/
-  zemon-core/    # Zenoh session, subscribe, query, registry (library)
-  zemon-cli/     # clap subcommands, produces `zemon` binary
-  zemon-tui/     # ratatui views and event loop (library)
+  zenmon-core/    # Zenoh session, subscribe, query, registry (library)
+  zenmon-cli/     # clap subcommands, produces `zenmon` binary
+  zenmon-tui/     # ratatui views and event loop (library)
 ```
 
 ### Tech Stack
@@ -169,8 +169,8 @@ crates/
 ## Roadmap
 
 ### Phase 1 — Network Visibility
-1. [ ] `zemon scout` — discover all Zenoh nodes on the network (ZID, type, locators)
-2. [ ] `zemon info` — show current session info, connected peers/routers, locators
+1. [ ] `zenmon scout` — discover all Zenoh nodes on the network (ZID, type, locators)
+2. [ ] `zenmon info` — show current session info, connected peers/routers, locators
 3. [ ] Topic Hz/throughput — display message rate (msgs/sec) per topic in TUI Topics view
 
 ### Phase 2 — Message Metadata
@@ -184,9 +184,9 @@ crates/
 9. [ ] Pub matching — show whether subscribers exist when publishing
 
 ### Phase 4 — Debugging Utilities
-10. [x] `zemon keyexpr <A> <B>` — test intersection/inclusion between key expressions
-11. [ ] `zemon pub --rate <HZ>` — repeated publish at fixed frequency for testing
-12. [ ] `zemon pub --congestion block|drop` — congestion control mode selection
+10. [x] `zenmon keyexpr <A> <B>` — test intersection/inclusion between key expressions
+11. [ ] `zenmon pub --rate <HZ>` — repeated publish at fixed frequency for testing
+12. [ ] `zenmon pub --congestion block|drop` — congestion control mode selection
 13. [ ] DELETE message display — color-code PUT vs DELETE, filter by kind
 
 ### Phase 5 — Advanced Inspection

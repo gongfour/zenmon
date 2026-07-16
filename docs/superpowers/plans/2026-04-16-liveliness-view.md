@@ -6,20 +6,20 @@
 
 **Architecture:** Split into 4 tasks: (1) add `LivelinessEventRecord` type, (2) update `App` state for 6 tabs + liveliness fields + event recording, (3) clean up Nodes view, (4) create Liveliness view. Each task produces a compilable, committable unit.
 
-**Tech Stack:** Rust, ratatui, zemon-core types, zemon-tui views
+**Tech Stack:** Rust, ratatui, zenmon-core types, zenmon-tui views
 
 ---
 
 ### Task 1: Add LivelinessEventRecord type and record events in App
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 This task adds the event record type (kept in TUI since it's display-only), new App fields, and updates `handle_liveliness()` to record events.
 
 - [ ] **Step 1: Add LivelinessEventRecord struct and new fields to App**
 
-In `crates/zemon-tui/src/app.rs`, add after the `QueryStatus` enum (before `pub struct App`):
+In `crates/zenmon-tui/src/app.rs`, add after the `QueryStatus` enum (before `pub struct App`):
 
 ```rust
 #[derive(Debug, Clone)]
@@ -57,8 +57,8 @@ In the `App::new()` initializer, after `liveliness_tokens: Vec::new(),` add:
 Replace the existing `handle_liveliness` method with:
 
 ```rust
-    fn handle_liveliness(&mut self, event: zemon_core::types::LivelinessEvent) {
-        use zemon_core::types::LivelinessEvent;
+    fn handle_liveliness(&mut self, event: zenmon_core::types::LivelinessEvent) {
+        use zenmon_core::types::LivelinessEvent;
         let (token, is_join) = match event {
             LivelinessEvent::Join(t) => (t, true),
             LivelinessEvent::Leave(t) => (t, false),
@@ -101,13 +101,13 @@ Replace the existing `handle_liveliness` method with:
 
 - [ ] **Step 4: Verify it compiles**
 
-Run: `cargo check -p zemon-tui`
+Run: `cargo check -p zenmon-tui`
 Expected: compiles with no errors (warnings about unused fields are OK)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): add LivelinessEventRecord and event logging to App state"
 ```
 
@@ -116,7 +116,7 @@ git commit -m "feat(tui): add LivelinessEventRecord and event logging to App sta
 ### Task 2: Expand App from 5 tabs to 6 — add ActiveView::Liveliness
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 This task adds the Liveliness variant to ActiveView, updates all tab-related code (TAB_TITLES, tab_rects, key handlers, click handlers, mouse handlers, render dispatch, status bar).
 
@@ -286,7 +286,7 @@ Change the status bar hint from `1-5:view` to `1-6:view`:
 
 - [ ] **Step 10: Create placeholder liveliness view module**
 
-Create `crates/zemon-tui/src/views/liveliness.rs`:
+Create `crates/zenmon-tui/src/views/liveliness.rs`:
 
 ```rust
 use crate::app::App;
@@ -305,7 +305,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
 }
 ```
 
-Add to `crates/zemon-tui/src/views/mod.rs`:
+Add to `crates/zenmon-tui/src/views/mod.rs`:
 
 ```rust
 pub mod liveliness;
@@ -319,7 +319,7 @@ Expected: compiles with no errors
 - [ ] **Step 12: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs crates/zemon-tui/src/views/liveliness.rs crates/zemon-tui/src/views/mod.rs
+git add crates/zenmon-tui/src/app.rs crates/zenmon-tui/src/views/liveliness.rs crates/zenmon-tui/src/views/mod.rs
 git commit -m "feat(tui): add [6] Liveliness tab with placeholder view"
 ```
 
@@ -328,7 +328,7 @@ git commit -m "feat(tui): add [6] Liveliness tab with placeholder view"
 ### Task 3: Clean up Nodes view — remove liveliness code
 
 **Files:**
-- Modify: `crates/zemon-tui/src/views/nodes.rs`
+- Modify: `crates/zenmon-tui/src/views/nodes.rs`
 
 Remove Name column, liveliness matching in build_row, Network Liveliness section in detail, render_liveliness_line helper. Keep `(self)` label.
 
@@ -441,7 +441,7 @@ Delete the entire `render_liveliness_line` function.
 
 - [ ] **Step 5: Remove unused import**
 
-The `zemon_core::types::LivelinessToken` import in `build_row` is no longer needed. Verify there are no remaining references to liveliness types in nodes.rs. The file should only import from `zemon_core::types::{NodeInfo, NodeSources}`.
+The `zenmon_core::types::LivelinessToken` import in `build_row` is no longer needed. Verify there are no remaining references to liveliness types in nodes.rs. The file should only import from `zenmon_core::types::{NodeInfo, NodeSources}`.
 
 - [ ] **Step 6: Verify it compiles**
 
@@ -451,7 +451,7 @@ Expected: compiles with no errors
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/zemon-tui/src/views/nodes.rs
+git add crates/zenmon-tui/src/views/nodes.rs
 git commit -m "refactor(tui): remove liveliness code from Nodes view, keep (self) label"
 ```
 
@@ -460,13 +460,13 @@ git commit -m "refactor(tui): remove liveliness code from Nodes view, keep (self
 ### Task 4: Implement Liveliness view rendering
 
 **Files:**
-- Modify: `crates/zemon-tui/src/views/liveliness.rs`
+- Modify: `crates/zenmon-tui/src/views/liveliness.rs`
 
 Three-panel layout: top-left token list with group headers, top-right token detail, bottom event log.
 
 - [ ] **Step 1: Write the full liveliness view**
 
-Replace `crates/zemon-tui/src/views/liveliness.rs` with:
+Replace `crates/zenmon-tui/src/views/liveliness.rs` with:
 
 ```rust
 use crate::app::{App, LivelinessEventRecord};
@@ -499,7 +499,7 @@ fn build_grouped_rows(app: &App) -> (Vec<GroupedRow>, usize) {
     }
 
     // Group tokens by prefix
-    let mut groups: Vec<(String, Vec<(usize, &zemon_core::types::LivelinessToken)>)> = Vec::new();
+    let mut groups: Vec<(String, Vec<(usize, &zenmon_core::types::LivelinessToken)>)> = Vec::new();
     for (i, token) in tokens.iter().enumerate() {
         let group = token.group_prefix().unwrap_or_else(|| "(ungrouped)".to_string());
         if let Some(g) = groups.iter_mut().find(|(k, _)| *k == group) {
@@ -717,7 +717,7 @@ Then test manually:
 ```bash
 # Terminal 1: ensure zenohd is running
 # Terminal 2: start TUI
-./target/debug/zemon tui
+./target/debug/zenmon tui
 # Press '6' to switch to Liveliness tab
 # Verify: token list shows grouped tokens with ● status
 # Verify: selecting a token shows detail on right
@@ -729,6 +729,6 @@ Then test manually:
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/zemon-tui/src/views/liveliness.rs
+git add crates/zenmon-tui/src/views/liveliness.rs
 git commit -m "feat(tui): implement [6] Liveliness view with grouped list, detail, and event log"
 ```

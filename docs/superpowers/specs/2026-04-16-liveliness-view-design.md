@@ -111,13 +111,13 @@ Key `6` switches to the Liveliness view.
 
 - Mapping liveliness tokens to transport nodes by ZID (not possible with current Zenoh API)
 - Tree collapse/expand (flat list with group headers is sufficient)
-- Liveliness token declaration from zemon (zemon is an observer, not a participant)
+- Liveliness token declaration from zenmon (zenmon is an observer, not a participant)
 
 ## Files to Change
 
-- `crates/zemon-tui/src/views/nodes.rs` — remove liveliness code
-- `crates/zemon-tui/src/views/liveliness.rs` — new file, liveliness view rendering
-- `crates/zemon-tui/src/views/mod.rs` — add liveliness module
-- `crates/zemon-tui/src/app.rs` — add liveliness state, ActiveView variant, key handlers, tab rendering
-- `crates/zemon-tui/src/event.rs` — no changes needed (LivelinessEvent already exists)
-- `crates/zemon-core/src/types.rs` — add LivelinessEventRecord type (or keep in TUI)
+- `crates/zenmon-tui/src/views/nodes.rs` — remove liveliness code
+- `crates/zenmon-tui/src/views/liveliness.rs` — new file, liveliness view rendering
+- `crates/zenmon-tui/src/views/mod.rs` — add liveliness module
+- `crates/zenmon-tui/src/app.rs` — add liveliness state, ActiveView variant, key handlers, tab rendering
+- `crates/zenmon-tui/src/event.rs` — no changes needed (LivelinessEvent already exists)
+- `crates/zenmon-core/src/types.rs` — add LivelinessEventRecord type (or keep in TUI)

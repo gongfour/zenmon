@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 **Scope:** GitHub issues #5, #6, #7, #8, #9, #10, #11 (excludes #12 MCP PoC)
-**Goal:** Make the `zemon` CLI safely and predictably usable by AI agents as tool calls:
+**Goal:** Make the `zenmon` CLI safely and predictably usable by AI agents as tool calls:
 bounded commands, structured JSON output, structured errors, stable exit codes, and
 consistent time-duration options.
 
@@ -15,7 +15,7 @@ document fixes the shared contracts so the stacked PRs stay coherent.
 
 ## Motivation
 
-Today every command's logic lives in `zemon-cli/src/main.rs`, errors are flattened to
+Today every command's logic lives in `zenmon-cli/src/main.rs`, errors are flattened to
 `color_eyre::Report` via `eyre!(e)`, JSON output shapes differ per command (some top-level
 arrays, some objects, `pub` has no `--json` branch at all), time options mix units
 (`query=ms`, `scout=s`, `tui=ms`), and streaming/watch commands only stop on Ctrl+C. None
@@ -28,11 +28,11 @@ Extract per-command handling and output formatting out of `main.rs` into testabl
 that later issues can be verified with unit tests (paused-time, golden snapshots, parser
 tests, stderr-JSON parsing):
 
-- **`zemon-core`** gains pure, serializable result/error types and pure logic
+- **`zenmon-core`** gains pure, serializable result/error types and pure logic
   (duration parsing helpers where they belong, key-expr comparison for #11, typed errors).
-- **`zemon-cli`** command handlers become functions that take parsed inputs and a writer /
+- **`zenmon-cli`** command handlers become functions that take parsed inputs and a writer /
   return a typed result, so output formatting can be unit-tested without a live Zenoh
-  session. Network-touching parts stay behind `zemon-core` calls that tests can avoid by
+  session. Network-touching parts stay behind `zenmon-core` calls that tests can avoid by
   testing the pure formatting/parsing seams.
 
 We refactor only what these issues touch; no unrelated restructuring.
@@ -41,12 +41,12 @@ We refactor only what these issues touch; no unrelated restructuring.
 
 ## Shared contract 1 — Typed errors (#6; used by #10, #11)
 
-Introduce a typed error in `zemon-core`:
+Introduce a typed error in `zenmon-core`:
 
 ```rust
 pub enum ErrorKind { Connection, Timeout, InvalidInput, NotFound, Internal }
 
-pub struct ZemonError {
+pub struct ZenmonError {
     pub kind: ErrorKind,
     pub message: String,
 }
@@ -175,7 +175,7 @@ New `keyexpr` (a.k.a. keyexpr-test) command — pure, no session:
 - **Excluded:** emitting a representative intersection key/expression (the API only decides
   existence; a witness is non-unique and would balloon scope).
 - Invalid / non-canonical key expressions → `invalid_input` error (contract 1).
-- Comparison logic + serializable result type in `zemon-core`; clap/output in CLI.
+- Comparison logic + serializable result type in `zenmon-core`; clap/output in CLI.
 - Tests: exact match, `*`, `**`, reversed inclusion, partial intersection, disjoint,
   invalid syntax.
 

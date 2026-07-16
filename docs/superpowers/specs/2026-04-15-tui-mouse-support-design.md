@@ -1,8 +1,8 @@
-# zemon TUI 마우스 지원 설계
+# zenmon TUI 마우스 지원 설계
 
 ## 목표
 
-zemon TUI에 마우스 기반 탐색과 전용 키 기반 클립보드 복사를 추가한다. 마우스는 키보드를 모르는 사용자도 핵심 동작을 수행할 수 있도록 보조하고, 복사는 별도 키(`y` yank)로 분리해 마우스 캡처와 텍스트 선택이 충돌하지 않게 한다.
+zenmon TUI에 마우스 기반 탐색과 전용 키 기반 클립보드 복사를 추가한다. 마우스는 키보드를 모르는 사용자도 핵심 동작을 수행할 수 있도록 보조하고, 복사는 별도 키(`y` yank)로 분리해 마우스 캡처와 텍스트 선택이 충돌하지 않게 한다.
 
 ## 배경
 
@@ -106,7 +106,7 @@ pub sub_selected: usize,
 
 ### 6. Yank (클립보드 복사)
 
-**크레이트:** `arboard = "3"` (zemon-tui 의존성 추가)
+**크레이트:** `arboard = "3"` (zenmon-tui 의존성 추가)
 
 **키 바인딩** (입력 모드 아닐 때):
 
@@ -136,7 +136,7 @@ pub toast: Option<(String, Instant)>,
 
 ### 7. 의존성
 
-`zemon-tui/Cargo.toml`에 추가:
+`zenmon-tui/Cargo.toml`에 추가:
 ```toml
 arboard = "3"
 ```
@@ -162,7 +162,7 @@ Key 'y'/'Y' → App::handle_view_key → arboard::Clipboard → toast 설정
 
 ## 테스트 전략
 
-zemon은 현재 단위 테스트가 없지만 이 기능은 순수 로직 테스트가 가능한 부분이 많다:
+zenmon은 현재 단위 테스트가 없지만 이 기능은 순수 로직 테스트가 가능한 부분이 많다:
 
 1. **Hit-testing 단위 테스트**: `tab_rects` 주어졌을 때 (col,row) → tab index 변환 함수를 분리해 테스트
 2. **리스트 클릭 인덱스 계산**: `list_rect`, `list_first_item_row`, `list_scroll_offset`, click row가 주어졌을 때 인덱스 계산 함수 테스트
@@ -175,15 +175,15 @@ zemon은 현재 단위 테스트가 없지만 이 기능은 순수 로직 테스
 
 | 파일 | 변경 |
 |---|---|
-| `crates/zemon-tui/src/lib.rs` | 터미널 init/teardown 수동화, panic hook |
-| `crates/zemon-tui/src/event.rs` | `AppEvent::Mouse` 추가, mouse 이벤트 forward |
-| `crates/zemon-tui/src/app.rs` | rect 필드, handle_mouse/handle_click, yank, toast, sub_selected, hit-test 함수 |
-| `crates/zemon-tui/src/views/dashboard.rs` | (변경 거의 없음, 휠은 무시) |
-| `crates/zemon-tui/src/views/topics.rs` | render 시 list_rect 기록 |
-| `crates/zemon-tui/src/views/subscribe.rs` | `ListState::with_selected`, `sub_scroll` 제거, list_rect 기록 |
-| `crates/zemon-tui/src/views/query.rs` | list_rect 기록 |
-| `crates/zemon-tui/src/views/nodes.rs` | list_rect 기록 |
-| `crates/zemon-tui/Cargo.toml` | `arboard = "3"` |
+| `crates/zenmon-tui/src/lib.rs` | 터미널 init/teardown 수동화, panic hook |
+| `crates/zenmon-tui/src/event.rs` | `AppEvent::Mouse` 추가, mouse 이벤트 forward |
+| `crates/zenmon-tui/src/app.rs` | rect 필드, handle_mouse/handle_click, yank, toast, sub_selected, hit-test 함수 |
+| `crates/zenmon-tui/src/views/dashboard.rs` | (변경 거의 없음, 휠은 무시) |
+| `crates/zenmon-tui/src/views/topics.rs` | render 시 list_rect 기록 |
+| `crates/zenmon-tui/src/views/subscribe.rs` | `ListState::with_selected`, `sub_scroll` 제거, list_rect 기록 |
+| `crates/zenmon-tui/src/views/query.rs` | list_rect 기록 |
+| `crates/zenmon-tui/src/views/nodes.rs` | list_rect 기록 |
+| `crates/zenmon-tui/Cargo.toml` | `arboard = "3"` |
 
 ## 비호환 / 마이그레이션
 

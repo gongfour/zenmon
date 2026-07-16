@@ -6,7 +6,7 @@
 
 ## Problem
 
-The TUI Nodes view currently shows only the local session and one router, even when the Zenoh network has many connected peers. The cause is in `crates/zemon-core/src/registry.rs::list_nodes()`: it queries `@/**` from the local peer session, which returns only the local session's admin data — the router's `sessions[]` array (containing connected peer/client transports) is never fetched, and no multicast scouting is performed.
+The TUI Nodes view currently shows only the local session and one router, even when the Zenoh network has many connected peers. The cause is in `crates/zenmon-core/src/registry.rs::list_nodes()`: it queries `@/**` from the local peer session, which returns only the local session's admin data — the router's `sessions[]` array (containing connected peer/client transports) is never fetched, and no multicast scouting is performed.
 
 ## Goal
 
@@ -19,7 +19,7 @@ Each source compensates for the other's weaknesses: admin covers cross-subnet me
 
 ## Non-Goals
 
-- No new `zemon` CLI subcommand in this scope. Core API is designed to be CLI-reachable later.
+- No new `zenmon` CLI subcommand in this scope. Core API is designed to be CLI-reachable later.
 - No parsing of `@/<zid>/router/linkstate/**` (text-format HAT). JSON `sessions` field is sufficient.
 - No merging of `sessions[].links[].dst` addresses into the Locators column. Deferred to a future Detail view.
 - No changes to the Dashboard view beyond what already uses `app.nodes.len()`.
@@ -42,14 +42,14 @@ Two independent data-gathering paths, a single pure merge function, one rendered
 
 ### Component boundaries
 
-- **`zemon-core::registry`** — owns admin-space querying. Returns `Vec<NodeInfo>` tagged with `NodeSources::ADMIN`.
-- **`zemon-core::scout`** — already exists. Gets a small `to_node_info()` conversion helper. Tagged with `NodeSources::SCOUT`.
-- **`zemon-core::merge`** — new module. Pure function only; no I/O, no `Session` dependency. Unit-testable.
-- **`zemon-core::types`** — `NodeInfo` gains source tracking fields.
-- **`zemon-tui::app`** — holds `admin_nodes` and `scout_nodes` separately; computes `nodes` (merged) on each update.
-- **`zemon-tui::lib`** — spawns admin polling task and scout task; wires `AppEvent` handling.
-- **`zemon-tui::event`** — adds `AdminNodes`, `ScoutStarted`, `ScoutNodes` variants; exposes the sender via a new `EventHandler::sender()` accessor so background tasks in `lib.rs` can emit events; handles `s` key in Nodes view.
-- **`zemon-tui::views::nodes`** — renders new 4-column layout with Source column and footer counts.
+- **`zenmon-core::registry`** — owns admin-space querying. Returns `Vec<NodeInfo>` tagged with `NodeSources::ADMIN`.
+- **`zenmon-core::scout`** — already exists. Gets a small `to_node_info()` conversion helper. Tagged with `NodeSources::SCOUT`.
+- **`zenmon-core::merge`** — new module. Pure function only; no I/O, no `Session` dependency. Unit-testable.
+- **`zenmon-core::types`** — `NodeInfo` gains source tracking fields.
+- **`zenmon-tui::app`** — holds `admin_nodes` and `scout_nodes` separately; computes `nodes` (merged) on each update.
+- **`zenmon-tui::lib`** — spawns admin polling task and scout task; wires `AppEvent` handling.
+- **`zenmon-tui::event`** — adds `AdminNodes`, `ScoutStarted`, `ScoutNodes` variants; exposes the sender via a new `EventHandler::sender()` accessor so background tasks in `lib.rs` can emit events; handles `s` key in Nodes view.
+- **`zenmon-tui::views::nodes`** — renders new 4-column layout with Source column and footer counts.
 
 ## Data Model
 
@@ -67,7 +67,7 @@ bitflags! {
 }
 ```
 
-Added `bitflags` crate to `zemon-core/Cargo.toml`.
+Added `bitflags` crate to `zenmon-core/Cargo.toml`.
 
 ### `NodeInfo` (modified)
 
@@ -129,7 +129,7 @@ Small conversion helper in `scout.rs`. Produces a `NodeInfo` tagged `NodeSources
 
 ### `merge_nodes(admin: &[NodeInfo], scout: &[NodeInfo]) -> Vec<NodeInfo>`
 
-Pure function in new `zemon-core/src/merge.rs`:
+Pure function in new `zenmon-core/src/merge.rs`:
 
 ```rust
 pub fn merge_nodes(admin: &[NodeInfo], scout: &[NodeInfo]) -> Vec<NodeInfo> {
@@ -168,7 +168,7 @@ Merge rules:
 
 ## TUI Integration
 
-### `App` state additions (`zemon-tui/src/app.rs`)
+### `App` state additions (`zenmon-tui/src/app.rs`)
 
 ```rust
 pub admin_nodes: Vec<NodeInfo>,
@@ -181,7 +181,7 @@ pub last_scout_at: Option<SystemTime>,
 
 The existing `nodes` field remains and continues to be what the renderer reads; it is now a derived cache, recomputed only when `admin_nodes` or `scout_nodes` changes (never per frame).
 
-### `AppEvent` additions (`zemon-tui/src/event.rs`)
+### `AppEvent` additions (`zenmon-tui/src/event.rs`)
 
 ```rust
 AdminNodes(Vec<NodeInfo>),
@@ -189,7 +189,7 @@ ScoutStarted,
 ScoutNodes(Vec<NodeInfo>),
 ```
 
-### `EventHandler` sender exposure (`zemon-tui/src/event.rs`)
+### `EventHandler` sender exposure (`zenmon-tui/src/event.rs`)
 
 Today, the `AppEvent` sender is created inside `EventHandler::new()` and moved into the spawned input/zenoh tasks — there is no way for `lib.rs` to obtain a clone. The admin polling and scout tasks in this design require a sender from outside the event handler, so `EventHandler::new()` must expose it.
 
@@ -223,7 +223,7 @@ impl EventHandler {
 
 **Note on the existing internal clones**: the existing code moves `tx` into both spawned tasks inside `EventHandler::new`. That pattern works because each spawned task needs to own its clone. The patch is to clone first (for the internal tasks) **and then store the original in `self.tx`** rather than letting it drop at the end of `new()`. No behavior change for existing senders — only the sender's lifetime is extended.
 
-### Background tasks (`zemon-tui/src/lib.rs`)
+### Background tasks (`zenmon-tui/src/lib.rs`)
 
 Before spawning the tasks below, `run_loop` grabs the sender once:
 
@@ -306,7 +306,7 @@ The existing `lib.rs:139` call path (`app.nodes = list_nodes(&s).await...`) is r
 
 ### Layout
 
-Four-column table in `crates/zemon-tui/src/views/nodes.rs`:
+Four-column table in `crates/zenmon-tui/src/views/nodes.rs`:
 
 | Column | Width | Content |
 |--------|-------|---------|
@@ -343,20 +343,20 @@ let title = format!(
 
 ### Key binding check
 
-The plan will grep `crates/zemon-tui/src/event.rs` for existing `KeyCode::Char('s')` usage before claiming `s` is free. If taken, fall back to `S` (shift-s) with corresponding update to the help text.
+The plan will grep `crates/zenmon-tui/src/event.rs` for existing `KeyCode::Char('s')` usage before claiming `s` is free. If taken, fall back to `S` (shift-s) with corresponding update to the help text.
 
 ## Testing Strategy
 
 This feature ships the project's first unit tests. Scope is kept deliberately narrow to the pure, deterministic pieces.
 
-### `zemon-core/src/merge.rs` unit tests
+### `zenmon-core/src/merge.rs` unit tests
 
 - `merge_admin_only_passes_through_sorted` — admin input with two entries, scout empty; output matches admin sorted by zid.
 - `merge_scout_only_passes_through_sorted` — symmetric.
 - `merge_overlapping_zid_unions_sources_and_locators` — one admin entry and one scout entry with the same zid but different locators; output has one entry with `ADMIN | SCOUT`, both timestamps, union of locators, admin's `kind`.
 - `merge_disjoint_zids_produces_sorted_union` — no overlap; result contains all entries from both inputs sorted.
 
-### `zemon-core/src/types.rs` unit tests
+### `zenmon-core/src/types.rs` unit tests
 
 - `stale_false_when_admin_flag_set` — node with `ADMIN | SCOUT`, old `scout_last_seen`; returns false.
 - `stale_false_when_scout_recent` — SCOUT only, timestamp within threshold; false.
@@ -367,10 +367,10 @@ This feature ships the project's first unit tests. Scope is kept deliberately na
 Run in `docs/superpowers/plans/...` final task. Steps:
 
 1. Start `zenohd`.
-2. Start `zemon tui`. Verify Nodes view shows at minimum the local session and the router, both with Source `admin`.
-3. In another terminal: `zemon sub "**"`. Within 2–4 seconds, the new peer should appear in the Nodes view with Source `admin`.
+2. Start `zenmon tui`. Verify Nodes view shows at minimum the local session and the router, both with Source `admin`.
+3. In another terminal: `zenmon sub "**"`. Within 2–4 seconds, the new peer should appear in the Nodes view with Source `admin`.
 4. Press `s` in the Nodes view. Title shows `[scouting…]`, then scout results populate. Nodes also seen via admin should flip to Source `both`.
-5. Kill the `zemon sub` process. Within 2–4 seconds the peer should disappear from the Nodes view (admin no longer sees it, and if scout last saw it, it becomes scout-only).
+5. Kill the `zenmon sub` process. Within 2–4 seconds the peer should disappear from the Nodes view (admin no longer sees it, and if scout last saw it, it becomes scout-only).
 6. After 30 seconds, scout-only stale nodes should render dimmed with `scout·stale`.
 
 ## Error Handling
@@ -383,8 +383,8 @@ Run in `docs/superpowers/plans/...` final task. Steps:
 ## Migration Notes
 
 - `NodeInfo::last_seen` is removed. Any grep of the codebase for `last_seen` should return zero hits outside this spec and the plan. The plan includes a verification step.
-- `list_nodes` is renamed to `query_admin_nodes`. Callers: `zemon-tui/src/lib.rs:139` (removed — polling task replaces it) and the dashboard indirectly through `app.nodes`. No CLI callers today.
-- `zemon-core/Cargo.toml` gains `bitflags = "2"` (workspace version TBD by plan step).
+- `list_nodes` is renamed to `query_admin_nodes`. Callers: `zenmon-tui/src/lib.rs:139` (removed — polling task replaces it) and the dashboard indirectly through `app.nodes`. No CLI callers today.
+- `zenmon-core/Cargo.toml` gains `bitflags = "2"` (workspace version TBD by plan step).
 
 ## Open Questions
 

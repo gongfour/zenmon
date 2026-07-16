@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/zemon-core",
-    "crates/zemon-cli",
-    "crates/zemon-tui",
+    "crates/zenmon-core",
+    "crates/zenmon-cli",
+    "crates/zenmon-tui",
 ]
 
 [workspace.package]
@@ -12,8 +12,8 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-zemon-core = { path = "crates/zemon-core" }
-zemon-tui = { path = "crates/zemon-tui" }
+zenmon-core = { path = "crates/zenmon-core" }
+zenmon-tui = { path = "crates/zenmon-tui" }
 zenoh = { version = "1.7", features = ["unstable"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }

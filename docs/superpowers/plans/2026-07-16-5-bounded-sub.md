@@ -4,7 +4,7 @@
 
 **Goal:** Give `sub`, `nodes --watch`, and `liveliness --watch` bounded termination via `--count N` / `--duration <dur>` so agents can call them as one-shot tool calls, and make every watch loop emit clean NDJSON (no ANSI) in JSON mode.
 
-**Architecture:** A generic, paused-time-testable `watch::run_bounded(bounds, next, emit)` in `zemon-cli` owns the count/deadline/Ctrl+C termination; each command supplies a `next` future (its item source, returning `None` on Ctrl+C or stream close) and an `emit` closure (its formatting). Deadline uses `tokio::time::Instant`.
+**Architecture:** A generic, paused-time-testable `watch::run_bounded(bounds, next, emit)` in `zenmon-cli` owns the count/deadline/Ctrl+C termination; each command supplies a `next` future (its item source, returning `None` on Ctrl+C or stream close) and an `emit` closure (its formatting). Deadline uses `tokio::time::Instant`.
 
 ## Global Constraints
 
@@ -17,20 +17,20 @@
 ---
 
 ### Task 1: `watch::run_bounded` + `Bounds` with paused-time tests
-**Files:** Create `crates/zemon-cli/src/watch.rs`; `mod watch;` in main.
+**Files:** Create `crates/zenmon-cli/src/watch.rs`; `mod watch;` in main.
 - `Bounds { max_count: Option<u64>, duration: Option<Duration> }`.
 - `async fn run_bounded<T, F: FnMut()->Fut, Fut: Future<Output=Option<T>>, E: FnMut(T)>(bounds, next, emit) -> u64` — returns count emitted; stops on max_count, deadline (tokio Instant), or `next()==None`.
 - `#[tokio::test(start_paused=true)]`: count termination; duration termination (zero items); both set → count wins; both set → duration wins; stream-closed stops; ordering preserved.
 - Commit.
 
 ### Task 2: `parse_count_arg`
-**Files:** `crates/zemon-cli/src/duration.rs`.
+**Files:** `crates/zenmon-cli/src/duration.rs`.
 - `pub fn parse_count_arg(s: &str) -> Result<u64, String>` — parse u64, reject 0.
 - Tests: parses positive, rejects 0, rejects non-numeric.
 - Commit.
 
 ### Task 3: Add `--count`/`--duration` to clap
-**Files:** `crates/zemon-cli/src/cli.rs`.
+**Files:** `crates/zenmon-cli/src/cli.rs`.
 - Add `count: Option<u64>` (value_parser `parse_count_arg`) and `duration: Option<Duration>` (value_parser `parse_duration_arg`) to `Sub`, `Nodes`, `Liveliness`.
 - Build. Commit.
 

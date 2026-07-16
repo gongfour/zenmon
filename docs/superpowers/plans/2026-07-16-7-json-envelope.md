@@ -4,7 +4,7 @@
 
 **Goal:** Unify finite-collection `--json` output on `{"count":N,"items":[...]}` so agents parse every query command identically and can't confuse "0 results" with a connection error.
 
-**Architecture:** One helper `zemon_core::output::to_collection_json` renders a compact envelope; each finite command's JSON branch calls it. `info` (single resource) wraps as a one-element collection.
+**Architecture:** One helper `zenmon_core::output::to_collection_json` renders a compact envelope; each finite command's JSON branch calls it. `info` (single resource) wraps as a one-element collection.
 
 ## Global Constraints
 
@@ -16,7 +16,7 @@
 ---
 
 ### Task 1: `to_collection_json` helper + tests
-- Create `crates/zemon-core/src/output.rs`, `pub mod output;` in lib.
+- Create `crates/zenmon-core/src/output.rs`, `pub mod output;` in lib.
 - `pub fn to_collection_json<T: Serialize>(items: &[T]) -> Result<String, serde_json::Error>`.
 - Tests: empty canonical, count matches, invariant `count==len`, single-item wraps in array.
 - Commit.

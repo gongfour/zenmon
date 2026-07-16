@@ -1,8 +1,8 @@
-# zemon TUI Mouse Support Implementation Plan
+# zenmon TUI Mouse Support Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add mouse-based navigation (tab click, list click, wheel scroll) and `y`/`Y` yank keys that copy payload/key_expr/zid to the system clipboard in the zemon TUI.
+**Goal:** Add mouse-based navigation (tab click, list click, wheel scroll) and `y`/`Y` yank keys that copy payload/key_expr/zid to the system clipboard in the zenmon TUI.
 
 **Architecture:** Switch from `ratatui::init()` to manual crossterm setup so mouse capture can be enabled. Extend `AppEvent` with a `Mouse` variant. App stores per-frame layout rects set during `render()`, which `handle_click` uses for hit-testing. Replace `sub_scroll` with `sub_selected` cursor. Yank via `arboard` writes to the system clipboard and surfaces success/failure through a 2-second status-bar toast.
 
@@ -15,14 +15,14 @@
 ## File Structure
 
 **Modify:**
-- `crates/zemon-tui/Cargo.toml` — add `arboard = "3"`
-- `crates/zemon-tui/src/lib.rs` — manual terminal init/teardown with mouse capture + panic hook
-- `crates/zemon-tui/src/event.rs` — `AppEvent::Mouse` variant, forward mouse events
-- `crates/zemon-tui/src/app.rs` — rect fields, hit-test helpers, `handle_mouse`, `handle_click`, wheel routing, `sub_selected`, toast, yank logic, unit tests
-- `crates/zemon-tui/src/views/topics.rs` — record `list_rect`
-- `crates/zemon-tui/src/views/subscribe.rs` — `ListState::with_selected`, drop `sub_scroll`, record `list_rect`
-- `crates/zemon-tui/src/views/query.rs` — record `list_rect`
-- `crates/zemon-tui/src/views/nodes.rs` — record `list_rect`
+- `crates/zenmon-tui/Cargo.toml` — add `arboard = "3"`
+- `crates/zenmon-tui/src/lib.rs` — manual terminal init/teardown with mouse capture + panic hook
+- `crates/zenmon-tui/src/event.rs` — `AppEvent::Mouse` variant, forward mouse events
+- `crates/zenmon-tui/src/app.rs` — rect fields, hit-test helpers, `handle_mouse`, `handle_click`, wheel routing, `sub_selected`, toast, yank logic, unit tests
+- `crates/zenmon-tui/src/views/topics.rs` — record `list_rect`
+- `crates/zenmon-tui/src/views/subscribe.rs` — `ListState::with_selected`, drop `sub_scroll`, record `list_rect`
+- `crates/zenmon-tui/src/views/query.rs` — record `list_rect`
+- `crates/zenmon-tui/src/views/nodes.rs` — record `list_rect`
 
 No new files.
 
@@ -31,11 +31,11 @@ No new files.
 ## Task 1: Add `arboard` Dependency
 
 **Files:**
-- Modify: `crates/zemon-tui/Cargo.toml`
+- Modify: `crates/zenmon-tui/Cargo.toml`
 
 - [ ] **Step 1: Add the dependency**
 
-Open `crates/zemon-tui/Cargo.toml` and add under `[dependencies]`:
+Open `crates/zenmon-tui/Cargo.toml` and add under `[dependencies]`:
 
 ```toml
 arboard = "3"
@@ -43,13 +43,13 @@ arboard = "3"
 
 - [ ] **Step 2: Verify it compiles**
 
-Run: `cargo check -p zemon-tui`
+Run: `cargo check -p zenmon-tui`
 Expected: clean build, no errors. Warnings about unused import are fine since we don't use it yet.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/zemon-tui/Cargo.toml Cargo.lock
+git add crates/zenmon-tui/Cargo.toml Cargo.lock
 git commit -m "chore(tui): add arboard dependency for clipboard"
 ```
 
@@ -58,11 +58,11 @@ git commit -m "chore(tui): add arboard dependency for clipboard"
 ## Task 2: Switch to Manual Terminal Init with Mouse Capture
 
 **Files:**
-- Modify: `crates/zemon-tui/src/lib.rs`
+- Modify: `crates/zenmon-tui/src/lib.rs`
 
 - [ ] **Step 1: Replace `ratatui::init()` with manual setup**
 
-In `crates/zemon-tui/src/lib.rs`, add imports near the top (after existing `use` statements):
+In `crates/zenmon-tui/src/lib.rs`, add imports near the top (after existing `use` statements):
 
 ```rust
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -115,7 +115,7 @@ terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
 
 - [ ] **Step 2: Verify compilation**
 
-Run: `cargo build -p zemon-tui`
+Run: `cargo build -p zenmon-tui`
 Expected: clean build.
 
 - [ ] **Step 3: Smoke test**
@@ -126,7 +126,7 @@ Expected: TUI opens, alternate screen shows, `q` quits cleanly and terminal retu
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/zemon-tui/src/lib.rs
+git add crates/zenmon-tui/src/lib.rs
 git commit -m "feat(tui): enable mouse capture with manual terminal init"
 ```
 
@@ -135,11 +135,11 @@ git commit -m "feat(tui): enable mouse capture with manual terminal init"
 ## Task 3: Add `AppEvent::Mouse` Variant
 
 **Files:**
-- Modify: `crates/zemon-tui/src/event.rs`
+- Modify: `crates/zenmon-tui/src/event.rs`
 
 - [ ] **Step 1: Add `Mouse` variant and forward events**
 
-In `crates/zemon-tui/src/event.rs`, update imports:
+In `crates/zenmon-tui/src/event.rs`, update imports:
 
 ```rust
 use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
@@ -181,7 +181,7 @@ Some(Ok(evt)) => {
 
 - [ ] **Step 2: Add a no-op handler in `App::handle_event`**
 
-In `crates/zemon-tui/src/app.rs`, update `handle_event`:
+In `crates/zenmon-tui/src/app.rs`, update `handle_event`:
 
 ```rust
 pub fn handle_event(&mut self, event: AppEvent) {
@@ -198,13 +198,13 @@ pub fn handle_event(&mut self, event: AppEvent) {
 
 - [ ] **Step 3: Verify compilation**
 
-Run: `cargo build -p zemon-tui`
+Run: `cargo build -p zenmon-tui`
 Expected: clean build.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/zemon-tui/src/event.rs crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/event.rs crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): forward mouse events through AppEvent"
 ```
 
@@ -215,12 +215,12 @@ git commit -m "feat(tui): forward mouse events through AppEvent"
 This task introduces pure functions for hit-testing, fully unit-tested before any UI wiring.
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
-- Test: `crates/zemon-tui/src/app.rs` (inline `#[cfg(test)]` module)
+- Modify: `crates/zenmon-tui/src/app.rs`
+- Test: `crates/zenmon-tui/src/app.rs` (inline `#[cfg(test)]` module)
 
 - [ ] **Step 1: Write the failing tests**
 
-At the end of `crates/zemon-tui/src/app.rs`, add:
+At the end of `crates/zenmon-tui/src/app.rs`, add:
 
 ```rust
 #[cfg(test)]
@@ -283,12 +283,12 @@ mod tests {
 
 - [ ] **Step 2: Run tests — verify they fail with "cannot find function"**
 
-Run: `cargo test -p zemon-tui`
+Run: `cargo test -p zenmon-tui`
 Expected: compile errors — `tab_hit` and `list_hit` not found.
 
 - [ ] **Step 3: Implement the hit-test functions**
 
-Near the top of `crates/zemon-tui/src/app.rs` (below the `use` statements), add:
+Near the top of `crates/zenmon-tui/src/app.rs` (below the `use` statements), add:
 
 ```rust
 use ratatui::layout::Rect;
@@ -335,13 +335,13 @@ Note: the column check for lists is handled by the caller (using `rect.x`/`rect.
 
 - [ ] **Step 4: Run tests — verify they pass**
 
-Run: `cargo test -p zemon-tui`
+Run: `cargo test -p zenmon-tui`
 Expected: all 4 tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): add pure hit-test helpers with unit tests"
 ```
 
@@ -350,11 +350,11 @@ git commit -m "feat(tui): add pure hit-test helpers with unit tests"
 ## Task 5: Tab Click Wiring
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 1: Add tab rect fields to `App`**
 
-In `crates/zemon-tui/src/app.rs`, add to the `App` struct (below `endpoint` field):
+In `crates/zenmon-tui/src/app.rs`, add to the `App` struct (below `endpoint` field):
 
 ```rust
 pub tab_rects: [Option<ratatui::layout::Rect>; 5],
@@ -372,7 +372,7 @@ Replace the `tabs` widget construction in `render()` (currently using `Tabs::new
 
 ```rust
 // Render tabs manually so we can record per-tab rects for hit-testing.
-let tabs_block = Block::default().borders(Borders::ALL).title(" zemon ");
+let tabs_block = Block::default().borders(Borders::ALL).title(" zenmon ");
 let inner = tabs_block.inner(tabs_area);
 frame.render_widget(tabs_block, tabs_area);
 
@@ -471,7 +471,7 @@ Click each tab header: expected — view switches. Press `q` to quit.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): wire mouse clicks to tab switching"
 ```
 
@@ -480,8 +480,8 @@ git commit -m "feat(tui): wire mouse clicks to tab switching"
 ## Task 6: Replace `sub_scroll` with `sub_selected` (with Tests)
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
-- Modify: `crates/zemon-tui/src/views/subscribe.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/views/subscribe.rs`
 
 - [ ] **Step 1: Write failing tests for cursor maintenance**
 
@@ -494,7 +494,7 @@ fn sub_selected_zero_stays_on_new_message() {
     app.sub_selected = 0;
     let msg = ZenohMessage {
         key_expr: "a".into(),
-        payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+        payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(null)),
         timestamp: None,
         kind: "put".into(),
         attachment: None,
@@ -508,7 +508,7 @@ fn sub_selected_nonzero_follows_message_through_shift() {
     let mut app = App::new("test".into());
     let make = |k: &str| ZenohMessage {
         key_expr: k.into(),
-        payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+        payload: zenmon_core::types::MessagePayload::Json(serde_json::json!(null)),
         timestamp: None,
         kind: "put".into(),
         attachment: None,
@@ -525,12 +525,12 @@ fn sub_selected_nonzero_follows_message_through_shift() {
 
 - [ ] **Step 2: Run tests — verify they fail**
 
-Run: `cargo test -p zemon-tui`
+Run: `cargo test -p zenmon-tui`
 Expected: test failures — `sub_selected` field doesn't exist or logic is wrong.
 
 - [ ] **Step 3: Replace `sub_scroll` with `sub_selected`**
 
-In `crates/zemon-tui/src/app.rs`:
+In `crates/zenmon-tui/src/app.rs`:
 
 Remove the field `pub sub_scroll: u16,` and add:
 
@@ -583,13 +583,13 @@ ActiveView::Subscribe => match key.code {
 
 - [ ] **Step 4: Update `subscribe.rs` to use `ListState::with_selected`**
 
-In `crates/zemon-tui/src/views/subscribe.rs`:
+In `crates/zenmon-tui/src/views/subscribe.rs`:
 
 Change the import line to include `ListState` and make the function take `&mut App` (so we can render stateful):
 
 ```rust
 use crate::app::App;
-use zemon_core::types::MessagePayload;
+use zenmon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -646,7 +646,7 @@ Replace the body of the items construction. Delete the `let scroll = app.sub_scr
 
 - [ ] **Step 5: Update callers to pass `&mut App`**
 
-In `crates/zemon-tui/src/app.rs`, `App::render` currently calls:
+In `crates/zenmon-tui/src/app.rs`, `App::render` currently calls:
 
 ```rust
 ActiveView::Subscribe => views::subscribe::render(self, frame, content_area),
@@ -656,18 +656,18 @@ ActiveView::Subscribe => views::subscribe::render(self, frame, content_area),
 
 - [ ] **Step 6: Run tests and build**
 
-Run: `cargo test -p zemon-tui && cargo build -p zemon-tui`
+Run: `cargo test -p zenmon-tui && cargo build -p zenmon-tui`
 Expected: all tests pass, clean build.
 
 - [ ] **Step 7: Manual test**
 
-Run: `cargo run -- tui`, switch to Subscribe (press `3`), publish messages from another terminal with `./target/release/zemon pub test/hello '{"msg":"1"}'` a few times, use j/k to move cursor.
+Run: `cargo run -- tui`, switch to Subscribe (press `3`), publish messages from another terminal with `./target/release/zenmon pub test/hello '{"msg":"1"}'` a few times, use j/k to move cursor.
 Expected: highlighted row moves with j/k, new messages push the cursor down if not at top.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs crates/zemon-tui/src/views/subscribe.rs
+git add crates/zenmon-tui/src/app.rs crates/zenmon-tui/src/views/subscribe.rs
 git commit -m "feat(tui): replace sub_scroll with sub_selected cursor"
 ```
 
@@ -676,15 +676,15 @@ git commit -m "feat(tui): replace sub_scroll with sub_selected cursor"
 ## Task 7: Record List Rects and Wire List Clicks
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
-- Modify: `crates/zemon-tui/src/views/topics.rs`
-- Modify: `crates/zemon-tui/src/views/subscribe.rs`
-- Modify: `crates/zemon-tui/src/views/query.rs`
-- Modify: `crates/zemon-tui/src/views/nodes.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/views/topics.rs`
+- Modify: `crates/zenmon-tui/src/views/subscribe.rs`
+- Modify: `crates/zenmon-tui/src/views/query.rs`
+- Modify: `crates/zenmon-tui/src/views/nodes.rs`
 
 - [ ] **Step 1: Add list rect fields**
 
-In `crates/zemon-tui/src/app.rs`, add to the `App` struct:
+In `crates/zenmon-tui/src/app.rs`, add to the `App` struct:
 
 ```rust
 pub list_rect: Option<ratatui::layout::Rect>,
@@ -768,7 +768,7 @@ And in `dashboard.rs`, at the start:
 
 - [ ] **Step 4: Update `App::render` to pass `&mut self` to view renders**
 
-In `crates/zemon-tui/src/app.rs`, the match in `render()` should call each view:
+In `crates/zenmon-tui/src/app.rs`, the match in `render()` should call each view:
 
 ```rust
 match self.active_view {
@@ -896,7 +896,7 @@ And add `ListState` to the imports at the top of `query.rs`.
 
 - [ ] **Step 7: Build and run**
 
-Run: `cargo build -p zemon-tui`
+Run: `cargo build -p zenmon-tui`
 Expected: clean build.
 
 Run: `cargo run -- tui`
@@ -906,7 +906,7 @@ Expected: clicked item becomes highlighted/selected.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs crates/zemon-tui/src/views/
+git add crates/zenmon-tui/src/app.rs crates/zenmon-tui/src/views/
 git commit -m "feat(tui): wire list-area clicks to item selection"
 ```
 
@@ -915,11 +915,11 @@ git commit -m "feat(tui): wire list-area clicks to item selection"
 ## Task 8: Wheel Scroll
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 1: Implement wheel handlers**
 
-In `crates/zemon-tui/src/app.rs`, replace the stub `handle_wheel_up` / `handle_wheel_down` with:
+In `crates/zenmon-tui/src/app.rs`, replace the stub `handle_wheel_up` / `handle_wheel_down` with:
 
 ```rust
 fn handle_wheel_up(&mut self) {
@@ -981,7 +981,7 @@ Expected: cursor moves up/down by one item per wheel click.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): handle mouse wheel scroll in list views"
 ```
 
@@ -990,7 +990,7 @@ git commit -m "feat(tui): handle mouse wheel scroll in list views"
 ## Task 9: Toast Notification Infrastructure
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 1: Add toast field**
 
@@ -1068,13 +1068,13 @@ In `App::render()`, replace the status bar composition block. Currently it compu
 
 - [ ] **Step 4: Build**
 
-Run: `cargo build -p zemon-tui`
+Run: `cargo build -p zenmon-tui`
 Expected: clean build.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): add 2s toast notifications in status bar"
 ```
 
@@ -1083,14 +1083,14 @@ git commit -m "feat(tui): add 2s toast notifications in status bar"
 ## Task 10: Yank (Clipboard Copy) Keys
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs`
+- Modify: `crates/zenmon-tui/src/app.rs`
 
 - [ ] **Step 1: Add yank helpers**
 
-In `crates/zemon-tui/src/app.rs`, add imports:
+In `crates/zenmon-tui/src/app.rs`, add imports:
 
 ```rust
-use zemon_core::types::MessagePayload;
+use zenmon_core::types::MessagePayload;
 ```
 
 Add a pure serialization helper:
@@ -1256,7 +1256,7 @@ ActiveView::Nodes => match key.code {
 
 - [ ] **Step 3: Build and test**
 
-Run: `cargo build -p zemon-tui`
+Run: `cargo build -p zenmon-tui`
 Expected: clean build.
 
 - [ ] **Step 4: Manual test**
@@ -1264,7 +1264,7 @@ Expected: clean build.
 Run: `cargo run -- tui`, publish a few test messages from another terminal:
 
 ```bash
-./target/release/zemon pub test/hello '{"msg":"world"}'
+./target/release/zenmon pub test/hello '{"msg":"world"}'
 ```
 
 - Switch to Topics (`2`), select a topic, press `y` → status bar shows "Copied payload (14B)". Paste in another app to verify.
@@ -1275,7 +1275,7 @@ Run: `cargo run -- tui`, publish a few test messages from another terminal:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zemon-tui/src/app.rs
+git add crates/zenmon-tui/src/app.rs
 git commit -m "feat(tui): add y/Y yank keys for clipboard copy"
 ```
 
@@ -1284,11 +1284,11 @@ git commit -m "feat(tui): add y/Y yank keys for clipboard copy"
 ## Task 11: Final Integration Test and Polish
 
 **Files:**
-- Modify: `crates/zemon-tui/src/app.rs` (status bar hint text update only if needed)
+- Modify: `crates/zenmon-tui/src/app.rs` (status bar hint text update only if needed)
 
 - [ ] **Step 1: Full manual verification checklist**
 
-Run: `zenohd` in terminal 1, `cargo run --release -- tui` in terminal 2, `./target/release/zemon pub test/a '{"x":1}' && ./target/release/zemon pub test/b '{"y":2}'` in terminal 3 (repeat a few times).
+Run: `zenohd` in terminal 1, `cargo run --release -- tui` in terminal 2, `./target/release/zenmon pub test/a '{"x":1}' && ./target/release/zenmon pub test/b '{"y":2}'` in terminal 3 (repeat a few times).
 
 Verify:
 - [ ] Click each of the 5 tab labels — view switches
@@ -1312,7 +1312,7 @@ Expected: all tests pass, including the hit-test and sub_selected tests added ea
 
 - [ ] **Step 3: Run `cargo clippy`**
 
-Run: `cargo clippy -p zemon-tui --all-targets`
+Run: `cargo clippy -p zenmon-tui --all-targets`
 Expected: no new warnings introduced by this work. Fix any that appear.
 
 - [ ] **Step 4: Commit any polish**
