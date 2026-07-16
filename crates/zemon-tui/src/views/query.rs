@@ -1,5 +1,4 @@
 use crate::app::{App, QueryStatus};
-use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -69,12 +68,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .query_results
         .iter()
         .map(|msg| {
-            let payload_str = match &msg.payload {
-                MessagePayload::Json(v) => {
-                    serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
-                }
-                other => format!("{}", other),
-            };
+            let payload_str = msg.payload.pretty();
             let mut spans = vec![
                 Span::styled(
                     &msg.key_expr,

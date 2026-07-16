@@ -1,5 +1,4 @@
 use crate::app::App;
-use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -130,12 +129,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let items: Vec<ListItem> = filtered_messages
         .iter()
         .map(|msg| {
-            let payload_str = match &msg.payload {
-                MessagePayload::Json(v) => {
-                    serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
-                }
-                other => format!("{}", other),
-            };
+            let payload_str = msg.payload.pretty();
             let att_str = msg.attachment.as_ref().map(|a| format!(" att:{}", a));
             let ts = format_stream_timestamp(msg.timestamp.as_deref().unwrap_or(""));
             let mut spans = vec![

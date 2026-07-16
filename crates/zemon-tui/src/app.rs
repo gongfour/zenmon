@@ -48,12 +48,7 @@ pub(crate) fn list_hit(
 }
 
 fn payload_to_string(p: &MessagePayload) -> String {
-    match p {
-        MessagePayload::Json(v) => {
-            serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string())
-        }
-        MessagePayload::Raw { bytes_len } => format!("<{} bytes>", bytes_len),
-    }
+    p.pretty()
 }
 
 const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
@@ -1414,10 +1409,13 @@ mod tests {
         app.sub_selected = 0;
         let msg = ZenohMessage {
             key_expr: "a".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(msg);
         assert_eq!(app.sub_selected, 0);
@@ -1428,10 +1426,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("a"));
         app.handle_zenoh_message(make("b"));
@@ -1447,17 +1448,23 @@ mod tests {
         let mut app = App::new("test".into());
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "robot/pose".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!({"x": 1})),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!({"x": 1})),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "robot/status".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!("idle")),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!("idle")),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
 
         app.stream_filter = "pose".into();
@@ -1474,10 +1481,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("alpha/1"));
         app.handle_zenoh_message(make("beta/1"));
@@ -1516,10 +1526,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("a"));
         app.handle_zenoh_message(make("b"));
@@ -1581,10 +1594,13 @@ mod tests {
         app.query_history.push("demo/**".into());
         app.query_results.push(ZenohMessage {
             key_expr: "demo/x".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(1)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(1)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "get".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.topic_filter = "abc".into();
         app.stream_filter = "xyz".into();

@@ -261,13 +261,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                                     ""
                                 };
                                 let payload_str = if pretty {
-                                    match &msg.payload {
-                                        zemon_core::types::MessagePayload::Json(v) => {
-                                            serde_json::to_string_pretty(v)
-                                                .unwrap_or_else(|_| format!("{}", msg.payload))
-                                        }
-                                        other => format!("{}", other),
-                                    }
+                                    msg.payload.pretty()
                                 } else {
                                     format!("{}", msg.payload)
                                 };
