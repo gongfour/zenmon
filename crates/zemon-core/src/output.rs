@@ -22,6 +22,36 @@ pub fn to_collection_json<T: Serialize>(items: &[T]) -> Result<String, serde_jso
     })
 }
 
+/// Render the result of a `pub` action as a compact JSON object:
+/// `{"ok":true,"status":"accepted","key_expr":"...","bytes":N}` (+
+/// `"attachment_bytes":M` when an attachment is present).
+///
+/// `status` is `"accepted"` (not `"published"`): a successful `put` only means
+/// the local Zenoh stack accepted the publication, not that any subscriber
+/// received or processed it.
+pub fn publish_accepted_json(
+    key_expr: &str,
+    bytes: usize,
+    attachment_bytes: Option<usize>,
+) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct PublishResult<'a> {
+        ok: bool,
+        status: &'a str,
+        key_expr: &'a str,
+        bytes: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attachment_bytes: Option<usize>,
+    }
+    serde_json::to_string(&PublishResult {
+        ok: true,
+        status: "accepted",
+        key_expr,
+        bytes,
+        attachment_bytes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +81,23 @@ mod tests {
         // `info` renders one resource as a one-element collection.
         let json = to_collection_json(std::slice::from_ref(&"only")).unwrap();
         assert_eq!(json, r#"{"count":1,"items":["only"]}"#);
+    }
+
+    #[test]
+    fn publish_without_attachment() {
+        let json = publish_accepted_json("test/hello", 17, None).unwrap();
+        assert_eq!(
+            json,
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17}"#
+        );
+    }
+
+    #[test]
+    fn publish_with_attachment() {
+        let json = publish_accepted_json("test/hello", 17, Some(9)).unwrap();
+        assert_eq!(
+            json,
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"attachment_bytes":9}"#
+        );
     }
 }
