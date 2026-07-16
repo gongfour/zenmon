@@ -230,7 +230,9 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             timestamp,
             count,
             duration,
+            max_payload_bytes,
         } => {
+            let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
             let session = zemon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let _handle = zemon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
@@ -255,7 +257,20 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                     item = rx.recv() => match item {
                         Some(msg) => {
                             if cli.json {
-                                println!("{}", serde_json::to_string(&msg)?);
+                                match max_payload_bytes {
+                                    Some(max) => {
+                                        // Replace payload/attachment with capped
+                                        // previews so a large message can't blow
+                                        // the output budget.
+                                        let mut v = serde_json::to_value(&msg)?;
+                                        v["payload"] = msg.payload.to_view_capped(max);
+                                        if let Some(att) = &msg.attachment {
+                                            v["attachment"] = att.to_view_capped(max);
+                                        }
+                                        println!("{}", serde_json::to_string(&v)?);
+                                    }
+                                    None => println!("{}", serde_json::to_string(&msg)?),
+                                }
                             } else {
                                 let ts = if timestamp {
                                     msg.timestamp.as_deref().unwrap_or("--")
@@ -296,18 +311,25 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             key_expr,
             payload,
             timeout,
+            limit,
         } => {
+            let limit = limit.map(|n| n as usize);
             let session = zemon_core::session::open_session(&config).await?;
             let results = zemon_core::query::get(
                 &session,
                 &key_expr,
                 payload.as_deref(),
                 timeout,
+                limit,
             )
             .await?;
+            let limited = limit.is_some_and(|l| results.len() >= l);
 
             if cli.json {
-                println!("{}", zemon_core::output::to_collection_json(&results)?);
+                println!(
+                    "{}",
+                    zemon_core::output::to_collection_json_limited(&results, limited)?
+                );
             } else if results.is_empty() {
                 println!("No replies for '{}'", key_expr);
             } else {

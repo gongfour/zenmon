@@ -4,12 +4,17 @@ use color_eyre::Result;
 use std::time::Duration;
 use zenoh::Session;
 
-/// Send a Zenoh GET query and collect all replies.
+/// Send a Zenoh GET query and collect replies.
+///
+/// When `limit` is `Some(n)`, collection stops after `n` replies (the output
+/// budget is bounded at the network level); the caller detects the cap by
+/// comparing the returned length to the limit.
 pub async fn get(
     session: &Session,
     key_expr: &str,
     payload: Option<&str>,
     timeout: Duration,
+    limit: Option<usize>,
 ) -> Result<Vec<ZenohMessage>> {
     let mut builder = session.get(key_expr).timeout(timeout);
 
@@ -42,6 +47,12 @@ pub async fn get(
                     attachment,
                     attachment_bytes,
                 });
+
+                if let Some(l) = limit {
+                    if results.len() >= l {
+                        break;
+                    }
+                }
             }
             Err(err) => {
                 let payload_str = err
