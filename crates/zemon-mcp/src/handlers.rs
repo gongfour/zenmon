@@ -113,6 +113,89 @@ pub async fn doctor_json(
         .map_err(|e| ZemonError::internal(format!("serialize doctor report: {e}")))
 }
 
+/// Precondition for `sub_snapshot`: at least one of `count`/`duration` must be
+/// set, or the collection loop would never terminate. Extracted so it is
+/// unit-testable without opening a session.
+pub(crate) fn sub_snapshot_bound_error(
+    count: Option<usize>,
+    duration: Option<Duration>,
+) -> Option<ZemonError> {
+    if count.is_none() && duration.is_none() {
+        Some(ZemonError::invalid_input(
+            "sub_snapshot requires at least one of `count` or `duration`".to_string(),
+        ))
+    } else {
+        None
+    }
+}
+
+/// `sub_snapshot` tool: subscribe and collect messages until `count` is
+/// reached or `duration` elapses (at least one bound is required), then
+/// return a `{count, items}` batch. Mirrors the CLI's `sub --json
+/// --max-payload-bytes` per-message capping (see `zemon-cli/src/main.rs`):
+/// `to_collection_json_limited`'s second argument is a `limited: bool` flag
+/// (whether results were truncated by e.g. `--limit`), not a byte cap, so it
+/// is never used here for capping.
+pub async fn sub_snapshot_json(
+    session: &zenoh::Session,
+    key_expr: &str,
+    count: Option<usize>,
+    duration: Option<Duration>,
+    max_payload_bytes: Option<usize>,
+) -> Result<String, ZemonError> {
+    if let Some(e) = sub_snapshot_bound_error(count, duration) {
+        return Err(e);
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = zemon_core::subscriber::subscribe(session, key_expr, tx)
+        .await
+        .map_err(|e| ZemonError::internal(e.to_string()))?;
+
+    let deadline = duration.map(|d| tokio::time::Instant::now() + d);
+    let mut collected: Vec<zemon_core::types::ZenohMessage> = Vec::new();
+    loop {
+        if let Some(max) = count {
+            if collected.len() >= max {
+                break;
+            }
+        }
+        let recv = match deadline {
+            Some(dl) => match tokio::time::timeout_at(dl, rx.recv()).await {
+                Ok(msg) => msg,
+                Err(_) => break, // duration elapsed
+            },
+            None => rx.recv().await,
+        };
+        match recv {
+            Some(msg) => collected.push(msg),
+            None => break, // subscriber closed
+        }
+    }
+    handle.abort();
+
+    match max_payload_bytes {
+        Some(cap) => {
+            let views: Vec<serde_json::Value> = collected
+                .iter()
+                .map(|msg| -> Result<serde_json::Value, ZemonError> {
+                    let mut v = serde_json::to_value(msg).map_err(|e| {
+                        ZemonError::internal(format!("serialize sub snapshot item: {e}"))
+                    })?;
+                    v["payload"] = msg.payload.to_view_capped(cap);
+                    if let Some(att) = &msg.attachment {
+                        v["attachment"] = att.to_view_capped(cap);
+                    }
+                    Ok(v)
+                })
+                .collect::<Result<_, _>>()?;
+            zemon_core::output::to_collection_json(&views)
+        }
+        None => zemon_core::output::to_collection_json(&collected),
+    }
+    .map_err(|e| ZemonError::internal(format!("serialize sub snapshot: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +238,16 @@ mod tests {
         assert!(v.get("endpoint").is_some());
         assert!(v.get("connect_timeout").is_some());
         assert!(v.get("password").is_none());
+    }
+
+    #[tokio::test]
+    async fn sub_snapshot_requires_a_bound() {
+        // We cannot open a real session here, but the bound check happens
+        // before any session use, so assert the pure precondition directly.
+        let err = super::sub_snapshot_bound_error(None, None);
+        assert!(err.is_some());
+        assert!(super::sub_snapshot_bound_error(Some(1), None).is_none());
+        assert!(super::sub_snapshot_bound_error(None, Some(Duration::from_millis(1))).is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]

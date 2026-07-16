@@ -105,6 +105,21 @@ fn default_doctor_timeout_ms() -> u64 {
     5000
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SubSnapshotParams {
+    /// Key expression to subscribe to.
+    pub key_expr: String,
+    /// Stop after N messages.
+    #[serde(default)]
+    pub count: Option<u64>,
+    /// Stop after this many milliseconds.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// Cap each payload preview to N bytes in the JSON view.
+    #[serde(default)]
+    pub max_payload_bytes: Option<u64>,
+}
+
 #[tool_router]
 impl ZemonMcpServer {
     pub fn new(state: Arc<ServerState>) -> Self {
@@ -209,6 +224,25 @@ impl ZemonMcpServer {
         // invalidation.
         r.map(|json| CallToolResult::success(vec![ContentBlock::text(json)]))
             .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        description = "Subscribe and collect a bounded snapshot of messages (count and/or duration)."
+    )]
+    async fn sub_snapshot(
+        &self,
+        Parameters(p): Parameters<SubSnapshotParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let session = self.state.session().await.map_err(to_mcp_error)?;
+        let r = handlers::sub_snapshot_json(
+            &session,
+            &p.key_expr,
+            p.count.map(|n| n as usize),
+            p.duration_ms.map(std::time::Duration::from_millis),
+            p.max_payload_bytes.map(|n| n as usize),
+        )
+        .await;
+        self.finish(r).await
     }
 }
 
