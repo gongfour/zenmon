@@ -9,7 +9,10 @@ fn keyexpr_and_config_show_work_without_a_session() {
         .as_bool()
         .unwrap());
 
-    let cfg = handlers::config_show_json().unwrap();
+    let effective = zemon_core::config::resolve_config(Default::default())
+        .unwrap()
+        .effective;
+    let cfg = handlers::config_show_json(&effective).unwrap();
     assert!(serde_json::from_str::<serde_json::Value>(&cfg).unwrap()["endpoint"].is_object());
 }
 
@@ -25,7 +28,13 @@ fn keyexpr_and_config_show_work_without_a_session() {
 #[test]
 fn all_expected_tools_are_registered() {
     use std::sync::Arc;
-    let state = Arc::new(zemon_mcp::state::ServerState::new(Default::default()));
+    let effective = zemon_core::config::resolve_config(Default::default())
+        .unwrap()
+        .effective;
+    let state = Arc::new(zemon_mcp::state::ServerState::new(
+        Default::default(),
+        effective,
+    ));
     let server = zemon_mcp::server::ZemonMcpServer::new(state);
     let names = server.list_tool_names();
     assert_eq!(names.len(), 11, "expected exactly 11 tools, got {names:?}");

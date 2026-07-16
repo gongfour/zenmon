@@ -2,27 +2,37 @@
 //! reused across tool calls.
 //!
 //! v1 scope: the session is opened on first use and reused. `invalidate_session`
-//! clears the cache so the next call reopens, and tool handlers call it when a
-//! call fails with an explicit `ErrorKind::Connection` error. Note that a
-//! connection that dies mid-session is not always reported as a connection-kind
-//! error by the core query paths, so automatic recovery from a silent mid-session
-//! drop is best-effort and left as a follow-up; restarting the server always
-//! reopens cleanly.
+//! clears the cache so the next call reopens. The cache is invalidated when a
+//! call fails with an explicit `ErrorKind::Connection` error, but in v1 no
+//! session handler actually produces a `connection`-kind error AFTER a
+//! successful open — the core query paths surface post-open failures as
+//! `internal` (see `handlers.rs`, which flattens them via `ZemonError::internal`
+//! / `.map_err(ZemonError::from)`), so this eviction path does not currently
+//! trigger. A connection that dies mid-session is therefore not detected or
+//! recovered from automatically; restarting the server always reopens cleanly.
+//! Mapping post-open errors to `connection`-kind is left as a deliberate
+//! follow-up rather than done here.
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use zemon_core::config::ZemonConfig;
+use zemon_core::config::{EffectiveConfig, ZemonConfig};
 use zemon_core::error::ZemonError;
 
 pub struct ServerState {
     pub config: ZemonConfig,
+    /// The effective, allow-listed view of the config the session was actually
+    /// built from (CLI flags + env + config-file, as resolved at startup).
+    /// `config_show` serializes this directly rather than re-resolving, so it
+    /// always agrees with `info` about what the server is bound to.
+    pub effective: EffectiveConfig,
     session: Mutex<Option<Arc<zenoh::Session>>>,
 }
 
 impl ServerState {
-    pub fn new(config: ZemonConfig) -> Self {
+    pub fn new(config: ZemonConfig, effective: EffectiveConfig) -> Self {
         Self {
             config,
+            effective,
             session: Mutex::new(None),
         }
     }

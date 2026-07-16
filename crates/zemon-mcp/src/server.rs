@@ -161,7 +161,7 @@ impl ZemonMcpServer {
 
     #[tool(description = "Show the effective, allow-listed configuration. No network.")]
     fn config_show(&self) -> Result<CallToolResult, rmcp::ErrorData> {
-        let json = handlers::config_show_json().map_err(to_mcp_error)?;
+        let json = handlers::config_show_json(&self.state.effective).map_err(to_mcp_error)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 

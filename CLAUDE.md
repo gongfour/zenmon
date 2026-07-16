@@ -21,10 +21,12 @@ crates/
   zemon-core/    # Library: Zenoh session, subscribe, query, registry
   zemon-cli/     # Binary: clap CLI, produces `zemon`
   zemon-tui/     # Library: ratatui views, event loop, app state
+  zemon-mcp/     # Library: MCP server (stdio), exposes zemon-core ops as tools
 ```
 
-- `zemon-core` is the shared library — CLI and TUI both depend on it
+- `zemon-core` is the shared library — CLI, TUI, and MCP all depend on it
 - `zemon-tui` is a library crate called by `zemon-cli` via `zemon tui` subcommand
+- `zemon-mcp` is a library crate called by `zemon-cli` via `zemon mcp` subcommand
 - Single binary: `zemon` (defined in zemon-cli/Cargo.toml)
 
 ## Key Patterns

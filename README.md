@@ -166,13 +166,14 @@ bounded (snapshot); there is no server-push in this version.
 
 ## Architecture
 
-Cargo workspace with 3 crates:
+Cargo workspace with 4 crates:
 
 ```
 crates/
   zemon-core/    # Zenoh session, subscribe, query, registry (library)
   zemon-cli/     # clap subcommands, produces `zemon` binary
   zemon-tui/     # ratatui views and event loop (library)
+  zemon-mcp/     # MCP server (stdio), exposes zemon-core ops as tools (library)
 ```
 
 ### Tech Stack

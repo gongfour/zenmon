@@ -24,11 +24,16 @@ pub async fn discover_json(
         .map_err(|e| ZemonError::internal(format!("serialize discover result: {e}")))
 }
 
-/// `config_show` tool: the effective, allow-listed configuration (no session).
-pub fn config_show_json() -> Result<String, ZemonError> {
-    let resolved = zemon_core::config::resolve_config(Default::default())
-        .map_err(|e| ZemonError::invalid_input(e.to_string()))?;
-    serde_json::to_string(&resolved.effective)
+/// `config_show` tool: the effective, allow-listed configuration (no
+/// network). Serializes the `effective` view the server was actually started
+/// with (threaded in from `ServerState`), rather than re-resolving from
+/// env/config-file — a re-resolve would ignore the CLI global flags
+/// (`-e/-m/-c/--scout-port/--connect-timeout`) the session was built from and
+/// disagree with `info`.
+pub fn config_show_json(
+    effective: &zemon_core::config::EffectiveConfig,
+) -> Result<String, ZemonError> {
+    serde_json::to_string(effective)
         .map_err(|e| ZemonError::internal(format!("serialize effective config: {e}")))
 }
 
@@ -55,7 +60,8 @@ pub async fn query_json(
     let replies = zemon_core::query::get(session, key_expr, payload, timeout, limit)
         .await
         .map_err(|e| ZemonError::internal(e.to_string()))?;
-    zemon_core::output::to_collection_json(&replies)
+    let limited = limit.is_some_and(|l| replies.len() >= l);
+    zemon_core::output::to_collection_json_limited(&replies, limited)
         .map_err(|e| ZemonError::internal(format!("serialize query result: {e}")))
 }
 
@@ -255,7 +261,10 @@ mod tests {
 
     #[test]
     fn config_show_json_is_allow_listed_effective_config() {
-        let json = config_show_json().unwrap();
+        let effective = zemon_core::config::resolve_config(Default::default())
+            .unwrap()
+            .effective;
+        let json = config_show_json(&effective).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         // Effective view exposes the allow-list only; never raw Zenoh secrets.
         assert!(v.get("endpoint").is_some());

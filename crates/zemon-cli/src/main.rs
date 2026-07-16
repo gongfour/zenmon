@@ -204,6 +204,10 @@ const DEFAULT_LOG_FILTER: &str = "zemon=info,zenoh=warn";
 ///   includes authentication fields) and breaks the machine-readable contract.
 /// - TUI mode: stray log output corrupts the ratatui display.
 ///
+/// `is_tui` is also `true` for MCP mode (the caller passes `is_tui || is_mcp`):
+/// stdout is the MCP stdio transport's JSON-RPC channel, so, like TUI, any
+/// stray log line would corrupt the protocol stream.
+///
 /// Only plain CLI mode consults `RUST_LOG`, falling back to a sensible default.
 fn resolve_log_filter(
     is_tui: bool,
@@ -1084,7 +1088,12 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZemonError> {
         }
 
         Command::Mcp => {
-            zemon_mcp::serve_stdio(config)
+            // `resolved.config` was moved out into `config` above, but
+            // `resolved.effective` is a separate field and is still valid
+            // after that partial move; thread it through so `config_show`
+            // reflects the session's actual startup config instead of
+            // re-resolving from env/config-file alone.
+            zemon_mcp::serve_stdio(config, resolved.effective)
                 .await
                 .map_err(|e| ZemonError::internal(format!("mcp server: {e}")))?;
         }
