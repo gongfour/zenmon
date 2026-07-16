@@ -94,6 +94,39 @@ impl MessagePayload {
         })
     }
 
+    /// Structured view capped at `max_bytes`. If the payload fits, this is the
+    /// normal [`to_view`](Self::to_view). Otherwise it is a safe preview object
+    /// that never splits a UTF-8 code point and reports the sizes:
+    /// `{"payload_preview":..,"encoding":..,"truncated":true,"original_bytes":N,"returned_bytes":M}`.
+    pub fn to_view_capped(&self, max_bytes: usize) -> serde_json::Value {
+        if self.len() <= max_bytes {
+            return self.to_view();
+        }
+        if let Some(s) = self.as_str() {
+            // Truncate on a UTF-8 char boundary at or below max_bytes.
+            let mut end = max_bytes.min(s.len());
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            serde_json::json!({
+                "payload_preview": &s[..end],
+                "encoding": "utf8",
+                "truncated": true,
+                "original_bytes": self.len(),
+                "returned_bytes": end,
+            })
+        } else {
+            let slice = &self.bytes[..max_bytes];
+            serde_json::json!({
+                "payload_preview": base64::engine::general_purpose::STANDARD.encode(slice),
+                "encoding": "base64",
+                "truncated": true,
+                "original_bytes": self.len(),
+                "returned_bytes": max_bytes,
+            })
+        }
+    }
+
     /// Pretty (multi-line) rendering of a JSON payload; plain text or a
     /// `<N bytes>` placeholder otherwise.
     pub fn pretty(&self) -> String {
@@ -299,6 +332,36 @@ mod tests {
         assert!(v["binary_base64"].is_string());
         // base64 of [0,159,146,150]
         assert_eq!(v["binary_base64"], "AJ+Slg==");
+    }
+
+    #[test]
+    fn capped_view_returns_full_when_within_limit() {
+        let p = MessagePayload::from_bytes(b"hello".to_vec());
+        assert_eq!(p.to_view_capped(100), serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn capped_view_truncates_text_on_char_boundary() {
+        // "héllo": 'é' is 2 bytes (0xC3 0xA9) at bytes 1..3. Cap at 2 must not
+        // split it — preview should be just "h".
+        let p = MessagePayload::from_bytes("héllo".as_bytes().to_vec());
+        let v = p.to_view_capped(2);
+        assert_eq!(v["payload_preview"], "h");
+        assert_eq!(v["returned_bytes"], 1);
+        assert_eq!(v["truncated"], true);
+        assert_eq!(v["encoding"], "utf8");
+        assert_eq!(v["original_bytes"], "héllo".len());
+    }
+
+    #[test]
+    fn capped_view_previews_binary_as_base64() {
+        let p = MessagePayload::from_bytes(vec![0u8, 159, 146, 150, 1, 2]);
+        let v = p.to_view_capped(4);
+        assert_eq!(v["encoding"], "base64");
+        assert_eq!(v["returned_bytes"], 4);
+        assert_eq!(v["original_bytes"], 6);
+        // base64 of first 4 bytes [0,159,146,150]
+        assert_eq!(v["payload_preview"], "AJ+Slg==");
     }
 
     fn node_with(sources: NodeSources, scout_last_seen: Option<SystemTime>) -> NodeInfo {

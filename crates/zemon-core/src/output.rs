@@ -11,14 +11,32 @@ use serde::Serialize;
 /// document. Invariant: `count == items.len()`. An empty slice renders exactly
 /// `{"count":0,"items":[]}`.
 pub fn to_collection_json<T: Serialize>(items: &[T]) -> Result<String, serde_json::Error> {
+    to_collection_json_limited(items, false)
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Like [`to_collection_json`], but adds `"limited":true` when the output was
+/// capped (e.g. by `--limit`), so a consumer knows `count` is the returned
+/// count and more items may exist. The flag is omitted when `limited` is false,
+/// keeping the plain-collection shape identical to [`to_collection_json`].
+pub fn to_collection_json_limited<T: Serialize>(
+    items: &[T],
+    limited: bool,
+) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
     struct Envelope<'a, T> {
         count: usize,
         items: &'a [T],
+        #[serde(skip_serializing_if = "is_false")]
+        limited: bool,
     }
     serde_json::to_string(&Envelope {
         count: items.len(),
         items,
+        limited,
     })
 }
 
@@ -74,6 +92,18 @@ mod tests {
         let json = to_collection_json(&items).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["count"].as_u64().unwrap() as usize, v["items"].as_array().unwrap().len());
+    }
+
+    #[test]
+    fn limited_flag_present_when_capped() {
+        let json = to_collection_json_limited(&[1, 2], true).unwrap();
+        assert_eq!(json, r#"{"count":2,"items":[1,2],"limited":true}"#);
+    }
+
+    #[test]
+    fn limited_flag_omitted_when_not_capped() {
+        let json = to_collection_json_limited(&[1, 2], false).unwrap();
+        assert_eq!(json, r#"{"count":2,"items":[1,2]}"#);
     }
 
     #[test]
