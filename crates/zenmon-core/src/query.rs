@@ -1,21 +1,40 @@
 use crate::types::{MessagePayload, ZenohMessage};
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
+use serde::Serialize;
 use std::time::Duration;
 use zenoh::Session;
 
+/// A Zenoh reply error returned by a queryable (e.g. a `call/*` RPC server that
+/// rejected the request). Surfaced instead of silently dropped so that an
+/// endpoint which exists but errors is distinguishable from one that never
+/// replied.
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryReplyError {
+    pub message: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub encoding: String,
+}
+
+/// The outcome of a GET query: successful replies plus any reply errors.
+pub struct QueryOutcome {
+    pub replies: Vec<ZenohMessage>,
+    pub errors: Vec<QueryReplyError>,
+}
+
 /// Send a Zenoh GET query and collect replies.
 ///
-/// When `limit` is `Some(n)`, collection stops after `n` replies (the output
-/// budget is bounded at the network level); the caller detects the cap by
-/// comparing the returned length to the limit.
+/// When `limit` is `Some(n)`, collection of successful replies stops after `n`
+/// (the output budget is bounded at the network level); the caller detects the
+/// cap by comparing `replies.len()` to the limit. Reply errors are collected
+/// separately and never counted against the limit.
 pub async fn get(
     session: &Session,
     key_expr: &str,
     payload: Option<&str>,
     timeout: Duration,
     limit: Option<usize>,
-) -> Result<Vec<ZenohMessage>> {
+) -> Result<QueryOutcome> {
     let mut builder = session.get(key_expr).timeout(timeout);
 
     if let Some(p) = payload {
@@ -24,6 +43,7 @@ pub async fn get(
 
     let replies = builder.await.map_err(|e| eyre!(e))?;
     let mut results = Vec::new();
+    let mut errors = Vec::new();
 
     while let Ok(reply) = replies.recv_async().await {
         match reply.result() {
@@ -55,14 +75,19 @@ pub async fn get(
                 }
             }
             Err(err) => {
-                let payload_str = err
+                let message = err
                     .payload()
                     .try_to_string()
-                    .unwrap_or_else(|e| e.to_string().into());
-                tracing::warn!(error = %payload_str, "Query error reply");
+                    .map(|s| s.into_owned())
+                    .unwrap_or_else(|e| e.to_string());
+                let encoding = err.encoding().to_string();
+                errors.push(QueryReplyError { message, encoding });
             }
         }
     }
 
-    Ok(results)
+    Ok(QueryOutcome {
+        replies: results,
+        errors,
+    })
 }
