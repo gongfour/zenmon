@@ -298,6 +298,20 @@ impl Contract {
         self.resolve_refs_depth(value, 0)
     }
 
+    /// The request-payload schema for an observed key, with `$ref`s expanded.
+    /// A `task` topic keeps it under `phases.request`; a `call` topic under
+    /// `request`. Returns `None` when the key is not declared or has no request
+    /// schema. Used to help a caller build a `--task`/`call` request.
+    pub fn request_schema(&self, observed_key: &str) -> Option<Value> {
+        let topic = self.lookup(observed_key)?;
+        let raw = topic
+            .phases
+            .as_ref()
+            .and_then(|p| p.get("request"))
+            .or(topic.request.as_ref())?;
+        Some(self.resolve_refs(raw))
+    }
+
     fn resolve_refs_depth(&self, value: &Value, depth: usize) -> Value {
         const MAX_DEPTH: usize = 32;
         if depth > MAX_DEPTH {
@@ -328,9 +342,92 @@ impl Contract {
     }
 }
 
+/// Light, display-only validation of a provided request against a schema object:
+/// checks only top-level keys. Flags keys present in `provided` but not in
+/// `schema` ("unknown field") and required keys in `schema` absent from
+/// `provided` ("missing field"). A schema field is treated as optional when its
+/// value is a string ending in `?` (the contract's compact notation, e.g.
+/// `str?`, `[i32]?`). Non-object inputs yield no warnings.
+pub fn validate_against_schema(schema: &Value, provided: &Value) -> Vec<String> {
+    let (Some(schema), Some(provided)) = (schema.as_object(), provided.as_object()) else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    for key in provided.keys() {
+        if !schema.contains_key(key) {
+            warnings.push(format!("unknown field '{}' (not in contract request)", key));
+        }
+    }
+    for (key, spec) in schema {
+        let optional = spec.as_str().is_some_and(|s| s.trim_end().ends_with('?'));
+        if !optional && !provided.contains_key(key) {
+            warnings.push(format!("missing field '{}'", key));
+        }
+    }
+    warnings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    const TASK: &str = r#"
+types:
+  Pose2D:
+    x: f64
+    y: f64
+topics:
+  - key: task/nav/trajectory
+    pattern: task
+    phases:
+      request:
+        points:
+          - pose: { $ref: Pose2D }
+        trajectory_id: str?
+      feedback:
+        progress: f64
+  - key: call/safety/estop
+    pattern: call
+    request:
+      active: bool
+"#;
+
+    #[test]
+    fn request_schema_extracts_task_phases_request_with_refs_resolved() {
+        let c = Contract::from_yaml_str(TASK).unwrap();
+        let s = c.request_schema("task/nav/trajectory").unwrap();
+        assert_eq!(s["points"][0]["pose"], json!({ "x": "f64", "y": "f64" }));
+        assert_eq!(s["trajectory_id"], "str?");
+    }
+
+    #[test]
+    fn request_schema_extracts_call_request() {
+        let c = Contract::from_yaml_str(TASK).unwrap();
+        assert_eq!(c.request_schema("call/safety/estop").unwrap()["active"], "bool");
+    }
+
+    #[test]
+    fn request_schema_none_for_unknown_key() {
+        let c = Contract::from_yaml_str(TASK).unwrap();
+        assert!(c.request_schema("task/does/not/exist").is_none());
+    }
+
+    #[test]
+    fn validate_flags_unknown_and_missing_required_but_not_optional() {
+        let schema = json!({ "active": "bool", "mode": "str?" });
+        let warns = validate_against_schema(&schema, &json!({ "foo": 1 }));
+        assert!(warns.iter().any(|w| w.contains("unknown") && w.contains("foo")));
+        assert!(warns.iter().any(|w| w.contains("missing") && w.contains("active")));
+        // `mode` is optional (str?) so its absence is not flagged.
+        assert!(!warns.iter().any(|w| w.contains("mode")));
+    }
+
+    #[test]
+    fn validate_clean_request_has_no_warnings() {
+        let schema = json!({ "active": "bool" });
+        assert!(validate_against_schema(&schema, &json!({ "active": true })).is_empty());
+    }
 
     const SAMPLE: &str = r#"
 version: "0.1"

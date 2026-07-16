@@ -1413,9 +1413,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             settle,
             track,
         } => {
+            // A resolved contract lets --task surface & validate its request schema.
+            let contract = load_contract_opt(&cli.contract)?;
             run_scenario(
                 cli.json, &config, observe, preset, prefix, pub_, task, pub_rate, pub_for,
-                pub_count, for_, settle, track,
+                pub_count, for_, settle, track, contract,
             )
             .await?;
         }
@@ -1486,6 +1488,7 @@ async fn run_scenario(
     for_: Duration,
     settle: Option<Duration>,
     track: Vec<String>,
+    contract: Option<Contract>,
 ) -> Result<(), ZenmonError> {
     use std::time::Instant;
     use zenmon_core::scenario::{
@@ -1510,6 +1513,26 @@ async fn run_scenario(
             key: key.to_string(),
             field: field.to_string(),
         });
+    }
+
+    // If a contract is resolved and we're triggering a --task, surface its
+    // request schema (so the caller need not read source to build the request)
+    // and lightly validate the provided request. Display-only, never fatal.
+    if let (Some(pair), Some(c)) = (&task, &contract) {
+        if let Some(schema) = c.request_schema(&pair[0]) {
+            eprintln!("# contract request schema for '{}':", pair[0]);
+            for line in serde_json::to_string_pretty(&schema)
+                .unwrap_or_default()
+                .lines()
+            {
+                eprintln!("#   {}", line);
+            }
+            if let Ok(provided) = serde_json::from_str::<serde_json::Value>(&pair[1]) {
+                for w in zenmon_core::contract::validate_against_schema(&schema, &provided) {
+                    eprintln!("# ⚠ request: {}", w);
+                }
+            }
+        }
     }
 
     // Resolve the observed key set: --observe, then --preset expansion, then the
