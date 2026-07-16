@@ -535,30 +535,100 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
-        Command::Pub { key_expr, value, att } => {
+        Command::Pub {
+            key_expr,
+            value,
+            att,
+            rate,
+            count,
+            duration,
+        } => {
             let session = zenmon_core::session::open_session(&config).await?;
-            let mut builder = session.put(&key_expr, value.clone());
-            if let Some(ref att_json) = att {
-                builder = builder.attachment(att_json.as_bytes());
-            }
-            builder
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            if cli.json {
-                // Action result on stdout; no duplicate stderr message.
-                let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
-                println!(
-                    "{}",
-                    zenmon_core::output::publish_accepted_json(
-                        &key_expr,
-                        value.as_bytes().len(),
-                        attachment_bytes,
-                    )?
-                );
-            } else if let Some(ref att_json) = att {
-                eprintln!("Published to '{}': {} [att: {}]", key_expr, value, att_json);
-            } else {
-                eprintln!("Published to '{}': {}", key_expr, value);
+            let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
+
+            // Publish the same value/attachment once. Rebuilt per tick because
+            // the put builder is consumed by `.await`.
+            let publish_once = || async {
+                let mut builder = session.put(&key_expr, value.clone());
+                if let Some(ref att_json) = att {
+                    builder = builder.attachment(att_json.as_bytes());
+                }
+                builder.await.map_err(|e| color_eyre::eyre::eyre!(e))
+            };
+
+            match rate {
+                // Fixed-rate loop: republish on each interval tick until the
+                // count/duration budget is spent or Ctrl+C. Clap guarantees a
+                // bound is present, so this loop always terminates.
+                Some(hz) => {
+                    // The first interval tick fires immediately, so --count 1
+                    // publishes once and exits. Ticks are phase-locked to the
+                    // schedule (no drift from per-put latency).
+                    let mut interval =
+                        tokio::time::interval(crate::duration::rate_tick_interval(hz));
+                    let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
+                    let mut published: u64 = 0;
+                    if !cli.json {
+                        eprintln!(
+                            "Publishing to '{}' at {} Hz... (Ctrl+C to stop)",
+                            key_expr, hz
+                        );
+                    }
+                    loop {
+                        let deadline = budget.deadline();
+                        tokio::select! {
+                            biased;
+                            _ = watch::sleep_until_opt(deadline) => break,
+                            _ = tokio::signal::ctrl_c() => {
+                                if !cli.json {
+                                    eprintln!("\nStopped.");
+                                }
+                                break;
+                            }
+                            _ = interval.tick() => {
+                                publish_once().await?;
+                                published += 1;
+                                if budget.record() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if cli.json {
+                        // Single summary line on stdout; no duplicate stderr.
+                        println!(
+                            "{}",
+                            zenmon_core::output::publish_rate_summary_json(
+                                &key_expr,
+                                value.as_bytes().len(),
+                                attachment_bytes,
+                                published,
+                                hz,
+                            )?
+                        );
+                    } else {
+                        eprintln!("published {} message(s) at {} Hz", published, hz);
+                    }
+                }
+                // Default: single publish, output unchanged.
+                None => {
+                    publish_once().await?;
+                    if cli.json {
+                        // Action result on stdout; no duplicate stderr message.
+                        println!(
+                            "{}",
+                            zenmon_core::output::publish_accepted_json(
+                                &key_expr,
+                                value.as_bytes().len(),
+                                attachment_bytes,
+                            )?
+                        );
+                    } else if let Some(ref att_json) = att {
+                        eprintln!("Published to '{}': {} [att: {}]", key_expr, value, att_json);
+                    } else {
+                        eprintln!("Published to '{}': {}", key_expr, value);
+                    }
+                }
             }
             session
                 .close()

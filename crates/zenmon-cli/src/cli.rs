@@ -128,6 +128,19 @@ pub enum Command {
         /// JSON attachment metadata (e.g. '{"request_id":"001","client_id":"zenmon"}')
         #[arg(long)]
         att: Option<String>,
+
+        /// Republish the same value at a fixed rate (e.g. 10Hz). Requires
+        /// --count or --duration to bound the loop.
+        #[arg(long, requires = "rate_bound", value_parser = crate::duration::parse_rate_hz_arg)]
+        rate: Option<f64>,
+
+        /// With --rate, stop after N published messages
+        #[arg(long, group = "rate_bound", requires = "rate", value_parser = crate::duration::parse_count_arg)]
+        count: Option<u64>,
+
+        /// With --rate, stop after this much time (e.g. 5s)
+        #[arg(long, group = "rate_bound", requires = "rate", value_parser = crate::duration::parse_duration_arg)]
+        duration: Option<Duration>,
     },
 
     /// Scout the network for Zenoh nodes (no router needed).
@@ -360,5 +373,44 @@ mod tests {
         assert!(Cli::try_parse_from(["zenmon", "nodes"]).is_ok());
         assert!(Cli::try_parse_from(["zenmon", "liveliness"]).is_ok());
         assert!(Cli::try_parse_from(["zenmon", "nodes", "--watch"]).is_ok());
+    }
+
+    /// A single `pub` (no --rate) publishes once and needs no stop condition.
+    #[test]
+    fn plain_pub_parses() {
+        assert!(Cli::try_parse_from(["zenmon", "pub", "test/k", "{}"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--att", "{\"s\":1}"]).is_ok()
+        );
+    }
+
+    /// `--rate` republishes forever without a stop condition; requiring
+    /// `--count`/`--duration` mirrors the `nodes --watch` gating so an agent
+    /// can't accidentally launch an unbounded publisher.
+    #[test]
+    fn pub_rate_requires_count_or_duration() {
+        assert!(Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--rate", "10"]).is_err());
+    }
+
+    #[test]
+    fn pub_rate_allowed_with_count_or_duration() {
+        assert!(
+            Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--rate", "10", "--count", "5"])
+                .is_ok()
+        );
+        assert!(Cli::try_parse_from([
+            "zenmon", "pub", "test/k", "{}", "--rate", "10Hz", "--duration", "5s"
+        ])
+        .is_ok());
+    }
+
+    /// `--count`/`--duration` bound only the `--rate` loop; without `--rate` a
+    /// single publish ignores them, so accepting them would be a silent no-op.
+    #[test]
+    fn pub_bounds_require_rate() {
+        assert!(Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--count", "5"]).is_err());
+        assert!(
+            Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--duration", "5s"]).is_err()
+        );
     }
 }
