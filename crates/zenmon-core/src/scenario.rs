@@ -26,6 +26,10 @@ pub struct ScenarioEvent {
     pub kind: String,
     /// Decoded payload view.
     pub payload: Value,
+    /// True for the synthetic event representing the scenario's own trigger
+    /// (the `--pub` actuation or `--task` request) — the causal origin at
+    /// `t_rel_ms = 0`. Ordinary observed events are `false`.
+    pub trigger: bool,
 }
 
 /// What (if anything) the scenario actively triggered before observing.
@@ -152,14 +156,20 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
     let timeline: Vec<Value> = ordered
         .iter()
         .map(|e| {
-            json!({
+            let mut obj = json!({
                 "t_rel_ms": e.t_rel_ms,
                 "key_expr": e.key_expr,
                 "correlation_id": e.correlation_id,
                 "request_id": e.request_id,
                 "encoding": e.encoding,
                 "payload": e.payload,
-            })
+            });
+            // Only the trigger event carries the marker, so ordinary events
+            // serialize byte-for-byte as before.
+            if e.trigger {
+                obj["trigger"] = json!(true);
+            }
+            obj
         })
         .collect();
 
@@ -226,6 +236,7 @@ mod tests {
             encoding: "application/json".to_string(),
             kind: "PUT".to_string(),
             payload,
+            trigger: false,
         }
     }
 
@@ -322,6 +333,23 @@ mod tests {
         assert_eq!(ep["topics"], json!({}));
         assert_eq!(ep["correlations"], json!({}));
         assert_eq!(ep["timeline"], json!([]));
+    }
+
+    #[test]
+    fn trigger_event_is_marked_in_timeline() {
+        // The synthetic trigger event (the actuation/request that caused the
+        // episode) carries `trigger: true` so the causal origin is visible in
+        // the timeline, not only in `meta`. Ordinary events omit the marker.
+        let mut trig = ev(0, "cmd/go", None, None, json!({ "go": true }));
+        trig.trigger = true;
+        let normal = ev(10, "a/x", None, None, json!({ "n": 1 }));
+        let ep = build_episode(&meta(), &[trig, normal]);
+
+        let tl = ep["timeline"].as_array().unwrap();
+        assert_eq!(tl[0]["key_expr"], "cmd/go");
+        assert_eq!(tl[0]["trigger"], true);
+        // An ordinary event has no `trigger` key at all (output unchanged).
+        assert!(tl[1].get("trigger").is_none());
     }
 
     #[test]

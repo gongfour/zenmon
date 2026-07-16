@@ -1406,11 +1406,17 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             prefix,
             pub_,
             task,
+            pub_rate,
+            pub_for,
+            pub_count,
             for_,
             settle,
         } => {
-            run_scenario(cli.json, &config, observe, preset, prefix, pub_, task, for_, settle)
-                .await?;
+            run_scenario(
+                cli.json, &config, observe, preset, prefix, pub_, task, pub_rate, pub_for,
+                pub_count, for_, settle,
+            )
+            .await?;
         }
     }
 
@@ -1425,6 +1431,42 @@ fn attachment_str(msg: &zenmon_core::types::ZenohMessage, field: &str) -> Option
     v.get(field).and_then(|f| f.as_str()).map(String::from)
 }
 
+/// Build an observed [`ScenarioEvent`] from a received message, extracting the
+/// causal ids from its attachment and decoding the payload. `trigger` is always
+/// false — the synthetic trigger event is built separately.
+fn observed_event(
+    msg: zenmon_core::types::ZenohMessage,
+    t_rel_ms: u64,
+) -> zenmon_core::scenario::ScenarioEvent {
+    zenmon_core::scenario::ScenarioEvent {
+        t_rel_ms,
+        correlation_id: attachment_str(&msg, "correlation_id"),
+        request_id: attachment_str(&msg, "request_id"),
+        encoding: msg.encoding.clone(),
+        kind: msg.kind.clone(),
+        payload: msg.payload.to_view(),
+        key_expr: msg.key_expr,
+        trigger: false,
+    }
+}
+
+/// Build the synthetic trigger event at `t_rel_ms = 0` — the scenario's own
+/// actuation/request that caused the episode. `value` is parsed as JSON for the
+/// payload view, falling back to a plain string.
+fn make_trigger_event(key: &str, value: &str) -> zenmon_core::scenario::ScenarioEvent {
+    zenmon_core::scenario::ScenarioEvent {
+        t_rel_ms: 0,
+        key_expr: key.to_string(),
+        correlation_id: None,
+        request_id: None,
+        encoding: String::new(),
+        kind: "PUT".to_string(),
+        payload: serde_json::from_str(value)
+            .unwrap_or_else(|_| serde_json::Value::String(value.to_string())),
+        trigger: true,
+    }
+}
+
 /// The `scenario` orchestration: resolve observed keys, subscribe, optionally
 /// trigger a `--pub`/`--task`, observe a bounded window (early-exiting on the
 /// task response), then build and print the episode.
@@ -1437,6 +1479,9 @@ async fn run_scenario(
     prefix: String,
     pub_: Option<Vec<String>>,
     task: Option<Vec<String>>,
+    pub_rate: Option<f64>,
+    pub_for: Option<Duration>,
+    pub_count: Option<u64>,
     for_: Duration,
     settle: Option<Duration>,
 ) -> Result<(), ZenmonError> {
@@ -1523,29 +1568,65 @@ async fn run_scenario(
     // The stopwatch defines t_rel_ms = 0; trigger fires right after so its
     // reaction is measured from the same origin.
     let stopwatch = Instant::now();
+    let mut events: Vec<ScenarioEvent> = Vec::new();
+    // A sustained --pub runs on a background task, bounded by --pub-for/--pub-count.
+    let mut pub_task: Option<tokio::task::JoinHandle<()>> = None;
 
-    // Fire the trigger (one-shot). A publish failure is fatal.
-    match (&task, &pub_) {
+    // Fire the trigger and record it as the causal origin (t_rel_ms = 0). A
+    // publish failure on a one-shot path is fatal.
+    let trigger_ev: Option<ScenarioEvent> = match (&task, &pub_) {
         (Some(pair), _) => {
             let request_key = format!("{}/request", pair[0].trim_end_matches('/'));
             session
                 .put(&request_key, pair[1].clone())
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            Some(make_trigger_event(&request_key, &pair[1]))
         }
         (_, Some(pair)) => {
-            session
-                .put(&pair[0], pair[1].clone())
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            let key = pair[0].clone();
+            let value = pair[1].clone();
+            match pub_rate {
+                // Sustained: republish at a fixed rate on a background task so
+                // the actuation persists through the observe window (defeats a
+                // command watchdog), bounded by --pub-for/--pub-count.
+                Some(hz) => {
+                    let s = session.clone();
+                    let bounds = watch::Bounds::new(pub_count, pub_for);
+                    let (k, v) = (key.clone(), value.clone());
+                    pub_task = Some(tokio::spawn(async move {
+                        let mut interval =
+                            tokio::time::interval(crate::duration::rate_tick_interval(hz));
+                        let mut budget = watch::Budget::start(bounds);
+                        loop {
+                            interval.tick().await;
+                            if s.put(&k, v.clone()).await.is_err() {
+                                break;
+                            }
+                            if budget.record() {
+                                break;
+                            }
+                        }
+                    }));
+                }
+                None => {
+                    session
+                        .put(&key, value.clone())
+                        .await
+                        .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                }
+            }
+            Some(make_trigger_event(&key, &value))
         }
-        (None, None) => {}
+        (None, None) => None,
+    };
+    if let Some(te) = trigger_ev {
+        events.push(te);
     }
 
     // Observe the window. Ends when the task response arrives OR --for elapses;
     // then observe --settle more. Ctrl+C ends early with what we have.
     let window_deadline = stopwatch + for_;
-    let mut events: Vec<ScenarioEvent> = Vec::new();
     let mut ended_reason = EndedReason::WindowElapsed;
     let mut settle_until: Option<Instant> = None;
 
@@ -1568,15 +1649,7 @@ async fn run_scenario(
                     let is_response = response_key
                         .as_deref()
                         .is_some_and(|rk| rk == msg.key_expr);
-                    events.push(ScenarioEvent {
-                        t_rel_ms,
-                        correlation_id: attachment_str(&msg, "correlation_id"),
-                        request_id: attachment_str(&msg, "request_id"),
-                        encoding: msg.encoding.clone(),
-                        kind: msg.kind.clone(),
-                        payload: msg.payload.to_view(),
-                        key_expr: msg.key_expr,
-                    });
+                    events.push(observed_event(msg, t_rel_ms));
                     // First response ends the active window; then run --settle.
                     if is_response && settle_until.is_none() {
                         ended_reason = EndedReason::TaskResponse;
@@ -1604,15 +1677,7 @@ async fn run_scenario(
                     item = rx.recv() => match item {
                         Some(msg) => {
                             let t_rel_ms = stopwatch.elapsed().as_millis() as u64;
-                            events.push(ScenarioEvent {
-                                t_rel_ms,
-                                correlation_id: attachment_str(&msg, "correlation_id"),
-                                request_id: attachment_str(&msg, "request_id"),
-                                encoding: msg.encoding.clone(),
-                                kind: msg.kind.clone(),
-                                payload: msg.payload.to_view(),
-                                key_expr: msg.key_expr,
-                            });
+                            events.push(observed_event(msg, t_rel_ms));
                         }
                         None => break,
                     }
@@ -1621,6 +1686,9 @@ async fn run_scenario(
         }
     }
 
+    if let Some(h) = pub_task {
+        h.abort();
+    }
     for h in handles {
         h.abort();
     }
