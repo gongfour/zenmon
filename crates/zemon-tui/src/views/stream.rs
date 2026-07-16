@@ -166,6 +166,16 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
 
     let mut state = ListState::default().with_selected(Some(app.sub_selected));
     frame.render_stateful_widget(list, messages_area, &mut state);
+
+    if filtered_messages.is_empty() {
+        let inner = ratatui::layout::Rect {
+            x: messages_area.x + 2,
+            y: messages_area.y + 1,
+            width: messages_area.width.saturating_sub(4),
+            height: messages_area.height.saturating_sub(2),
+        };
+        super::render_empty_state(frame, inner, app.stream_empty_reason());
+    }
 }
 
 #[cfg(test)]

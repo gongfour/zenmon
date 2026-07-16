@@ -163,6 +163,38 @@ pub(crate) fn view_hints(view: ActiveView) -> &'static [KeyHint] {
     }
 }
 
+/// Why a view is showing nothing — so empty states explain the cause and the
+/// next action instead of an ambiguous blank panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmptyReason {
+    Connecting,
+    Disconnected,
+    NoDataYet,
+    FilteredOut,
+}
+
+/// (reason, next-action) text for an empty state. Understandable without color.
+pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static str) {
+    match reason {
+        EmptyReason::Connecting => (
+            "Connecting to the network…",
+            "Waiting for the session to come up.",
+        ),
+        EmptyReason::Disconnected => (
+            "Not connected.",
+            "Check the endpoint; press m to change mode or P to scan domains.",
+        ),
+        EmptyReason::NoDataYet => (
+            "Connected, but no messages observed yet.",
+            "Topics appear as messages arrive. Try Query (4) or Nodes (5), or ? for help.",
+        ),
+        EmptyReason::FilteredOut => (
+            "Nothing matches the current filter.",
+            "Press / to edit or clear the filter.",
+        ),
+    }
+}
+
 /// Compact status-bar hint: quit + view switch + the top few view bindings,
 /// always ending with `?:help`. Wide terminals show more; the rest live in `?`.
 pub(crate) fn compact_hint(view: ActiveView) -> String {
@@ -1069,6 +1101,48 @@ impl App {
         }
     }
 
+    /// Connection-level empty reason (connecting/disconnected), or `None` when
+    /// the session is up and the emptiness is view-specific.
+    fn connection_empty_reason(&self) -> Option<EmptyReason> {
+        match &self.connection_state {
+            ConnectionState::Connecting => Some(EmptyReason::Connecting),
+            ConnectionState::Disconnected(_) => Some(EmptyReason::Disconnected),
+            ConnectionState::Connected(_) => None,
+        }
+    }
+
+    /// Why the Stream message list is empty (only meaningful when it is).
+    pub(crate) fn stream_empty_reason(&self) -> EmptyReason {
+        if let Some(r) = self.connection_empty_reason() {
+            return r;
+        }
+        if !self.stream_filter.is_empty() && !self.sub_messages.is_empty() {
+            EmptyReason::FilteredOut
+        } else {
+            EmptyReason::NoDataYet
+        }
+    }
+
+    /// Why the Topics list is empty (only meaningful when it is).
+    pub(crate) fn topics_empty_reason(&self) -> EmptyReason {
+        if let Some(r) = self.connection_empty_reason() {
+            return r;
+        }
+        if !self.topic_filter.is_empty() && !self.topics.is_empty() {
+            EmptyReason::FilteredOut
+        } else {
+            EmptyReason::NoDataYet
+        }
+    }
+
+    /// Why the Nodes list is empty (only meaningful when it is).
+    pub(crate) fn nodes_empty_reason(&self) -> EmptyReason {
+        if let Some(r) = self.connection_empty_reason() {
+            return r;
+        }
+        EmptyReason::NoDataYet
+    }
+
     pub fn filtered_topics(&self) -> Vec<&TopicInfo> {
         if self.topic_filter.is_empty() {
             self.topics.iter().collect()
@@ -1533,6 +1607,27 @@ mod tests {
     fn lowercase_j_k_are_not_detail_scroll() {
         assert_eq!(detail_scroll_action(key(KeyCode::Char('j'))), None);
         assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
+    }
+
+    #[test]
+    fn empty_reason_reflects_connection_state() {
+        let mut app = App::new("test".into());
+        app.connection_state = ConnectionState::Connecting;
+        assert_eq!(app.stream_empty_reason(), EmptyReason::Connecting);
+        app.connection_state = ConnectionState::Disconnected("x".into());
+        assert_eq!(app.nodes_empty_reason(), EmptyReason::Disconnected);
+    }
+
+    #[test]
+    fn empty_reason_distinguishes_filter_from_no_data() {
+        let mut app = App::new("test".into());
+        app.connection_state = ConnectionState::Connected("zid".into());
+        // No data at all → NoDataYet.
+        assert_eq!(app.topics_empty_reason(), EmptyReason::NoDataYet);
+        // Data exists but the filter hides it → FilteredOut.
+        app.topics.push(TopicInfo { key_expr: "a/b".into() });
+        app.topic_filter = "zzz".into();
+        assert_eq!(app.topics_empty_reason(), EmptyReason::FilteredOut);
     }
 
     #[test]
