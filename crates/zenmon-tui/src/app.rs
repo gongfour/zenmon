@@ -56,7 +56,7 @@ fn payload_to_string(p: &MessagePayload) -> String {
     }
 }
 
-const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
+const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Network", "Liveliness"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveView {
@@ -64,7 +64,7 @@ pub enum ActiveView {
     Topics,
     Stream,
     Query,
-    Nodes,
+    Network,
     Liveliness,
 }
 
@@ -75,7 +75,7 @@ impl ActiveView {
             ActiveView::Topics => 1,
             ActiveView::Stream => 2,
             ActiveView::Query => 3,
-            ActiveView::Nodes => 4,
+            ActiveView::Network => 4,
             ActiveView::Liveliness => 5,
         }
     }
@@ -417,7 +417,7 @@ impl App {
                 KeyCode::Char('2') => self.active_view = ActiveView::Topics,
                 KeyCode::Char('3') => self.active_view = ActiveView::Stream,
                 KeyCode::Char('4') => self.active_view = ActiveView::Query,
-                KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
+                KeyCode::Char('5') => self.active_view = ActiveView::Network,
                 KeyCode::Char('6') => self.active_view = ActiveView::Liveliness,
                 KeyCode::Esc => {
                     self.active_view = ActiveView::Dashboard;
@@ -444,7 +444,7 @@ impl App {
                 self.scout_port_input.clear();
             }
             KeyCode::Char('s') => {
-                if self.scout_port_input.is_empty() && !self.port_scan_in_progress {
+                if !self.port_scan_in_progress {
                     self.pending_port_scan_request = true;
                 }
             }
@@ -548,7 +548,7 @@ impl App {
                 1 => ActiveView::Topics,
                 2 => ActiveView::Stream,
                 3 => ActiveView::Query,
-                4 => ActiveView::Nodes,
+                4 => ActiveView::Network,
                 5 => ActiveView::Liveliness,
                 _ => self.active_view,
             };
@@ -565,7 +565,12 @@ impl App {
             ActiveView::Topics => self.filtered_topics().len(),
             ActiveView::Stream => self.filtered_sub_messages().len(),
             ActiveView::Query => self.query_results.len(),
-            ActiveView::Nodes => self.nodes.len(),
+            ActiveView::Network => crate::views::topology::build_topology_rows(
+                &self.nodes,
+                self.self_zid.as_deref(),
+                SystemTime::now(),
+            )
+            .len(),
             ActiveView::Liveliness => self.liveliness_tokens.len(),
             ActiveView::Dashboard => return,
         };
@@ -585,7 +590,17 @@ impl App {
             }
             ActiveView::Stream => self.pin_stream_at(idx),
             ActiveView::Query => self.query_selected = idx,
-            ActiveView::Nodes => self.node_selected = idx,
+            ActiveView::Network => {
+                let rows = crate::views::topology::build_topology_rows(
+                    &self.nodes,
+                    self.self_zid.as_deref(),
+                    SystemTime::now(),
+                );
+                if let Some(n) = crate::views::topology::node_index_at_visual(&rows, idx) {
+                    self.node_selected = n;
+                    self.node_detail_scroll = 0;
+                }
+            }
             ActiveView::Liveliness => {
                 self.liveliness_selected = idx;
                 self.liveliness_log_scroll = 0;
@@ -606,7 +621,7 @@ impl App {
             ActiveView::Query => {
                 self.query_selected = self.query_selected.saturating_sub(1);
             }
-            ActiveView::Nodes => {
+            ActiveView::Network => {
                 self.node_selected = self.node_selected.saturating_sub(1);
             }
             ActiveView::Liveliness => {
@@ -637,9 +652,15 @@ impl App {
                     self.query_selected += 1;
                 }
             }
-            ActiveView::Nodes => {
-                let max = self.nodes.len().saturating_sub(1);
-                if self.node_selected < max {
+            ActiveView::Network => {
+                let total = crate::views::topology::node_row_count(
+                    &crate::views::topology::build_topology_rows(
+                        &self.nodes,
+                        self.self_zid.as_deref(),
+                        SystemTime::now(),
+                    ),
+                );
+                if self.node_selected + 1 < total {
                     self.node_selected += 1;
                 }
             }
@@ -804,38 +825,47 @@ impl App {
                 }
                 _ => {}
             },
-            ActiveView::Nodes => match key.code {
-                KeyCode::Char('y') => {
-                    if let Some(node) = self.nodes.get(self.node_selected).cloned() {
-                        self.copy_to_clipboard(node.zid, "zid");
-                    } else {
-                        self.set_error_toast("No node selected");
+            ActiveView::Network => {
+                let rows = crate::views::topology::build_topology_rows(
+                    &self.nodes,
+                    self.self_zid.as_deref(),
+                    SystemTime::now(),
+                );
+                let total = crate::views::topology::node_row_count(&rows);
+                match key.code {
+                    KeyCode::Char('y') => {
+                        if let Some(z) =
+                            crate::views::topology::nth_node_zid(&rows, self.node_selected)
+                        {
+                            self.copy_to_clipboard(z.to_string(), "zid");
+                        } else {
+                            self.set_error_toast("No node selected");
+                        }
                     }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.node_selected = self.node_selected.saturating_sub(1);
-                    self.node_detail_scroll = 0;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let max = self.nodes.len().saturating_sub(1);
-                    if self.node_selected < max {
-                        self.node_selected += 1;
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.node_selected = self.node_selected.saturating_sub(1);
                         self.node_detail_scroll = 0;
                     }
-                }
-                KeyCode::Char('J') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_add(3);
-                }
-                KeyCode::Char('K') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_sub(3);
-                }
-                KeyCode::Char('s') => {
-                    if !self.scout_in_progress {
-                        self.pending_scout_request = true;
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.node_selected + 1 < total {
+                            self.node_selected += 1;
+                            self.node_detail_scroll = 0;
+                        }
                     }
+                    KeyCode::Char('J') => {
+                        self.node_detail_scroll = self.node_detail_scroll.saturating_add(3);
+                    }
+                    KeyCode::Char('K') => {
+                        self.node_detail_scroll = self.node_detail_scroll.saturating_sub(3);
+                    }
+                    KeyCode::Char('r') => {
+                        if !self.scout_in_progress {
+                            self.pending_scout_request = true;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             ActiveView::Liveliness => match key.code {
                 KeyCode::Char('y') => {
                     if let Some(token) = self.liveliness_tokens.get(self.liveliness_selected).cloned() {
@@ -1004,7 +1034,7 @@ impl App {
             ActiveView::Topics => views::topics::render(self, frame, content_area),
             ActiveView::Stream => views::stream::render(self, frame, content_area),
             ActiveView::Query => views::query::render(self, frame, content_area),
-            ActiveView::Nodes => views::nodes::render(self, frame, content_area),
+            ActiveView::Network => views::network::render(self, frame, content_area),
             ActiveView::Liveliness => views::liveliness::render(self, frame, content_area),
         }
 
@@ -1078,7 +1108,7 @@ impl App {
             ),
             middle_span,
             Span::styled(
-                " q:quit  1-6:view  /:filter  y:copy  P:port  m:mode ",
+                " q:quit  1-6:view  /:filter  y:copy  r:refresh  P:port  m:mode ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
@@ -1098,7 +1128,7 @@ impl App {
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Scout Port ")
+            .title(" Switch Scouting Port ")
             .style(
                 Style::default()
                     .fg(Color::White)
@@ -1108,7 +1138,8 @@ impl App {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let [current_row, input_row, _gap, list_area, hint_row] = Layout::vertical([
+        let [subtitle_row, current_row, input_row, _gap, list_area, hint_row] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -1117,13 +1148,15 @@ impl App {
         ])
         .areas(inner);
 
+        frame.render_widget(
+            Paragraph::new("Zenoh multicast discovery: 224.0.0.224:<port>")
+                .style(Style::default().fg(Color::DarkGray)),
+            subtitle_row,
+        );
+
         let current_text = match self.scout_port_current {
-            Some(p) => format!(
-                "Current: {} (domain {})",
-                p,
-                p.saturating_sub(7446)
-            ),
-            None => "Current: 7446 (default, domain 0)".to_string(),
+            Some(p) => format!("Current: {}", p),
+            None => "Current: 7446 (default)".to_string(),
         };
         frame.render_widget(
             Paragraph::new(current_text).style(Style::default().fg(Color::Gray)),
@@ -1131,9 +1164,9 @@ impl App {
         );
 
         let input_text = if self.scout_port_input.is_empty() {
-            "New port: _".to_string()
+            "Go to port: _".to_string()
         } else {
-            format!("New port: {}_", self.scout_port_input)
+            format!("Go to port: {}_", self.scout_port_input)
         };
         frame.render_widget(
             Paragraph::new(input_text).style(Style::default().fg(Color::Cyan)),
@@ -1176,10 +1209,9 @@ impl App {
                             ConnectionState::Connected(zid) if r.nodes.iter().any(|n| n.zid == *zid)
                         );
                         let base_text = format!(
-                            "{}{:>5}  (domain {:<3})  {} node(s)",
+                            "{}{:>5}   {} node(s)",
                             marker,
                             r.port,
-                            r.port.saturating_sub(7446),
                             r.nodes.len()
                         );
                         let mut spans = vec![Span::styled(
@@ -1209,7 +1241,7 @@ impl App {
         }
 
         frame.render_widget(
-            Paragraph::new(" s:scan  Enter:reconnect  jk/↑↓:select  Esc:close ")
+            Paragraph::new(" s:scan  jk/↑↓:select  Enter:switch  Esc:close ")
                 .style(Style::default().fg(Color::DarkGray)),
             hint_row,
         );
