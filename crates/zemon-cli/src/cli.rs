@@ -181,11 +181,58 @@ pub enum Command {
         b: String,
     },
 
+    /// Test queryable: serve a fixed reply to incoming GET queries
+    Queryable {
+        #[command(subcommand)]
+        command: QueryableCommand,
+    },
+
     /// Launch interactive TUI dashboard
     Tui {
         /// UI refresh interval (e.g. 100ms, 1s)
         #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
         refresh: Duration,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum QueryableCommand {
+    /// Serve a fixed reply to incoming GET queries (for testing responder paths).
+    Serve {
+        /// Key expression to declare the queryable on
+        key_expr: String,
+
+        /// Fixed reply payload (string)
+        #[arg(long, conflicts_with = "reply_file")]
+        reply: Option<String>,
+
+        /// Fixed reply payload read from a file
+        #[arg(long, conflicts_with = "reply")]
+        reply_file: Option<PathBuf>,
+
+        /// Concrete reply key (required when key_expr is a wildcard)
+        #[arg(long)]
+        reply_key: Option<String>,
+
+        /// Encoding for the reply (e.g. application/json)
+        #[arg(long)]
+        encoding: Option<String>,
+
+        /// Stop after N successful replies
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        count: Option<u64>,
+
+        /// Stop after this much time (e.g. 30s)
+        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        duration: Option<Duration>,
+
+        /// Include (capped) request payload/key in JSON events
+        #[arg(long)]
+        include_request: bool,
+
+        /// Cap included request preview to N bytes (default 1024)
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        max_request_bytes: Option<u64>,
     },
 }
 

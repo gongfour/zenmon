@@ -8,6 +8,7 @@ pub mod types;
 pub mod discover;
 pub mod subscriber;
 pub mod query;
+pub mod queryable;
 pub mod registry;
 pub mod merge;
 pub mod nodediff;
