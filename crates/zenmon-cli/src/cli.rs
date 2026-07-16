@@ -263,6 +263,44 @@ pub enum Command {
         #[command(subcommand)]
         command: ContractCommand,
     },
+
+    /// Record a correlated multi-topic diagnostic session and emit one episode
+    /// JSON an AI can read to reason about cause & effect. Optionally triggers a
+    /// `--pub` actuation or a `--task` request first, then observes a bounded
+    /// window. Data-only: it correlates, it does not diagnose.
+    #[command(group(clap::ArgGroup::new("topics").required(true).multiple(true).args(["observe", "preset"])))]
+    Scenario {
+        /// Topic to record (repeatable). At least one of --observe/--preset.
+        #[arg(long)]
+        observe: Vec<String>,
+
+        /// Expand a built-in diagnosis topic set (currently: stall)
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Prefix applied to --preset expansion (default: "**", prefix-agnostic)
+        #[arg(long, default_value = "**")]
+        prefix: String,
+
+        /// One-shot actuation trigger: publish VALUE to KEY once, after observing
+        /// starts. Mutually exclusive with --task.
+        #[arg(long = "pub", value_names = ["KEY", "VALUE"], num_args = 2, conflicts_with = "task")]
+        pub_: Option<Vec<String>>,
+
+        /// dotori Task trigger: publish REQUEST_JSON to <PREFIX>/request and also
+        /// observe <PREFIX>/feedback and <PREFIX>/response. Mutually exclusive
+        /// with --pub.
+        #[arg(long, value_names = ["PREFIX", "REQUEST_JSON"], num_args = 2, conflicts_with = "pub_")]
+        task: Option<Vec<String>>,
+
+        /// Capture window (e.g. 8s). Required.
+        #[arg(long = "for", value_parser = crate::duration::parse_duration_arg)]
+        for_: Duration,
+
+        /// Extra observe time after the trigger/window ends (e.g. 2s)
+        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        settle: Option<Duration>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -447,5 +485,72 @@ mod tests {
         assert!(
             Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--duration", "5s"]).is_err()
         );
+    }
+
+    /// `--for` is required: scenario has no default window, so an unbounded
+    /// invocation would never terminate (unsafe for an agent).
+    #[test]
+    fn scenario_requires_for() {
+        assert!(
+            Cli::try_parse_from(["zenmon", "scenario", "--observe", "a/**"]).is_err(),
+            "missing --for must be rejected"
+        );
+        assert!(
+            Cli::try_parse_from(["zenmon", "scenario", "--observe", "a/**", "--for", "8s"]).is_ok()
+        );
+    }
+
+    /// At least one of --observe/--preset must be given, else there is nothing
+    /// to record.
+    #[test]
+    fn scenario_requires_observe_or_preset() {
+        assert!(
+            Cli::try_parse_from(["zenmon", "scenario", "--for", "8s"]).is_err(),
+            "no topic source must be rejected"
+        );
+        assert!(
+            Cli::try_parse_from(["zenmon", "scenario", "--preset", "stall", "--for", "8s"]).is_ok()
+        );
+    }
+
+    /// --pub and --task are mutually exclusive triggers.
+    #[test]
+    fn scenario_pub_and_task_conflict() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v", "--task",
+            "p", "{}",
+        ])
+        .is_err());
+    }
+
+    /// Each trigger accepts exactly its two positional values.
+    #[test]
+    fn scenario_pub_and_task_take_two_values() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "cmd/go",
+            "{\"go\":true}",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon",
+            "scenario",
+            "--preset",
+            "stall",
+            "--prefix",
+            "dotori/forky001",
+            "--for",
+            "8s",
+            "--settle",
+            "2s",
+            "--task",
+            "dotori/forky001/task/mission/mission",
+            "{\"mission_id\":\"m1\"}",
+        ])
+        .is_ok());
+        // --pub with only one value is rejected (num_args = 2).
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "onlykey",
+        ])
+        .is_err());
     }
 }

@@ -17,3 +17,4 @@ pub mod merge;
 pub mod nodediff;
 pub mod scout;
 pub mod info;
+pub mod scenario;
