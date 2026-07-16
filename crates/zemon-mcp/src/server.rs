@@ -20,9 +20,6 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ZemonMcpServer {
-    // Unused until Task 2 wires session-backed tools; kept now so `new()`'s
-    // signature (and every later tool's access to shared state) is stable.
-    #[allow(dead_code)]
     pub(crate) state: Arc<ServerState>,
     tool_router: ToolRouter<ZemonMcpServer>,
 }
@@ -33,6 +30,17 @@ pub struct KeyexprParams {
     pub a: String,
     /// Second key expression (B).
     pub b: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DiscoverParams {
+    /// Key expression to filter (default "**").
+    #[serde(default = "default_key_expr")]
+    pub key_expr: String,
+}
+
+fn default_key_expr() -> String {
+    "**".to_string()
 }
 
 #[tool_router]
@@ -51,6 +59,23 @@ impl ZemonMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let json = handlers::keyexpr_json(&p.a, &p.b).map_err(to_mcp_error)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    #[tool(description = "List active keys/topics matching a key expression.")]
+    async fn discover(
+        &self,
+        Parameters(p): Parameters<DiscoverParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let session = self.state.session().await.map_err(to_mcp_error)?;
+        match handlers::discover_json(&session, &p.key_expr).await {
+            Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
+            Err(e) => {
+                if e.is_connection() {
+                    self.state.invalidate_session().await;
+                }
+                Err(to_mcp_error(e))
+            }
+        }
     }
 }
 

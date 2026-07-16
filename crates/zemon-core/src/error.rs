@@ -62,6 +62,13 @@ impl ZemonError {
         Self::new(ErrorKind::Internal, message)
     }
 
+    /// True only for the `connection` kind. Non-CLI consumers (e.g. the MCP
+    /// adapter) use this to decide whether to drop a cached session so the
+    /// next call reopens it.
+    pub fn is_connection(&self) -> bool {
+        matches!(self.kind, ErrorKind::Connection)
+    }
+
     /// Stable, machine-readable kind as its snake_case string — the exact
     /// same string `to_json`'s `error.kind` field serializes to. Non-CLI
     /// consumers (e.g. the MCP adapter) use this to expose the same error
@@ -194,6 +201,15 @@ mod tests {
         assert_eq!(ZemonError::connection("x").exit_code(), 3);
         assert_eq!(ZemonError::timeout("x").exit_code(), 4);
         assert_eq!(ZemonError::not_found("x").exit_code(), 5);
+    }
+
+    #[test]
+    fn is_connection_true_only_for_connection_kind() {
+        assert!(ZemonError::connection("x").is_connection());
+        assert!(!ZemonError::timeout("x").is_connection());
+        assert!(!ZemonError::invalid_input("x").is_connection());
+        assert!(!ZemonError::not_found("x").is_connection());
+        assert!(!ZemonError::internal("x").is_connection());
     }
 
     #[test]

@@ -11,6 +11,18 @@ pub fn keyexpr_json(a: &str, b: &str) -> Result<String, ZemonError> {
         .map_err(|e| ZemonError::internal(format!("serialize keyexpr result: {e}")))
 }
 
+/// `discover` tool: list active keys/topics for `key_expr`.
+pub async fn discover_json(
+    session: &zenoh::Session,
+    key_expr: &str,
+) -> Result<String, ZemonError> {
+    let topics = zemon_core::discover::discover(session, key_expr)
+        .await
+        .map_err(ZemonError::from)?;
+    zemon_core::output::to_collection_json(&topics)
+        .map_err(|e| ZemonError::internal(format!("serialize discover result: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26,5 +38,14 @@ mod tests {
     #[test]
     fn keyexpr_json_rejects_invalid_expr() {
         assert!(keyexpr_json("a/**/**/c", "b").is_err());
+    }
+
+    #[test]
+    fn discover_json_uses_count_items_envelope() {
+        let empty: Vec<zemon_core::types::TopicInfo> = vec![];
+        let json = zemon_core::output::to_collection_json(&empty).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["count"], 0);
+        assert!(v["items"].as_array().unwrap().is_empty());
     }
 }
