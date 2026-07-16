@@ -289,6 +289,61 @@ pub fn load_segment(
     Ok(out)
 }
 
+/// Filters for a reader query.
+#[derive(Debug, Clone)]
+pub struct ReadFilter {
+    pub key: String,
+    pub since: Option<SystemTime>,
+    pub until: Option<SystemTime>,
+}
+
+/// True if `record_key` is matched by `filter_key` (keyexpr intersection).
+/// An invalid filter key expression is an `invalid_input` error.
+pub fn key_matches(filter_key: &str, record_key: &str) -> Result<bool, ZemonError> {
+    use zenoh::key_expr::KeyExpr;
+    let filter = KeyExpr::try_from(filter_key)
+        .map_err(|e| ZemonError::invalid_input(format!("invalid key expression '{}': {}", filter_key, e)))?;
+    // A stored key is always a concrete key; if it fails to parse, treat as no-match.
+    match KeyExpr::try_from(record_key) {
+        Ok(rk) => Ok(filter.intersects(&rk)),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Parse `--since` / `--until`: a relative duration (interpreted as `now - dur`)
+/// or an absolute RFC3339 timestamp.
+pub fn parse_time_bound(s: &str, now: SystemTime) -> Result<SystemTime, ZemonError> {
+    let t = s.trim();
+    if let Ok(dur) = humantime::parse_duration(t) {
+        return now
+            .checked_sub(dur)
+            .ok_or_else(|| ZemonError::invalid_input(format!("time '{}' is before the epoch", s)));
+    }
+    humantime::parse_rfc3339(t)
+        .map_err(|e| ZemonError::invalid_input(format!("invalid time '{}': {} (try 10m or an RFC3339 timestamp)", s, e)))
+}
+
+/// True if a record satisfies the filter's key and time window. A record with
+/// no `received` time (v1) is time-unbounded (passes any since/until).
+pub fn record_in_window(pr: &PositionedRecord, filter: &ReadFilter) -> Result<bool, ZemonError> {
+    if !key_matches(&filter.key, &pr.record.key_expr)? {
+        return Ok(false);
+    }
+    if let Some(rx) = pr.received {
+        if let Some(since) = filter.since {
+            if rx < since {
+                return Ok(false);
+            }
+        }
+        if let Some(until) = filter.until {
+            if rx >= until {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,6 +577,39 @@ mod tests {
         assert_eq!(recs.len(), 1); // partial dropped, no error
         // But when NOT tolerated, the corrupt line is an error.
         assert!(load_segment(&path, false).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn key_matches_uses_keyexpr_intersection() {
+        assert!(key_matches("a/*", "a/b").unwrap());
+        assert!(key_matches("**", "x/y/z").unwrap());
+        assert!(!key_matches("a/*", "b/c").unwrap());
+        // "a//b" (empty chunk) is not a valid key expression, unlike keyexpr.rs's
+        // char-set restrictions this repo's brief assumed; mirror the invalid
+        // example already verified in crates/zemon-core/src/keyexpr.rs.
+        assert_eq!(key_matches("a//b", "a/b").unwrap_err().kind, crate::error::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn parse_time_bound_relative_and_absolute() {
+        let now = t(10_000);
+        assert_eq!(parse_time_bound("1000s", now).unwrap(), t(9_000)); // now - 1000s
+        assert_eq!(parse_time_bound("1970-01-01T00:00:05Z", now).unwrap(), t(5));
+        assert!(parse_time_bound("garbage", now).is_err());
+    }
+
+    #[test]
+    fn record_in_window_respects_since_until_and_key() {
+        let dir = tempdir_unique("win");
+        let path = write_segment(&dir, 1000, 0, &[&rec_line("a/b", 1000)]);
+        let pr = load_segment(&path, true).unwrap().remove(0);
+        let f = ReadFilter { key: "a/*".into(), since: Some(t(500)), until: Some(t(2000)) };
+        assert!(record_in_window(&pr, &f).unwrap());
+        let f2 = ReadFilter { key: "a/*".into(), since: Some(t(1500)), until: None };
+        assert!(!record_in_window(&pr, &f2).unwrap()); // before since
+        let f3 = ReadFilter { key: "z/*".into(), since: None, until: None };
+        assert!(!record_in_window(&pr, &f3).unwrap()); // key mismatch
         std::fs::remove_dir_all(&dir).ok();
     }
 }
