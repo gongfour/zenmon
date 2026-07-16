@@ -324,6 +324,11 @@ pub enum Command {
         /// correlations/tracks). Much smaller output for long/high-rate sessions.
         #[arg(long)]
         no_timeline: bool,
+
+        /// Dry run: print the resolved observe set, trigger, tracks, and window,
+        /// then exit without opening a session or triggering anything.
+        #[arg(long)]
+        explain: bool,
     },
 }
 
@@ -584,6 +589,14 @@ mod tests {
     fn scenario_no_timeline_flag_parses() {
         assert!(Cli::try_parse_from([
             "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--no-timeline",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn scenario_explain_flag_parses() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--preset", "stall", "--for", "8s", "--explain",
         ])
         .is_ok());
     }
