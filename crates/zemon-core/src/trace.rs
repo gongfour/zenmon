@@ -167,6 +167,69 @@ impl SegmentWriter {
     }
 }
 
+/// Prune closed segments to satisfy retention bounds. The newest segment (the
+/// active one being written) is never deleted here. Age deletion uses a closed
+/// segment's exclusive upper bound (the next segment's first timestamp): the
+/// whole segment is older than `now - max_age` only when that bound is.
+/// Returns the number of segments deleted.
+pub fn enforce_retention(
+    dir: &Path,
+    max_total_size: Option<u64>,
+    max_age: Option<Duration>,
+    now: SystemTime,
+) -> Result<u64, ZemonError> {
+    let segs = discover_segments(dir)?;
+    if segs.len() <= 1 {
+        return Ok(0);
+    }
+    let closed = &segs[..segs.len() - 1]; // exclude newest/active
+
+    // Mark for deletion (oldest first), by age then by total-size cap.
+    let mut delete: Vec<bool> = vec![false; closed.len()];
+
+    if let Some(age) = max_age {
+        if let Some(cutoff) = now.checked_sub(age) {
+            for (i, _seg) in closed.iter().enumerate() {
+                if let Some(upper) = segment_upper_bound(&segs, i) {
+                    if upper < cutoff {
+                        delete[i] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(cap) = max_total_size {
+        let mut total: u64 = segs.iter().map(|s| file_len(&s.path)).sum();
+        // Drop oldest closed segments until within cap (skip already-marked).
+        for (i, seg) in closed.iter().enumerate() {
+            if total <= cap {
+                break;
+            }
+            if !delete[i] {
+                delete[i] = true;
+                total = total.saturating_sub(file_len(&seg.path));
+            } else {
+                total = total.saturating_sub(file_len(&seg.path));
+            }
+        }
+    }
+
+    let mut deleted = 0;
+    for (i, seg) in closed.iter().enumerate() {
+        if delete[i] {
+            std::fs::remove_file(&seg.path)
+                .map_err(|e| ZemonError::internal(format!("cannot remove {}: {}", seg.path.display(), e)))?;
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
+}
+
+fn file_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +385,44 @@ mod tests {
         let segs = discover_segments(&dir).unwrap();
         assert_eq!(segs.len(), 2);
         assert_ne!(segs[0].seq, segs[1].seq); // distinct seq despite same second
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn retention_deletes_oldest_over_size_cap() {
+        let dir = tempdir_unique("retsize");
+        // three ~11-byte segments; cap at 25 bytes -> must drop oldest until <=25.
+        write_segment(&dir, 1000, 0, &["0123456789"]);
+        write_segment(&dir, 2000, 0, &["0123456789"]);
+        write_segment(&dir, 3000, 0, &["0123456789"]); // newest (active) - protected from age, not size
+        let deleted = enforce_retention(&dir, Some(25), None, t(4000)).unwrap();
+        assert_eq!(deleted, 1);
+        let segs = discover_segments(&dir).unwrap();
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].first, t(2000)); // oldest gone
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn retention_deletes_closed_segments_older_than_age() {
+        let dir = tempdir_unique("retage");
+        write_segment(&dir, 1000, 0, &["x"]); // upper bound 2000
+        write_segment(&dir, 2000, 0, &["x"]); // upper bound 3000
+        write_segment(&dir, 3000, 0, &["x"]); // newest, protected
+        // now=3600, max_age=1000s -> cutoff=2600. seg0 upper(2000)<2600 delete; seg1 upper(3000)>=2600 keep.
+        let deleted = enforce_retention(&dir, None, Some(Duration::from_secs(1000)), t(3600)).unwrap();
+        assert_eq!(deleted, 1);
+        let segs = discover_segments(&dir).unwrap();
+        assert_eq!(segs[0].first, t(2000));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn retention_never_deletes_the_only_segment() {
+        let dir = tempdir_unique("retone");
+        write_segment(&dir, 1000, 0, &["0123456789"]);
+        let deleted = enforce_retention(&dir, Some(1), Some(Duration::from_secs(0)), t(9_999_999)).unwrap();
+        assert_eq!(deleted, 0); // newest/active is protected
         std::fs::remove_dir_all(&dir).ok();
     }
 }
