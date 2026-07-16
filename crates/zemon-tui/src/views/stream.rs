@@ -1,5 +1,4 @@
 use crate::app::App;
-use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -132,12 +131,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let items: Vec<ListItem> = filtered_messages
         .iter()
         .map(|msg| {
-            let payload_str = match &msg.payload {
-                MessagePayload::Json(v) => {
-                    serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
-                }
-                other => format!("{}", other),
-            };
+            let payload_str = msg.payload.pretty();
             let att_str = msg.attachment.as_ref().map(|a| format!(" att:{}", a));
             let ts = format_stream_timestamp(msg.timestamp.as_deref().unwrap_or(""));
             let mut spans = vec![
@@ -172,6 +166,16 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
 
     let mut state = ListState::default().with_selected(Some(app.sub_selected));
     frame.render_stateful_widget(list, messages_area, &mut state);
+
+    if filtered_messages.is_empty() {
+        let inner = ratatui::layout::Rect {
+            x: messages_area.x + 2,
+            y: messages_area.y + 1,
+            width: messages_area.width.saturating_sub(4),
+            height: messages_area.height.saturating_sub(2),
+        };
+        super::render_empty_state(frame, inner, app.stream_empty_reason());
+    }
 }
 
 #[cfg(test)]
@@ -181,9 +185,10 @@ mod tests {
     #[test]
     fn formats_zenoh_timestamp_as_readable_datetime() {
         let formatted = format_stream_timestamp("7386690599959157260/33");
-        // zenoh::time::Timestamp now serializes with nanosecond precision;
-        // trim_fractional_zeros only removes trailing zeros, so all 9 digits remain.
-        assert_eq!(formatted, "2024-07-01 15:32:06.860479001");
+        // zenoh 1.9's `to_string_rfc3339_lossy()` renders the fraction at
+        // microsecond precision, so the sub-microsecond nanosecond digits are
+        // dropped before `trim_fractional_zeros` ever sees them.
+        assert_eq!(formatted, "2024-07-01 15:32:06.860479");
     }
 
     #[test]

@@ -7,13 +7,13 @@ use zemon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResu
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
 
 /// Return the tab index hit by a click at `(col, row)`, or `None`.
-pub(crate) fn tab_hit(rects: &[Option<Rect>; 6], col: u16, row: u16) -> Option<usize> {
+pub(crate) fn tab_hit(rects: &[Option<Rect>; 7], col: u16, row: u16) -> Option<usize> {
     for (i, maybe) in rects.iter().enumerate() {
         if let Some(r) = maybe {
             if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
@@ -48,15 +48,222 @@ pub(crate) fn list_hit(
 }
 
 fn payload_to_string(p: &MessagePayload) -> String {
-    match p {
-        MessagePayload::Json(v) => {
-            serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string())
-        }
-        MessagePayload::Raw { bytes_len } => format!("<{} bytes>", bytes_len),
+    p.pretty()
+}
+
+/// A detail-panel scroll request. Uppercase `J`/`K` scroll the detail panel in
+/// every view; we accept the uppercase char regardless of how the terminal
+/// reports the Shift modifier, so the contract is portable and consistent.
+/// Lowercase `j`/`k` remain list navigation and are not handled here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DetailScroll {
+    Down,
+    Up,
+}
+
+pub(crate) fn detail_scroll_action(key: KeyEvent) -> Option<DetailScroll> {
+    match key.code {
+        KeyCode::Char('J') => Some(DetailScroll::Down),
+        KeyCode::Char('K') => Some(DetailScroll::Up),
+        _ => None,
     }
 }
 
-const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
+/// Apply a detail-scroll action to a scroll offset (3 lines per step,
+/// saturating at 0).
+pub(crate) fn apply_detail_scroll(scroll: u16, action: DetailScroll) -> u16 {
+    match action {
+        DetailScroll::Down => scroll.saturating_add(3),
+        DetailScroll::Up => scroll.saturating_sub(3),
+    }
+}
+
+/// Human label for a scout/multicast port. Ports in the Zenoh domain range
+/// (7446..=7546, i.e. domains 0..=100) are shown as their domain id; anything
+/// else is a custom port and is labeled as a port, not a domain — so an
+/// arbitrary port below 7446 isn't misreported as "domain 0".
+pub(crate) fn domain_port_label(port: u16) -> String {
+    if (7446..=7546).contains(&port) {
+        format!("domain {} (port {})", port - 7446, port)
+    } else {
+        format!("port {} (custom)", port)
+    }
+}
+
+const TAB_TITLES: [&str; 7] =
+    ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness", "Network"];
+
+/// One key binding, used as the single source of truth for both the compact
+/// status-bar hint and the `?` help overlay so they can't drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeyHint {
+    pub keys: &'static str,
+    pub desc: &'static str,
+}
+
+impl KeyHint {
+    const fn new(keys: &'static str, desc: &'static str) -> Self {
+        Self { keys, desc }
+    }
+}
+
+/// Bindings available in every view.
+pub(crate) fn global_hints() -> &'static [KeyHint] {
+    const HINTS: &[KeyHint] = &[
+        KeyHint::new("1-6", "switch view"),
+        KeyHint::new("?", "toggle this help"),
+        KeyHint::new("m", "connection mode"),
+        KeyHint::new("P", "domain scan & switch"),
+        KeyHint::new("Esc", "back to Dashboard"),
+        KeyHint::new("q", "quit"),
+    ];
+    HINTS
+}
+
+/// Bindings specific to the given view.
+pub(crate) fn view_hints(view: ActiveView) -> &'static [KeyHint] {
+    const DASHBOARD: &[KeyHint] = &[KeyHint::new("click", "open item in its view")];
+    const TOPICS: &[KeyHint] = &[
+        KeyHint::new("j/k", "select topic"),
+        KeyHint::new("J/K", "scroll detail"),
+        KeyHint::new("Enter", "open in Stream"),
+        KeyHint::new("/", "filter"),
+        KeyHint::new("y/Y", "copy payload / key"),
+    ];
+    const STREAM: &[KeyHint] = &[
+        KeyHint::new("j/k", "scroll messages"),
+        KeyHint::new("Space", "pause / resume"),
+        KeyHint::new("f", "follow latest"),
+        KeyHint::new("/", "filter"),
+        KeyHint::new("y/Y", "copy payload / key"),
+    ];
+    const QUERY: &[KeyHint] = &[
+        KeyHint::new("i or /", "edit query"),
+        KeyHint::new("Enter", "run query"),
+        KeyHint::new("j/k", "select result"),
+        KeyHint::new("y", "copy payload"),
+    ];
+    const NODES: &[KeyHint] = &[
+        KeyHint::new("j/k", "select node"),
+        KeyHint::new("J/K", "scroll detail"),
+        KeyHint::new("s", "discover / refresh nodes"),
+        KeyHint::new("y", "copy ZID"),
+    ];
+    const LIVELINESS: &[KeyHint] = &[
+        KeyHint::new("j/k", "select token"),
+        KeyHint::new("J/K", "scroll event log"),
+        KeyHint::new("y", "copy key"),
+    ];
+    const NETWORK: &[KeyHint] = &[
+        KeyHint::new("J/K", "scroll graph"),
+        KeyHint::new("5", "node details"),
+    ];
+    match view {
+        ActiveView::Dashboard => DASHBOARD,
+        ActiveView::Topics => TOPICS,
+        ActiveView::Stream => STREAM,
+        ActiveView::Query => QUERY,
+        ActiveView::Nodes => NODES,
+        ActiveView::Liveliness => LIVELINESS,
+        ActiveView::Network => NETWORK,
+    }
+}
+
+/// How many 1-second buckets of rate history to keep for sparklines.
+const RATE_WINDOW_SECS: usize = 30;
+
+/// A bounded ring buffer of per-second byte counts, used for bandwidth
+/// sparklines. Idle seconds are recorded as `0` buckets so a topic that goes
+/// quiet shows a real dip rather than a stale value.
+#[derive(Debug, Clone)]
+pub(crate) struct RateWindow {
+    samples: std::collections::VecDeque<u64>,
+    cap: usize,
+}
+
+impl RateWindow {
+    pub(crate) fn new(cap: usize) -> Self {
+        Self {
+            samples: std::collections::VecDeque::new(),
+            cap,
+        }
+    }
+
+    /// Record one completed 1-second bucket, evicting the oldest beyond `cap`.
+    pub(crate) fn push(&mut self, bytes: u64) {
+        self.samples.push_back(bytes);
+        while self.samples.len() > self.cap {
+            self.samples.pop_front();
+        }
+    }
+
+    pub(crate) fn latest(&self) -> u64 {
+        self.samples.back().copied().unwrap_or(0)
+    }
+
+    pub(crate) fn is_all_zero(&self) -> bool {
+        self.samples.iter().all(|&b| b == 0)
+    }
+
+    pub(crate) fn series(&self) -> Vec<u64> {
+        self.samples.iter().copied().collect()
+    }
+}
+
+/// Human-readable application-payload bandwidth (not protocol overhead).
+pub(crate) fn format_bytes_per_sec(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= 1_048_576.0 {
+        format!("{:.1} MB/s", b / 1_048_576.0)
+    } else if b >= 1024.0 {
+        format!("{:.1} KB/s", b / 1024.0)
+    } else {
+        format!("{} B/s", bytes)
+    }
+}
+
+/// Why a view is showing nothing — so empty states explain the cause and the
+/// next action instead of an ambiguous blank panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmptyReason {
+    Connecting,
+    Disconnected,
+    NoDataYet,
+    FilteredOut,
+}
+
+/// (reason, next-action) text for an empty state. Understandable without color.
+pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static str) {
+    match reason {
+        EmptyReason::Connecting => (
+            "Connecting to the network…",
+            "Waiting for the session to come up.",
+        ),
+        EmptyReason::Disconnected => (
+            "Not connected.",
+            "Check the endpoint; press m to change mode or P to scan domains.",
+        ),
+        EmptyReason::NoDataYet => (
+            "Connected, but no messages observed yet.",
+            "Topics appear as messages arrive. Try Query (4) or Nodes (5), or ? for help.",
+        ),
+        EmptyReason::FilteredOut => (
+            "Nothing matches the current filter.",
+            "Press / to edit or clear the filter.",
+        ),
+    }
+}
+
+/// Compact status-bar hint: quit + view switch + the top few view bindings,
+/// always ending with `?:help`. Wide terminals show more; the rest live in `?`.
+pub(crate) fn compact_hint(view: ActiveView) -> String {
+    let mut parts: Vec<String> = vec!["q:quit".into(), "1-7:view".into()];
+    for h in view_hints(view).iter().take(3) {
+        parts.push(format!("{}:{}", h.keys, h.desc.split(['/', ' ']).next().unwrap_or(h.desc)));
+    }
+    parts.push("?:help".into());
+    parts.join("  ")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveView {
@@ -66,6 +273,7 @@ pub enum ActiveView {
     Query,
     Nodes,
     Liveliness,
+    Network,
 }
 
 impl ActiveView {
@@ -77,6 +285,7 @@ impl ActiveView {
             ActiveView::Query => 3,
             ActiveView::Nodes => 4,
             ActiveView::Liveliness => 5,
+            ActiveView::Network => 6,
         }
     }
 }
@@ -112,7 +321,7 @@ pub struct App {
     pub should_quit: bool,
     pub connection_state: ConnectionState,
     pub endpoint: String,
-    pub tab_rects: [Option<ratatui::layout::Rect>; 6],
+    pub tab_rects: [Option<ratatui::layout::Rect>; 7],
 
     pub topics: Vec<TopicInfo>,
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
@@ -141,6 +350,13 @@ pub struct App {
     pub last_hz_update: Instant,
     pub total_msg_count: u32,
     pub total_hz: f64,
+
+    // Application-payload bandwidth accounting (bytes since last bucket) and
+    // per-second history for sparklines.
+    pub(crate) topic_byte_counts: HashMap<String, u64>,
+    pub(crate) total_byte_count: u64,
+    pub(crate) total_rate: RateWindow,
+    pub(crate) topic_rates: HashMap<String, RateWindow>,
 
     pub query_input: String,
     pub query_results: Vec<ZenohMessage>,
@@ -182,6 +398,15 @@ pub struct App {
     pub liveliness_selected: usize,
     pub liveliness_events: VecDeque<LivelinessEventRecord>,
     pub liveliness_log_scroll: u16,
+
+    pub help_open: bool,
+    pub help_scroll: u16,
+
+    /// Dashboard summary-panel rects, for click-to-navigate.
+    pub dash_node_rect: Option<ratatui::layout::Rect>,
+    pub dash_topic_rect: Option<ratatui::layout::Rect>,
+
+    pub network_scroll: u16,
 }
 
 impl App {
@@ -191,7 +416,7 @@ impl App {
             should_quit: false,
             connection_state: ConnectionState::Connecting,
             endpoint,
-            tab_rects: [None; 6],
+            tab_rects: [None; 7],
             topics: Vec::new(),
             topic_latest: HashMap::new(),
             admin_nodes: Vec::new(),
@@ -214,6 +439,10 @@ impl App {
             last_hz_update: Instant::now(),
             total_msg_count: 0,
             total_hz: 0.0,
+            topic_byte_counts: HashMap::new(),
+            total_byte_count: 0,
+            total_rate: RateWindow::new(RATE_WINDOW_SECS),
+            topic_rates: HashMap::new(),
             query_input: String::new(),
             query_results: Vec::new(),
             query_history: Vec::new(),
@@ -248,6 +477,11 @@ impl App {
             liveliness_selected: 0,
             liveliness_events: VecDeque::with_capacity(LIVELINESS_EVENT_CAP),
             liveliness_log_scroll: 0,
+            help_open: false,
+            help_scroll: 0,
+            dash_node_rect: None,
+            dash_topic_rect: None,
+            network_scroll: 0,
         }
     }
 
@@ -393,6 +627,10 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.help_open {
+            self.handle_help_key(key);
+            return;
+        }
         if self.scout_port_modal_open {
             self.handle_scout_modal_key(key);
             return;
@@ -403,6 +641,11 @@ impl App {
         }
         if !self.is_text_input_active() {
             match key.code {
+                KeyCode::Char('?') => {
+                    self.help_open = true;
+                    self.help_scroll = 0;
+                    return;
+                }
                 KeyCode::Char('q') => {
                     self.should_quit = true;
                     return;
@@ -423,6 +666,7 @@ impl App {
                 KeyCode::Char('4') => self.active_view = ActiveView::Query,
                 KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
                 KeyCode::Char('6') => self.active_view = ActiveView::Liveliness,
+                KeyCode::Char('7') => self.active_view = ActiveView::Network,
                 KeyCode::Esc => {
                     self.active_view = ActiveView::Dashboard;
                 }
@@ -430,6 +674,22 @@ impl App {
             }
         } else {
             self.handle_text_input_key(key);
+        }
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                self.help_open = false;
+                self.help_scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.help_scroll = self.help_scroll.saturating_add(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.help_scroll = self.help_scroll.saturating_sub(1);
+            }
+            _ => {}
         }
     }
 
@@ -545,6 +805,30 @@ impl App {
         }
     }
 
+    /// Which Dashboard summary row (if any) a click landed on. Returns the
+    /// target view and the item index; `None` for borders / empty rows / clicks
+    /// outside both panels.
+    pub(crate) fn dashboard_click_target(&self, col: u16, row: u16) -> Option<(ActiveView, usize)> {
+        let in_rect = |rect: ratatui::layout::Rect| {
+            col >= rect.x && col < rect.x + rect.width
+        };
+        if let Some(rect) = self.dash_node_rect {
+            if in_rect(rect) {
+                if let Some(idx) = list_hit(rect, row, 0, self.nodes.len(), rect.y + 1) {
+                    return Some((ActiveView::Nodes, idx));
+                }
+            }
+        }
+        if let Some(rect) = self.dash_topic_rect {
+            if in_rect(rect) {
+                if let Some(idx) = list_hit(rect, row, 0, self.topics.len(), rect.y + 1) {
+                    return Some((ActiveView::Topics, idx));
+                }
+            }
+        }
+        None
+    }
+
     fn handle_click(&mut self, col: u16, row: u16) {
         if let Some(idx) = tab_hit(&self.tab_rects, col, row) {
             self.active_view = match idx {
@@ -554,8 +838,31 @@ impl App {
                 3 => ActiveView::Query,
                 4 => ActiveView::Nodes,
                 5 => ActiveView::Liveliness,
+                6 => ActiveView::Network,
                 _ => self.active_view,
             };
+            return;
+        }
+
+        // Dashboard summary panels are the entry point into the detailed views.
+        if self.active_view == ActiveView::Dashboard {
+            if let Some((view, idx)) = self.dashboard_click_target(col, row) {
+                match view {
+                    ActiveView::Nodes => {
+                        self.active_view = ActiveView::Nodes;
+                        self.node_selected = idx;
+                        self.node_detail_scroll = 0;
+                    }
+                    ActiveView::Topics => {
+                        // Clear any filter so the clicked index maps directly.
+                        self.topic_filter.clear();
+                        self.active_view = ActiveView::Topics;
+                        self.topic_selected = idx;
+                        self.topic_detail_scroll = 0;
+                    }
+                    _ => {}
+                }
+            }
             return;
         }
 
@@ -571,7 +878,7 @@ impl App {
             ActiveView::Query => self.query_results.len(),
             ActiveView::Nodes => self.nodes.len(),
             ActiveView::Liveliness => self.liveliness_tokens.len(),
-            ActiveView::Dashboard => return,
+            ActiveView::Dashboard | ActiveView::Network => return,
         };
         let Some(idx) = list_hit(
             rect,
@@ -594,7 +901,7 @@ impl App {
                 self.liveliness_selected = idx;
                 self.liveliness_log_scroll = 0;
             }
-            ActiveView::Dashboard => {}
+            ActiveView::Dashboard | ActiveView::Network => {}
         }
     }
 
@@ -615,6 +922,9 @@ impl App {
             }
             ActiveView::Liveliness => {
                 self.liveliness_selected = self.liveliness_selected.saturating_sub(1);
+            }
+            ActiveView::Network => {
+                self.network_scroll = self.network_scroll.saturating_sub(1);
             }
             ActiveView::Dashboard => {}
         }
@@ -652,6 +962,9 @@ impl App {
                 if self.liveliness_selected < max {
                     self.liveliness_selected += 1;
                 }
+            }
+            ActiveView::Network => {
+                self.network_scroll = self.network_scroll.saturating_add(1);
             }
             ActiveView::Dashboard => {}
         }
@@ -707,6 +1020,27 @@ impl App {
     }
 
     fn handle_view_key(&mut self, key: KeyEvent) {
+        // Detail-panel scroll (uppercase J/K) is uniform across views.
+        if let Some(action) = detail_scroll_action(key) {
+            match self.active_view {
+                ActiveView::Topics => {
+                    self.topic_detail_scroll = apply_detail_scroll(self.topic_detail_scroll, action)
+                }
+                ActiveView::Nodes => {
+                    self.node_detail_scroll = apply_detail_scroll(self.node_detail_scroll, action)
+                }
+                ActiveView::Liveliness => {
+                    self.liveliness_log_scroll =
+                        apply_detail_scroll(self.liveliness_log_scroll, action)
+                }
+                ActiveView::Network => {
+                    self.network_scroll = apply_detail_scroll(self.network_scroll, action)
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match self.active_view {
             ActiveView::Topics => match (key.modifiers, key.code) {
                 (_, KeyCode::Char('/')) => self.topics_filtering = true,
@@ -730,12 +1064,6 @@ impl App {
                         drop(filtered);
                         self.copy_to_clipboard(text, "key_expr");
                     }
-                }
-                (m, KeyCode::Char('J')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
-                    self.topic_detail_scroll = self.topic_detail_scroll.saturating_add(3);
-                }
-                (m, KeyCode::Char('K')) if m.contains(crossterm::event::KeyModifiers::SHIFT) => {
-                    self.topic_detail_scroll = self.topic_detail_scroll.saturating_sub(3);
                 }
                 (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
                     self.topic_selected = self.topic_selected.saturating_sub(1);
@@ -834,12 +1162,6 @@ impl App {
                         self.node_detail_scroll = 0;
                     }
                 }
-                KeyCode::Char('J') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_add(3);
-                }
-                KeyCode::Char('K') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_sub(3);
-                }
                 KeyCode::Char('s') => {
                     if !self.scout_in_progress {
                         self.pending_scout_request = true;
@@ -864,12 +1186,6 @@ impl App {
                         self.liveliness_selected += 1;
                     }
                 }
-                KeyCode::Char('J') => {
-                    self.liveliness_log_scroll = self.liveliness_log_scroll.saturating_add(3);
-                }
-                KeyCode::Char('K') => {
-                    self.liveliness_log_scroll = self.liveliness_log_scroll.saturating_sub(3);
-                }
                 _ => {}
             },
             _ => {}
@@ -889,6 +1205,12 @@ impl App {
 
         *self.topic_msg_counts.entry(msg.key_expr.clone()).or_insert(0) += 1;
         self.total_msg_count += 1;
+
+        // Application payload bytes (not protocol overhead), from the lossless
+        // wire byte counts captured at receive time.
+        let bytes = (msg.payload_bytes + msg.attachment_bytes.unwrap_or(0)) as u64;
+        *self.topic_byte_counts.entry(msg.key_expr.clone()).or_insert(0) += bytes;
+        self.total_byte_count += bytes;
 
         self.recent_messages.push_front(msg.clone());
         if self.recent_messages.len() > 100 {
@@ -913,14 +1235,99 @@ impl App {
 
     pub fn update_hz(&mut self) {
         let elapsed = self.last_hz_update.elapsed().as_secs_f64();
-        if elapsed >= 1.0 {
-            for (key, count) in self.topic_msg_counts.drain() {
-                self.topic_hz.insert(key, count as f64 / elapsed);
-            }
-            self.total_hz = self.total_msg_count as f64 / elapsed;
-            self.total_msg_count = 0;
-            self.last_hz_update = Instant::now();
+        if elapsed < 1.0 {
+            return;
         }
+
+        // Every topic we already track a rate for gets a bucket this interval —
+        // even if it received nothing (a 0 bucket) — so sparklines show real
+        // dips and idle Hz decays to 0 instead of sticking at its last value.
+        let mut keys: std::collections::HashSet<String> =
+            self.topic_rates.keys().cloned().collect();
+        keys.extend(self.topic_msg_counts.keys().cloned());
+
+        for key in keys {
+            let msgs = self.topic_msg_counts.get(&key).copied().unwrap_or(0);
+            let bytes = self.topic_byte_counts.get(&key).copied().unwrap_or(0);
+            self.topic_hz.insert(key.clone(), msgs as f64 / elapsed);
+            self.topic_rates
+                .entry(key.clone())
+                .or_insert_with(|| RateWindow::new(RATE_WINDOW_SECS))
+                .push(bytes);
+            // Evict topics idle for the whole window to bound memory.
+            if self.topic_rates.get(&key).is_some_and(|w| w.is_all_zero()) {
+                self.topic_rates.remove(&key);
+                self.topic_hz.remove(&key);
+            }
+        }
+
+        self.topic_msg_counts.clear();
+        self.topic_byte_counts.clear();
+
+        self.total_rate.push(self.total_byte_count);
+        self.total_hz = self.total_msg_count as f64 / elapsed;
+        self.total_msg_count = 0;
+        self.total_byte_count = 0;
+        self.last_hz_update = Instant::now();
+    }
+
+    /// Latest total application bandwidth in bytes/sec (last completed bucket).
+    pub(crate) fn total_bytes_per_sec(&self) -> u64 {
+        self.total_rate.latest()
+    }
+
+    /// Latest bandwidth + history for a specific topic (empty if idle/evicted).
+    pub(crate) fn topic_rate_series(&self, key: &str) -> Vec<u64> {
+        self.topic_rates
+            .get(key)
+            .map(|w| w.series())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn topic_bytes_per_sec(&self, key: &str) -> u64 {
+        self.topic_rates.get(key).map(|w| w.latest()).unwrap_or(0)
+    }
+
+    /// Connection-level empty reason (connecting/disconnected), or `None` when
+    /// the session is up and the emptiness is view-specific.
+    fn connection_empty_reason(&self) -> Option<EmptyReason> {
+        match &self.connection_state {
+            ConnectionState::Connecting => Some(EmptyReason::Connecting),
+            ConnectionState::Disconnected(_) => Some(EmptyReason::Disconnected),
+            ConnectionState::Connected(_) => None,
+        }
+    }
+
+    /// Why the Stream message list is empty (only meaningful when it is).
+    pub(crate) fn stream_empty_reason(&self) -> EmptyReason {
+        if let Some(r) = self.connection_empty_reason() {
+            return r;
+        }
+        if !self.stream_filter.is_empty() && !self.sub_messages.is_empty() {
+            EmptyReason::FilteredOut
+        } else {
+            EmptyReason::NoDataYet
+        }
+    }
+
+    /// Why the Topics list is empty (only meaningful when it is).
+    pub(crate) fn topics_empty_reason(&self) -> EmptyReason {
+        if let Some(r) = self.connection_empty_reason() {
+            return r;
+        }
+        if !self.topic_filter.is_empty() && !self.topics.is_empty() {
+            EmptyReason::FilteredOut
+        } else {
+            EmptyReason::NoDataYet
+        }
+    }
+
+    /// Why the Nodes list is empty (only meaningful when it is).
+    pub(crate) fn nodes_empty_reason(&self) -> EmptyReason {
+        if let Some(r) = self.connection_empty_reason() {
+            return r;
+        }
+        EmptyReason::NoDataYet
     }
 
     pub fn filtered_topics(&self) -> Vec<&TopicInfo> {
@@ -1038,6 +1445,7 @@ impl App {
             ActiveView::Query => views::query::render(self, frame, content_area),
             ActiveView::Nodes => views::nodes::render(self, frame, content_area),
             ActiveView::Liveliness => views::liveliness::render(self, frame, content_area),
+            ActiveView::Network => views::network::render(self, frame, content_area),
         }
 
         if self.scout_port_modal_open {
@@ -1045,6 +1453,9 @@ impl App {
         }
         if self.mode_modal_open {
             self.render_mode_modal(frame, content_area);
+        }
+        if self.help_open {
+            self.render_help_overlay(frame, content_area);
         }
 
         let (conn_text, conn_style) = match &self.connection_state {
@@ -1085,8 +1496,8 @@ impl App {
         };
 
         let port_text = match self.scout_port_current {
-            Some(p) => format!(" scout:{} ", p),
-            None => " scout:7446 ".to_string(),
+            Some(p) => format!(" {} ", domain_port_label(p)),
+            None => " domain 0 (port 7446) ".to_string(),
         };
 
         let mode_text = match self.current_mode {
@@ -1110,11 +1521,64 @@ impl App {
             ),
             middle_span,
             Span::styled(
-                " q:quit  1-6:view  /:filter  y:copy  P:port  m:mode ",
+                format!(" {} ", compact_hint(self.active_view)),
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
         frame.render_widget(status, status_area);
+    }
+
+    fn render_help_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 60.min(content_area.width.saturating_sub(2));
+        let height = 24.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let view_name = TAB_TITLES[self.active_view.index()];
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Keybindings — {} ", view_name))
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let mut lines: Vec<Line> = Vec::new();
+        let section = |lines: &mut Vec<Line>, name: &str, hints: &[KeyHint]| {
+            lines.push(Line::from(Span::styled(
+                name.to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for h in hints {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {:<9}", h.keys),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::styled(h.desc.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        };
+        section(&mut lines, &format!("{} view", view_name), view_hints(self.active_view));
+        section(&mut lines, "Global", global_hints());
+        lines.push(Line::from(Span::styled(
+            "j/k or ↑↓ to scroll · Esc/q/? to close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+        let scroll = self.help_scroll.min(max_scroll);
+        let para = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0));
+        frame.render_widget(para, inner);
     }
 
     fn render_scout_port_modal(&self, frame: &mut Frame, content_area: Rect) {
@@ -1130,7 +1594,7 @@ impl App {
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Scout Port ")
+            .title(" Domain Scan & Switch ")
             .style(
                 Style::default()
                     .fg(Color::White)
@@ -1150,12 +1614,8 @@ impl App {
         .areas(inner);
 
         let current_text = match self.scout_port_current {
-            Some(p) => format!(
-                "Current: {} (domain {})",
-                p,
-                p.saturating_sub(7446)
-            ),
-            None => "Current: 7446 (default, domain 0)".to_string(),
+            Some(p) => format!("Current: {}", domain_port_label(p)),
+            None => "Current: domain 0 (port 7446, default)".to_string(),
         };
         frame.render_widget(
             Paragraph::new(current_text).style(Style::default().fg(Color::Gray)),
@@ -1163,9 +1623,9 @@ impl App {
         );
 
         let input_text = if self.scout_port_input.is_empty() {
-            "New port: _".to_string()
+            "Custom port: _".to_string()
         } else {
-            format!("New port: {}_", self.scout_port_input)
+            format!("Custom port: {}_", self.scout_port_input)
         };
         frame.render_widget(
             Paragraph::new(input_text).style(Style::default().fg(Color::Cyan)),
@@ -1174,7 +1634,7 @@ impl App {
 
         if self.port_scan_in_progress {
             frame.render_widget(
-                Paragraph::new("Scanning ports 7446-7546 ...")
+                Paragraph::new("Scanning domains 0-100 (ports 7446-7546) ...")
                     .style(Style::default().fg(Color::Yellow)),
                 list_area,
             );
@@ -1186,13 +1646,13 @@ impl App {
                 .collect();
             if hits.is_empty() && self.port_scan_results.is_empty() {
                 frame.render_widget(
-                    Paragraph::new("Press 's' to scan ports 7446-7546")
+                    Paragraph::new("Press 's' to scan domains 0-100 for nodes")
                         .style(Style::default().fg(Color::DarkGray)),
                     list_area,
                 );
             } else if hits.is_empty() {
                 frame.render_widget(
-                    Paragraph::new("No nodes found in 7446-7546")
+                    Paragraph::new("No nodes found in domains 0-100")
                         .style(Style::default().fg(Color::Red)),
                     list_area,
                 );
@@ -1208,10 +1668,9 @@ impl App {
                             ConnectionState::Connected(zid) if r.nodes.iter().any(|n| n.zid == *zid)
                         );
                         let base_text = format!(
-                            "{}{:>5}  (domain {:<3})  {} node(s)",
+                            "{}{}  {} node(s)",
                             marker,
-                            r.port,
-                            r.port.saturating_sub(7446),
+                            domain_port_label(r.port),
                             r.nodes.len()
                         );
                         let mut spans = vec![Span::styled(
@@ -1241,7 +1700,7 @@ impl App {
         }
 
         frame.render_widget(
-            Paragraph::new(" s:scan  Enter:reconnect  jk/↑↓:select  Esc:close ")
+            Paragraph::new(" s:scan domains  Enter:switch  jk/↑↓:select  Esc:close ")
                 .style(Style::default().fg(Color::DarkGray)),
             hint_row,
         );
@@ -1319,6 +1778,190 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn uppercase_j_k_map_to_detail_scroll_without_shift() {
+        // Uppercase J/K scroll regardless of whether Shift is reported.
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('J'))), Some(DetailScroll::Down));
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('K'))), Some(DetailScroll::Up));
+        assert_eq!(
+            detail_scroll_action(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT)),
+            Some(DetailScroll::Down)
+        );
+    }
+
+    #[test]
+    fn lowercase_j_k_are_not_detail_scroll() {
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('j'))), None);
+        assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
+    }
+
+    fn node(zid: &str) -> NodeInfo {
+        NodeInfo {
+            zid: zid.into(),
+            kind: "peer".into(),
+            locators: vec![],
+            metadata: None,
+            sources: zemon_core::types::NodeSources::ADMIN,
+            admin_last_seen: None,
+            scout_last_seen: None,
+        }
+    }
+
+    #[test]
+    fn rate_window_evicts_beyond_cap_and_detects_idle() {
+        let mut w = RateWindow::new(3);
+        w.push(10);
+        w.push(20);
+        w.push(30);
+        w.push(40); // evicts the 10
+        assert_eq!(w.series(), vec![20, 30, 40]);
+        assert_eq!(w.latest(), 40);
+        assert!(!w.is_all_zero());
+        let mut idle = RateWindow::new(2);
+        idle.push(0);
+        idle.push(0);
+        assert!(idle.is_all_zero());
+    }
+
+    #[test]
+    fn format_bytes_per_sec_scales_units() {
+        assert_eq!(format_bytes_per_sec(500), "500 B/s");
+        assert_eq!(format_bytes_per_sec(2048), "2.0 KB/s");
+        assert_eq!(format_bytes_per_sec(3_145_728), "3.0 MB/s");
+    }
+
+    #[test]
+    fn key_7_switches_to_network_view() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('7')));
+        assert_eq!(app.active_view, ActiveView::Network);
+        // J/K scroll the graph in the Network view.
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.network_scroll, 3);
+    }
+
+    #[test]
+    fn dashboard_click_targets_node_and_topic_rows() {
+        let mut app = App::new("t".into());
+        app.nodes = vec![node("a"), node("b")];
+        app.topics = vec![
+            TopicInfo { key_expr: "x".into() },
+            TopicInfo { key_expr: "y".into() },
+        ];
+        app.dash_node_rect = Some(Rect::new(0, 5, 40, 10));
+        app.dash_topic_rect = Some(Rect::new(40, 5, 40, 10));
+
+        // First item row is rect.y + 1 = 6.
+        assert_eq!(app.dashboard_click_target(5, 6), Some((ActiveView::Nodes, 0)));
+        assert_eq!(app.dashboard_click_target(5, 7), Some((ActiveView::Nodes, 1)));
+        assert_eq!(app.dashboard_click_target(45, 6), Some((ActiveView::Topics, 0)));
+        // Border row → no-op.
+        assert_eq!(app.dashboard_click_target(5, 5), None);
+        // Past the last item → no-op.
+        assert_eq!(app.dashboard_click_target(5, 8), None);
+    }
+
+    #[test]
+    fn empty_reason_reflects_connection_state() {
+        let mut app = App::new("test".into());
+        app.connection_state = ConnectionState::Connecting;
+        assert_eq!(app.stream_empty_reason(), EmptyReason::Connecting);
+        app.connection_state = ConnectionState::Disconnected("x".into());
+        assert_eq!(app.nodes_empty_reason(), EmptyReason::Disconnected);
+    }
+
+    #[test]
+    fn empty_reason_distinguishes_filter_from_no_data() {
+        let mut app = App::new("test".into());
+        app.connection_state = ConnectionState::Connected("zid".into());
+        // No data at all → NoDataYet.
+        assert_eq!(app.topics_empty_reason(), EmptyReason::NoDataYet);
+        // Data exists but the filter hides it → FilteredOut.
+        app.topics.push(TopicInfo { key_expr: "a/b".into() });
+        app.topic_filter = "zzz".into();
+        assert_eq!(app.topics_empty_reason(), EmptyReason::FilteredOut);
+    }
+
+    #[test]
+    fn question_mark_toggles_help_in_normal_mode() {
+        let mut app = App::new("test".into());
+        assert!(!app.help_open);
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(app.help_open);
+        // q closes the overlay (does not quit)
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(!app.help_open);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn question_mark_is_literal_during_text_input() {
+        let mut app = App::new("test".into());
+        app.active_view = ActiveView::Query;
+        app.query_editing = true; // text input active
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(!app.help_open, "? must not open help while editing");
+    }
+
+    #[test]
+    fn help_scrolls_and_esc_closes() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('?')));
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.help_scroll, 1);
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.help_scroll, 0);
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.help_open);
+    }
+
+    #[test]
+    fn every_view_has_hints_and_compact_ends_with_help() {
+        for v in [
+            ActiveView::Dashboard,
+            ActiveView::Topics,
+            ActiveView::Stream,
+            ActiveView::Query,
+            ActiveView::Nodes,
+            ActiveView::Liveliness,
+        ] {
+            assert!(!view_hints(v).is_empty(), "{v:?} has no hints");
+            assert!(compact_hint(v).ends_with("?:help"));
+        }
+        assert!(global_hints().iter().any(|h| h.keys == "q"));
+    }
+
+    #[test]
+    fn domain_port_label_maps_domain_range() {
+        assert_eq!(domain_port_label(7446), "domain 0 (port 7446)");
+        assert_eq!(domain_port_label(7450), "domain 4 (port 7450)");
+        assert_eq!(domain_port_label(7546), "domain 100 (port 7546)");
+    }
+
+    #[test]
+    fn domain_port_label_treats_out_of_range_as_custom_port() {
+        // Below 7446 must not be misreported as "domain 0".
+        assert_eq!(domain_port_label(7000), "port 7000 (custom)");
+        assert_eq!(domain_port_label(8000), "port 8000 (custom)");
+    }
+
+    #[test]
+    fn apply_detail_scroll_saturates_at_zero() {
+        assert_eq!(apply_detail_scroll(0, DetailScroll::Up), 0);
+        assert_eq!(apply_detail_scroll(0, DetailScroll::Down), 3);
+        assert_eq!(apply_detail_scroll(5, DetailScroll::Up), 2);
+    }
+
+    #[test]
+    fn topics_detail_scroll_works_without_shift_modifier() {
+        let mut app = App::new("test".into());
+        app.active_view = ActiveView::Topics;
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.topic_detail_scroll, 3);
+        app.handle_key(key(KeyCode::Char('K')));
+        assert_eq!(app.topic_detail_scroll, 0);
     }
 
     #[test]
@@ -1409,6 +2052,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         ];
         assert_eq!(tab_hit(&rects, 2, 1), Some(0));
         assert_eq!(tab_hit(&rects, 20, 1), Some(1));
@@ -1417,7 +2061,7 @@ mod tests {
 
     #[test]
     fn tab_hit_outside_returns_none() {
-        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None, None];
+        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None, None, None];
         assert_eq!(tab_hit(&rects, 50, 1), None);
         assert_eq!(tab_hit(&rects, 2, 5), None);
     }
@@ -1446,10 +2090,13 @@ mod tests {
         app.sub_selected = 0;
         let msg = ZenohMessage {
             key_expr: "a".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(msg);
         assert_eq!(app.sub_selected, 0);
@@ -1460,10 +2107,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("a"));
         app.handle_zenoh_message(make("b"));
@@ -1479,17 +2129,23 @@ mod tests {
         let mut app = App::new("test".into());
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "robot/pose".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!({"x": 1})),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!({"x": 1})),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "robot/status".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!("idle")),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!("idle")),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
 
         app.stream_filter = "pose".into();
@@ -1506,10 +2162,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |key: &str| ZenohMessage {
             key_expr: key.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("alpha/topic"));
         app.handle_zenoh_message(make("beta/topic"));
@@ -1538,19 +2197,25 @@ mod tests {
         let mut app = App::new("test".into());
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "selected/topic".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!("selected")),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!("selected")),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "other/topic".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(
                 "selected/topic"
             )),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.topic_filter = "selected/topic".into();
         app.active_view = ActiveView::Topics;
@@ -1599,10 +2264,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("alpha/1"));
         app.handle_zenoh_message(make("beta/1"));
@@ -1641,10 +2309,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |k: &str| ZenohMessage {
             key_expr: k.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("a"));
         app.handle_zenoh_message(make("b"));
@@ -1706,10 +2377,13 @@ mod tests {
         app.query_history.push("demo/**".into());
         app.query_results.push(ZenohMessage {
             key_expr: "demo/x".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(1)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(1)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "get".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.topic_filter = "abc".into();
         app.stream_filter = "xyz".into();

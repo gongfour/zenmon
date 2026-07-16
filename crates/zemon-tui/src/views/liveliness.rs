@@ -165,7 +165,7 @@ fn render_token_detail(app: &App, frame: &mut Frame, area: ratatui::layout::Rect
 }
 
 fn render_event_log(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    let title = format!(" Event Log ({}) - Shift+J/K:scroll ", app.liveliness_events.len());
+    let title = format!(" Event Log ({}) - J/K:scroll ", app.liveliness_events.len());
 
     if app.liveliness_events.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
