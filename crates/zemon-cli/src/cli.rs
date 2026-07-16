@@ -156,6 +156,14 @@ pub enum Command {
     /// Show current session information
     Info,
 
+    /// Diagnose the connection: config, session, connection and admin checks,
+    /// each reported pass/warn/fail, bounded by --timeout.
+    Doctor {
+        /// Overall diagnostic deadline (e.g. 5s)
+        #[arg(long, default_value = "5s", value_parser = crate::duration::parse_duration_arg)]
+        timeout: Duration,
+    },
+
     /// Test how two key expressions relate (intersect / include). Pure, no
     /// network. `a_includes_b` means A contains every key of B.
     Keyexpr {
