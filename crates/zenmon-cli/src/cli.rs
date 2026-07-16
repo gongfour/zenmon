@@ -313,6 +313,12 @@ pub enum Command {
         /// Extra observe time after the trigger/window ends (e.g. 2s)
         #[arg(long, value_parser = crate::duration::parse_duration_arg)]
         settle: Option<Duration>,
+
+        /// Extract a payload field over time into the episode's `tracks` section
+        /// (repeatable). Format `KEY:FIELD`, FIELD a dot-path — e.g.
+        /// `dotori/forky001/topic/safety/safety_state:kind`.
+        #[arg(long)]
+        track: Vec<String>,
     },
 }
 
