@@ -1,9 +1,8 @@
 use crate::app::App;
-use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Sparkline, Wrap};
 use ratatui::Frame;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -77,6 +76,16 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     );
     frame.render_widget(list, list_area);
 
+    if filtered.is_empty() {
+        let inner = ratatui::layout::Rect {
+            x: list_area.x + 2,
+            y: list_area.y + 1,
+            width: list_area.width.saturating_sub(4),
+            height: list_area.height.saturating_sub(2),
+        };
+        super::render_empty_state(frame, inner, app.topics_empty_reason());
+    }
+
     // Detail panel (right) — latest value of selected topic
     let selected_key = filtered.get(app.topic_selected).map(|t| &t.key_expr);
 
@@ -89,12 +98,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 format!("{:.1}s ago", age.as_secs_f64())
             };
 
-            let payload_str = match &msg.payload {
-                MessagePayload::Json(v) => {
-                    serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
-                }
-                other => format!("{}", other),
-            };
+            let payload_str = msg.payload.pretty();
 
             let mut lines = vec![
                 Line::from(vec![
@@ -124,6 +128,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                         format!("{:.1} Hz", app.topic_hz.get(key.as_str()).copied().unwrap_or(0.0)),
                         Style::default().fg(Color::Green),
                     ),
+                    Span::raw("  "),
+                    Span::styled("Bandwidth: ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        crate::app::format_bytes_per_sec(app.topic_bytes_per_sec(key.as_str())),
+                        Style::default().fg(Color::Green),
+                    ),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled("Payload:", Style::default().fg(Color::Gray))),
@@ -137,12 +147,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             }
 
             if let Some(att) = &msg.attachment {
-                let att_str = match att {
-                    MessagePayload::Json(v) => {
-                        serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
-                    }
-                    other => format!("{}", other),
-                };
+                let att_str = att.pretty();
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "Attachment:",
@@ -157,15 +162,37 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             }
 
             let scroll_hint = if app.topic_detail_scroll > 0 {
-                format!(" Latest Value (Shift+J/K scroll, line {}) ", app.topic_detail_scroll)
+                format!(" Latest Value (J/K:scroll, line {}) ", app.topic_detail_scroll)
             } else {
-                " Latest Value (Shift+J/K scroll) ".to_string()
+                " Latest Value (J/K:scroll) ".to_string()
             };
+            // Reserve a small strip at the bottom for a bandwidth sparkline when
+            // the panel is tall enough; otherwise fall back to text only.
+            let spark = app.topic_rate_series(key.as_str());
+            let show_spark = detail_area.height >= 8 && spark.iter().any(|&b| b > 0);
+            let main_area = if show_spark {
+                let [top, bottom] =
+                    Layout::vertical([Constraint::Fill(1), Constraint::Length(3)])
+                        .areas(detail_area);
+                let sparkline = Sparkline::default()
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(" Bandwidth (bytes/s, last 30s) "),
+                    )
+                    .data(&spark)
+                    .style(Style::default().fg(Color::Green));
+                frame.render_widget(sparkline, bottom);
+                top
+            } else {
+                detail_area
+            };
+
             let detail = Paragraph::new(lines)
                 .block(Block::default().borders(Borders::ALL).title(scroll_hint))
                 .wrap(Wrap { trim: false })
                 .scroll((app.topic_detail_scroll, 0));
-            frame.render_widget(detail, detail_area);
+            frame.render_widget(detail, main_area);
         } else {
             let detail = Paragraph::new(Line::from(Span::styled(
                 "No data received yet",

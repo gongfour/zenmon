@@ -1,9 +1,11 @@
 mod cli;
+mod duration;
+mod watch;
 
 use clap::Parser;
-use cli::{Cli, Command};
-use color_eyre::Result;
+use cli::{Cli, Command, QueryableCommand};
 use zemon_core::config::{ConnectMode, ZemonConfig};
+use zemon_core::error::ZemonError;
 use std::time::Duration;
 
 /// Pick the most useful locator to display: prefer tcp/IPv4 non-loopback,
@@ -42,13 +44,15 @@ fn print_scout_results(
     results: &[zemon_core::types::PortScoutResult],
     start: u16,
     end: u16,
-    per_port_timeout: u64,
+    per_port_timeout: Duration,
 ) {
     let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
     if hits.is_empty() {
         println!(
-            "No Zenoh nodes found on scouting ports {}-{} ({}s per port)",
-            start, end, per_port_timeout
+            "No Zenoh nodes found on scouting ports {}-{} ({} per port)",
+            start,
+            end,
+            humantime::format_duration(per_port_timeout)
         );
         return;
     }
@@ -94,30 +98,48 @@ fn scouting_port_heading(port: u16, node_count: usize) -> String {
     )
 }
 
-fn parse_port_range(s: &str) -> Result<(u16, u16)> {
+/// Print the nodes table (header, rows, count footer). `note`, when present,
+/// is appended to the footer (e.g. "refreshing every 3s" in watch mode).
+fn print_nodes_table(nodes: &[zemon_core::types::NodeInfo], note: Option<&str>) {
+    println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
+    println!("{}", "-".repeat(70));
+    for node in nodes {
+        println!(
+            "{:<40} {:<10} {}",
+            node.zid,
+            node.kind,
+            node.locators.join(", ")
+        );
+    }
+    match note {
+        Some(n) => println!("\n{} node(s) — {}", nodes.len(), n),
+        None => println!("\n{} node(s)", nodes.len()),
+    }
+}
+
+fn parse_port_range(s: &str) -> Result<(u16, u16), ZemonError> {
     let (start_s, end_s) = s
         .split_once('-')
-        .ok_or_else(|| color_eyre::eyre::eyre!("port range must be START-END, got '{}'", s))?;
+        .ok_or_else(|| ZemonError::invalid_input(format!("port range must be START-END, got '{}'", s)))?;
     let start: u16 = start_s
         .trim()
         .parse()
-        .map_err(|e| color_eyre::eyre::eyre!("invalid start port '{}': {}", start_s, e))?;
+        .map_err(|e| ZemonError::invalid_input(format!("invalid start port '{}': {}", start_s, e)))?;
     let end: u16 = end_s
         .trim()
         .parse()
-        .map_err(|e| color_eyre::eyre::eyre!("invalid end port '{}': {}", end_s, e))?;
+        .map_err(|e| ZemonError::invalid_input(format!("invalid end port '{}': {}", end_s, e)))?;
     if start > end {
-        return Err(color_eyre::eyre::eyre!(
+        return Err(ZemonError::invalid_input(format!(
             "start port {} must be <= end port {}",
-            start,
-            end
-        ));
+            start, end
+        )));
     }
     Ok((start, end))
 }
 
-fn build_config(cli: &Cli) -> ZemonConfig {
-    let mut cfg = ZemonConfig::from_env();
+fn build_config(cli: &Cli) -> Result<ZemonConfig, ZemonError> {
+    let mut cfg = ZemonConfig::from_env()?;
 
     // CLI flags override env
     cfg.endpoint = cli.endpoint.clone();
@@ -134,44 +156,88 @@ fn build_config(cli: &Cli) -> ZemonConfig {
     if cli.scout_port.is_some() {
         cfg.scout_port = cli.scout_port;
     }
+    if cli.connect_timeout.is_some() {
+        cfg.connect_timeout = cli.connect_timeout;
+    }
 
-    cfg
+    Ok(cfg)
+}
+
+/// Default tracing filter for plain CLI mode.
+const DEFAULT_LOG_FILTER: &str = "zemon=info,zenoh=warn";
+
+/// Resolve the tracing filter for the process.
+///
+/// In JSON or TUI mode logs are forced fully OFF regardless of `RUST_LOG`:
+/// - JSON mode: stdout must carry only the structured JSON result and stderr
+///   only the single structured error, so no log line may reach either stream.
+///   Honoring `RUST_LOG` here leaks Zenoh's full `Config` debug output (which
+///   includes authentication fields) and breaks the machine-readable contract.
+/// - TUI mode: stray log output corrupts the ratatui display.
+///
+/// Only plain CLI mode consults `RUST_LOG`, falling back to a sensible default.
+fn resolve_log_filter(
+    is_tui: bool,
+    is_json: bool,
+    rust_log: Option<&str>,
+) -> tracing_subscriber::EnvFilter {
+    if is_tui || is_json {
+        return tracing_subscriber::EnvFilter::new("off");
+    }
+    match rust_log {
+        Some(spec) => tracing_subscriber::EnvFilter::try_new(spec)
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER)),
+        None => tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER),
+    }
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    color_eyre::install()?;
-
+async fn main() {
     let cli = Cli::parse();
     let is_tui = matches!(cli.command, Command::Tui { .. });
+    let is_json = cli.json;
 
-    // TUI mode: suppress all logs to avoid corrupting the terminal display
-    // CLI mode: show logs on stderr as normal
-    if is_tui {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "off".into()),
-            )
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "zemon=info,zenoh=warn".into()),
-            )
-            .init();
+    // In JSON mode the only permitted stderr output is the single structured
+    // error object, so we must not install color_eyre's colored/backtrace hook.
+    if !is_json {
+        let _ = color_eyre::install();
     }
 
-    let config = build_config(&cli);
+    tracing_subscriber::fmt()
+        .with_env_filter(resolve_log_filter(
+            is_tui,
+            is_json,
+            std::env::var("RUST_LOG").ok().as_deref(),
+        ))
+        .init();
 
+    let emit_error = |e: ZemonError| -> ! {
+        if is_json {
+            eprintln!("{}", e.to_json());
+        } else {
+            eprintln!("Error: {}", e);
+        }
+        std::process::exit(e.exit_code());
+    };
+
+    let config = match build_config(&cli) {
+        Ok(config) => config,
+        Err(e) => emit_error(e),
+    };
+
+    if let Err(e) = run(cli, config).await {
+        emit_error(e);
+    }
+}
+
+async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
     match cli.command {
         Command::Discover { key_expr } => {
             let session = zemon_core::session::open_session(&config).await?;
             let topics = zemon_core::discover::discover(&session, &key_expr).await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&topics)?);
+                println!("{}", zemon_core::output::to_collection_json(&topics)?);
             } else if topics.is_empty() {
                 println!("No active keys found for '{}'", key_expr);
             } else {
@@ -190,49 +256,76 @@ async fn main() -> Result<()> {
             key_expr,
             pretty,
             timestamp,
+            count,
+            duration,
+            max_payload_bytes,
         } => {
+            let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
             let session = zemon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let _handle = zemon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
-            eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
+            if !cli.json {
+                eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
+            }
 
+            // Duration clock starts now that the subscriber is declared.
+            let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
             loop {
+                let deadline = budget.deadline();
                 tokio::select! {
-                    Some(msg) = rx.recv() => {
-                        if cli.json {
-                            println!("{}", serde_json::to_string(&msg)?);
-                        } else {
-                            let ts = if timestamp {
-                                msg.timestamp.as_deref().unwrap_or("--")
-                            } else {
-                                ""
-                            };
-                            let payload_str = if pretty {
-                                match &msg.payload {
-                                    zemon_core::types::MessagePayload::Json(v) => {
-                                        serde_json::to_string_pretty(v)?
+                    biased;
+                    _ = watch::sleep_until_opt(deadline) => break,
+                    _ = tokio::signal::ctrl_c() => {
+                        if !cli.json {
+                            eprintln!("\nStopped.");
+                        }
+                        break;
+                    }
+                    item = rx.recv() => match item {
+                        Some(msg) => {
+                            if cli.json {
+                                match max_payload_bytes {
+                                    Some(max) => {
+                                        // Replace payload/attachment with capped
+                                        // previews so a large message can't blow
+                                        // the output budget.
+                                        let mut v = serde_json::to_value(&msg)?;
+                                        v["payload"] = msg.payload.to_view_capped(max);
+                                        if let Some(att) = &msg.attachment {
+                                            v["attachment"] = att.to_view_capped(max);
+                                        }
+                                        println!("{}", serde_json::to_string(&v)?);
                                     }
-                                    other => format!("{}", other),
+                                    None => println!("{}", serde_json::to_string(&msg)?),
                                 }
                             } else {
-                                format!("{}", msg.payload)
-                            };
+                                let ts = if timestamp {
+                                    msg.timestamp.as_deref().unwrap_or("--")
+                                } else {
+                                    ""
+                                };
+                                let payload_str = if pretty {
+                                    msg.payload.pretty()
+                                } else {
+                                    format!("{}", msg.payload)
+                                };
 
-                            let att_str = msg.attachment.as_ref()
-                                .map(|a| format!(" [att: {}]", a))
-                                .unwrap_or_default();
+                                let att_str = msg.attachment.as_ref()
+                                    .map(|a| format!(" [att: {}]", a))
+                                    .unwrap_or_default();
 
-                            if timestamp {
-                                println!("[{}] {} | {}{}", ts, msg.key_expr, payload_str, att_str);
-                            } else {
-                                println!("{} | {}{}", msg.key_expr, payload_str, att_str);
+                                if timestamp {
+                                    println!("[{}] {} | {}{}", ts, msg.key_expr, payload_str, att_str);
+                                } else {
+                                    println!("{} | {}{}", msg.key_expr, payload_str, att_str);
+                                }
+                            }
+                            if budget.record() {
+                                break;
                             }
                         }
-                    }
-                    _ = tokio::signal::ctrl_c() => {
-                        eprintln!("\nStopped.");
-                        break;
+                        None => break,
                     }
                 }
             }
@@ -246,18 +339,25 @@ async fn main() -> Result<()> {
             key_expr,
             payload,
             timeout,
+            limit,
         } => {
+            let limit = limit.map(|n| n as usize);
             let session = zemon_core::session::open_session(&config).await?;
             let results = zemon_core::query::get(
                 &session,
                 &key_expr,
                 payload.as_deref(),
-                Duration::from_millis(timeout),
+                timeout,
+                limit,
             )
             .await?;
+            let limited = limit.is_some_and(|l| results.len() >= l);
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&results)?);
+                println!(
+                    "{}",
+                    zemon_core::output::to_collection_json_limited(&results, limited)?
+                );
             } else if results.is_empty() {
                 println!("No replies for '{}'", key_expr);
             } else {
@@ -275,51 +375,91 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
-        Command::Nodes { watch } => {
+        Command::Nodes {
+            watch,
+            count,
+            duration,
+            changes_only,
+        } => {
+            use zemon_core::nodediff::{diff_nodes, NodeSnapshot};
+
             let session = zemon_core::session::open_session(&config).await?;
-            let nodes = zemon_core::registry::query_admin_nodes(&session).await?;
 
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&nodes)?);
-            } else if nodes.is_empty() {
-                println!("No nodes discovered");
-            } else {
-                println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
-                println!("{}", "-".repeat(70));
-                for node in &nodes {
-                    println!(
-                        "{:<40} {:<10} {}",
-                        node.zid,
-                        node.kind,
-                        node.locators.join(", ")
-                    );
+            if !watch {
+                let nodes = zemon_core::registry::query_admin_nodes(&session).await?;
+                if cli.json {
+                    println!("{}", zemon_core::output::to_collection_json(&nodes)?);
+                } else if nodes.is_empty() {
+                    println!("No nodes discovered");
+                } else {
+                    print_nodes_table(&nodes, None);
                 }
-                println!("\n{} node(s)", nodes.len());
-            }
-
-            if watch {
-                eprintln!("Watching for changes... (Ctrl+C to stop)");
+            } else {
+                if !cli.json {
+                    eprintln!("Watching for changes... (Ctrl+C to stop)");
+                }
+                // First interval tick fires immediately, so --count 1 emits one
+                // snapshot and exits. Each snapshot is counted.
                 let mut interval = tokio::time::interval(Duration::from_secs(3));
+                let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
+                // changes-only baseline: None until the first snapshot seeds it,
+                // so the initial state is not reported as a burst of "added".
+                let mut prev: Option<Vec<NodeSnapshot>> = None;
+                let mut done = false;
                 loop {
+                    let deadline = budget.deadline();
                     tokio::select! {
-                        _ = interval.tick() => {
-                            let updated = zemon_core::registry::query_admin_nodes(&session).await?;
-                            print!("\x1B[2J\x1B[H");
-                            println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
-                            println!("{}", "-".repeat(70));
-                            for node in &updated {
-                                println!(
-                                    "{:<40} {:<10} {}",
-                                    node.zid,
-                                    node.kind,
-                                    node.locators.join(", ")
-                                );
-                            }
-                            println!("\n{} node(s) — refreshing every 3s", updated.len());
-                        }
+                        biased;
+                        _ = watch::sleep_until_opt(deadline) => break,
                         _ = tokio::signal::ctrl_c() => {
-                            eprintln!("\nStopped.");
+                            if !cli.json {
+                                eprintln!("\nStopped.");
+                            }
                             break;
+                        }
+                        _ = interval.tick() => {
+                            let updated =
+                                zemon_core::registry::query_admin_nodes(&session).await?;
+                            if changes_only {
+                                let curr: Vec<NodeSnapshot> =
+                                    updated.iter().map(NodeSnapshot::from_info).collect();
+                                match &prev {
+                                    None => {} // seed baseline below, emit nothing
+                                    Some(prev_snap) => {
+                                        for change in diff_nodes(prev_snap, &curr) {
+                                            if cli.json {
+                                                println!("{}", serde_json::to_string(&change)?);
+                                            } else {
+                                                println!("{}", change.describe());
+                                            }
+                                            if budget.record() {
+                                                done = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                prev = Some(curr);
+                            } else if cli.json {
+                                // NDJSON: one collection envelope per snapshot,
+                                // never ANSI.
+                                println!(
+                                    "{}",
+                                    zemon_core::output::to_collection_json(&updated)?
+                                );
+                                if budget.record() {
+                                    done = true;
+                                }
+                            } else {
+                                print!("\x1B[2J\x1B[H");
+                                print_nodes_table(&updated, Some("refreshing every 3s"));
+                                if budget.record() {
+                                    done = true;
+                                }
+                            }
+                            if done {
+                                break;
+                            }
                         }
                     }
                 }
@@ -339,7 +479,18 @@ async fn main() -> Result<()> {
             builder
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            if let Some(ref att_json) = att {
+            if cli.json {
+                // Action result on stdout; no duplicate stderr message.
+                let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
+                println!(
+                    "{}",
+                    zemon_core::output::publish_accepted_json(
+                        &key_expr,
+                        value.as_bytes().len(),
+                        attachment_bytes,
+                    )?
+                );
+            } else if let Some(ref att_json) = att {
                 eprintln!("Published to '{}': {} [att: {}]", key_expr, value, att_json);
             } else {
                 eprintln!("Published to '{}': {}", key_expr, value);
@@ -350,58 +501,88 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
-        Command::Liveliness { key_expr, watch } => {
+        Command::Liveliness {
+            key_expr,
+            watch,
+            count,
+            duration,
+            changes_only,
+        } => {
             let session = zemon_core::session::open_session(&config).await?;
-            let tokens = zemon_core::discover::query_liveliness(&session, &key_expr).await?;
 
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&tokens)?);
-            } else if tokens.is_empty() {
-                println!("No liveliness tokens found for '{}'", key_expr);
-            } else {
-                println!("{:<50} {:<20} {}", "KEY", "NAME", "SOURCE_ZID");
-                println!("{}", "─".repeat(85));
-                for token in &tokens {
-                    let name = token.node_name().unwrap_or_default();
-                    let zid = token.source_zid.as_deref().unwrap_or("-");
-                    let status = if token.alive { "●" } else { "○" };
-                    println!("{} {:<49} {:<20} {}", status, token.key_expr, name, zid);
+            // --changes-only suppresses the initial snapshot entirely (its only
+            // effect for liveliness), leaving a pure join/leave event stream.
+            let suppress_initial = watch && changes_only;
+            if !suppress_initial {
+                let tokens = zemon_core::discover::query_liveliness(&session, &key_expr).await?;
+                // In JSON watch mode we keep the stream a pure event NDJSON by
+                // skipping the initial collection envelope; humans still see the
+                // initial table.
+                if cli.json {
+                    if !watch {
+                        println!("{}", zemon_core::output::to_collection_json(&tokens)?);
+                    }
+                } else if tokens.is_empty() {
+                    println!("No liveliness tokens found for '{}'", key_expr);
+                } else {
+                    println!("{:<50} {:<20} {}", "KEY", "NAME", "SOURCE_ZID");
+                    println!("{}", "─".repeat(85));
+                    for token in &tokens {
+                        let name = token.node_name().unwrap_or_default();
+                        let zid = token.source_zid.as_deref().unwrap_or("-");
+                        let status = if token.alive { "●" } else { "○" };
+                        println!("{} {:<49} {:<20} {}", status, token.key_expr, name, zid);
+                    }
+                    println!("\n{} token(s)", tokens.len());
                 }
-                println!("\n{} token(s)", tokens.len());
             }
 
             if watch {
-                eprintln!("\nWatching liveliness changes... (Ctrl+C to stop)");
+                if !cli.json {
+                    eprintln!("\nWatching liveliness changes... (Ctrl+C to stop)");
+                }
                 let sub = session
                     .liveliness()
                     .declare_subscriber(&key_expr)
                     .await
                     .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
                 loop {
+                    let deadline = budget.deadline();
                     tokio::select! {
-                        Ok(sample) = sub.recv_async() => {
-                            let source = sample.source_info()
-                                .map(|s| format!("{}", s.source_id().zid()))
-                                .unwrap_or_else(|| "-".to_string());
-                            if cli.json {
-                                let event = serde_json::json!({
-                                    "kind": format!("{:?}", sample.kind()),
-                                    "key_expr": sample.key_expr().to_string(),
-                                    "source_zid": source,
-                                });
-                                println!("{}", serde_json::to_string(&event)?);
-                            } else {
-                                println!(
-                                    "[{:?}] {} source_zid={}",
-                                    sample.kind(),
-                                    sample.key_expr(),
-                                    source,
-                                );
-                            }
-                        }
+                        biased;
+                        _ = watch::sleep_until_opt(deadline) => break,
                         _ = tokio::signal::ctrl_c() => {
-                            eprintln!("Stopped.");
+                            if !cli.json {
+                                eprintln!("Stopped.");
+                            }
                             break;
+                        }
+                        res = sub.recv_async() => match res {
+                            Ok(sample) => {
+                                let source = sample.source_info()
+                                    .map(|s| format!("{}", s.source_id().zid()))
+                                    .unwrap_or_else(|| "-".to_string());
+                                if cli.json {
+                                    let event = serde_json::json!({
+                                        "kind": format!("{:?}", sample.kind()),
+                                        "key_expr": sample.key_expr().to_string(),
+                                        "source_zid": source,
+                                    });
+                                    println!("{}", serde_json::to_string(&event)?);
+                                } else {
+                                    println!(
+                                        "[{:?}] {} source_zid={}",
+                                        sample.kind(),
+                                        sample.key_expr(),
+                                        source,
+                                    );
+                                }
+                                if budget.record() {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
                         }
                     }
                 }
@@ -422,13 +603,13 @@ async fn main() -> Result<()> {
                 &config,
                 start,
                 end,
-                Duration::from_secs(per_port_timeout),
+                per_port_timeout,
             )
             .await?;
 
             if cli.json {
                 let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
-                println!("{}", serde_json::to_string_pretty(&hits)?);
+                println!("{}", zemon_core::output::to_collection_json(&hits)?);
             } else {
                 print_scout_results(&results, start, end, per_port_timeout);
             }
@@ -436,13 +617,22 @@ async fn main() -> Result<()> {
 
         Command::Info => {
             let session = zemon_core::session::open_session(&config).await?;
-            let detail = zemon_core::info::session_info(&session).await?;
+            let detail = zemon_core::info::session_info(&session, config.mode).await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&detail)?);
+                // `info` is a single resource; wrap it as a one-element
+                // collection for uniformity: {"count":1,"items":[{...}]}.
+                println!(
+                    "{}",
+                    zemon_core::output::to_collection_json(std::slice::from_ref(&detail))?
+                );
             } else {
                 println!("Session ZID:  {}", detail.zid);
                 println!("Mode:         {}", detail.mode);
+                println!(
+                    "Connected:    {}",
+                    if detail.connected { "yes" } else { "no" }
+                );
                 if detail.routers.is_empty() {
                     println!("Routers:      (none)");
                 } else {
@@ -472,6 +662,365 @@ async fn main() -> Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
+        Command::Doctor { timeout } => {
+            let report = zemon_core::doctor::run(&config, timeout).await;
+
+            if cli.json {
+                // A single result object on stdout; a failing diagnostic is a
+                // successful report with status "fail", not an error envelope.
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                use zemon_core::doctor::CheckStatus;
+                for c in &report.checks {
+                    let mark = match c.status {
+                        CheckStatus::Pass => "PASS",
+                        CheckStatus::Warn => "WARN",
+                        CheckStatus::Fail => "FAIL",
+                    };
+                    print!("[{}] {:<11} {}ms", mark, c.name, c.latency_ms);
+                    if let Some(m) = &c.message {
+                        print!("  {}", m);
+                    }
+                    println!();
+                    if let Some(h) = &c.hint {
+                        if c.status != CheckStatus::Pass {
+                            println!("       hint: {}", h);
+                        }
+                    }
+                }
+                println!("\nOverall: {:?}", report.status);
+            }
+
+            let code = report.exit_code();
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+
+        Command::Keyexpr { a, b } => {
+            // Pure, offline: no session is opened.
+            let rel = zemon_core::keyexpr::compare(&a, &b)?;
+            if cli.json {
+                println!("{}", serde_json::to_string(&rel)?);
+            } else {
+                println!("A:             {}", rel.a);
+                println!("B:             {}", rel.b);
+                println!("intersects:    {}", rel.intersects);
+                println!("A includes B:  {}", rel.a_includes_b);
+                println!("B includes A:  {}", rel.b_includes_a);
+                println!("equal:         {}", rel.equal);
+                println!("relation:      {:?}", rel.relation);
+            }
+        }
+
+        Command::Capture {
+            key_expr,
+            output,
+            count,
+            duration,
+        } => {
+            use std::io::Write;
+            use zemon_core::capture::CaptureRecord;
+
+            let session = zemon_core::session::open_session(&config).await?;
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let _handle = zemon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
+
+            let file = std::fs::File::create(&output).map_err(|e| {
+                ZemonError::invalid_input(format!("cannot create {}: {}", output.display(), e))
+            })?;
+            let mut writer = std::io::BufWriter::new(file);
+            let start = std::time::Instant::now();
+            if !cli.json {
+                eprintln!(
+                    "Capturing '{}' to {} ... (Ctrl+C to stop)",
+                    key_expr,
+                    output.display()
+                );
+            }
+
+            let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
+            let mut written: u64 = 0;
+            let mut stop = false;
+            loop {
+                let deadline = budget.deadline();
+                tokio::select! {
+                    biased;
+                    _ = watch::sleep_until_opt(deadline) => break,
+                    _ = tokio::signal::ctrl_c() => {
+                        if !cli.json {
+                            eprintln!("\nStopped.");
+                        }
+                        break;
+                    }
+                    item = rx.recv() => match item {
+                        Some(msg) => {
+                            let rec = CaptureRecord::from_message(&msg, start.elapsed());
+                            let line = serde_json::to_string(&rec)?;
+                            writeln!(writer, "{}", line).map_err(|e| {
+                                ZemonError::internal(format!("write failed: {}", e))
+                            })?;
+                            written += 1;
+                            if budget.record() {
+                                stop = true;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                if stop {
+                    break;
+                }
+            }
+            // Flush the last records on any exit path (count/duration/Ctrl+C).
+            writer
+                .flush()
+                .map_err(|e| ZemonError::internal(format!("flush failed: {}", e)))?;
+
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": true,
+                        "captured": written,
+                        "output": output.display().to_string(),
+                    }))?
+                );
+            } else {
+                eprintln!("Captured {} record(s) to {}", written, output.display());
+            }
+            session
+                .close()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+
+        Command::Replay {
+            input,
+            speed,
+            rate,
+            key_prefix,
+            dry_run,
+        } => {
+            use std::io::BufRead;
+            use tokio::time::Instant;
+            use zemon_core::capture::CaptureRecord;
+
+            let file = std::fs::File::open(&input).map_err(|e| {
+                ZemonError::invalid_input(format!("cannot open {}: {}", input.display(), e))
+            })?;
+            let reader = std::io::BufReader::new(file);
+
+            let session = if dry_run {
+                None
+            } else {
+                Some(zemon_core::session::open_session(&config).await?)
+            };
+
+            let replay_start = Instant::now();
+            let mut published: u64 = 0;
+            let mut seq: u64 = 0; // for fixed-rate scheduling
+
+            for (i, line) in reader.lines().enumerate() {
+                let line =
+                    line.map_err(|e| ZemonError::internal(format!("read failed: {}", e)))?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let rec = CaptureRecord::parse_line(&line, i + 1)?;
+
+                // Schedule this message (skip waiting in dry-run).
+                if !dry_run {
+                    let target = match rate {
+                        Some(hz) => replay_start + Duration::from_secs_f64(seq as f64 / hz),
+                        None => {
+                            replay_start
+                                + Duration::from_secs_f64(
+                                    (rec.received_offset_ms as f64 / 1000.0) / speed,
+                                )
+                        }
+                    };
+                    watch::sleep_until_opt(Some(target)).await;
+                }
+                seq += 1;
+
+                let key = match &key_prefix {
+                    Some(p) => format!("{}/{}", p.trim_end_matches('/'), rec.key_expr),
+                    None => rec.key_expr.clone(),
+                };
+                let payload = rec.payload_bytes()?;
+                let attachment = rec.attachment_bytes()?;
+
+                if dry_run {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&serde_json::json!({
+                                "event": "would_publish",
+                                "key_expr": key,
+                                "bytes": payload.len(),
+                                "encoding": rec.encoding,
+                            }))?
+                        );
+                    } else {
+                        println!("would publish {} ({} bytes)", key, payload.len());
+                    }
+                } else {
+                    let s = session.as_ref().expect("session present when not dry-run");
+                    let mut builder = s.put(&key, payload).encoding(rec.encoding.as_str());
+                    if let Some(att) = attachment {
+                        builder = builder.attachment(att);
+                    }
+                    builder
+                        .await
+                        .map_err(|e| ZemonError::internal(format!("publish failed: {}", e)))?;
+                }
+                published += 1;
+            }
+
+            if let Some(s) = session {
+                s.close().await.map_err(|e| color_eyre::eyre::eyre!(e))?;
+            }
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": true,
+                        "published": published,
+                        "dry_run": dry_run,
+                    }))?
+                );
+            } else {
+                eprintln!(
+                    "{} {} record(s) from {}",
+                    if dry_run { "Would replay" } else { "Replayed" },
+                    published,
+                    input.display()
+                );
+            }
+        }
+
+        Command::Queryable {
+            command:
+                QueryableCommand::Serve {
+                    key_expr,
+                    reply,
+                    reply_file,
+                    reply_key,
+                    encoding,
+                    count,
+                    duration,
+                    include_request,
+                    max_request_bytes,
+                },
+        } => {
+            use zemon_core::types::MessagePayload;
+
+            // Resolve the fixed reply payload.
+            let reply_bytes: Vec<u8> = match (reply, reply_file) {
+                (Some(s), None) => s.into_bytes(),
+                (None, Some(path)) => std::fs::read(&path).map_err(|e| {
+                    ZemonError::invalid_input(format!(
+                        "cannot read --reply-file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?,
+                (None, None) => {
+                    return Err(ZemonError::invalid_input(
+                        "provide --reply <string> or --reply-file <path>",
+                    ))
+                }
+                (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
+            };
+            let reply_key = zemon_core::queryable::resolve_reply_key(&key_expr, reply_key.as_deref())?;
+            let max_request = max_request_bytes.map(|n| n as usize).unwrap_or(1024);
+
+            let session = zemon_core::session::open_session(&config).await?;
+            let queryable = session
+                .declare_queryable(&key_expr)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            if !cli.json {
+                eprintln!(
+                    "Serving queryable on '{}' (reply key '{}')... (Ctrl+C to stop)",
+                    key_expr, reply_key
+                );
+            }
+
+            let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
+            let mut seq: u64 = 0;
+            let mut stop = false;
+            loop {
+                let deadline = budget.deadline();
+                tokio::select! {
+                    biased;
+                    _ = watch::sleep_until_opt(deadline) => break,
+                    _ = tokio::signal::ctrl_c() => {
+                        if !cli.json {
+                            eprintln!("\nStopped.");
+                        }
+                        break;
+                    }
+                    q = queryable.recv_async() => match q {
+                        Ok(query) => {
+                            seq += 1;
+                            let mut builder = query.reply(reply_key.as_str(), reply_bytes.clone());
+                            if let Some(enc) = &encoding {
+                                builder = builder.encoding(enc.as_str());
+                            }
+                            // A reply failure is fatal (structured error), per the contract.
+                            builder.await.map_err(|e| {
+                                ZemonError::internal(format!("reply failed: {}", e))
+                            })?;
+
+                            if cli.json {
+                                let mut ev = serde_json::json!({
+                                    "event": "replied",
+                                    "key_expr": reply_key,
+                                    "request_seq": seq,
+                                    "reply_bytes": reply_bytes.len(),
+                                });
+                                if include_request {
+                                    ev["request_key_expr"] =
+                                        serde_json::json!(query.key_expr().to_string());
+                                    if let Some(zb) = query.payload() {
+                                        ev["request_payload"] = MessagePayload::from_zbytes(zb)
+                                            .to_view_capped(max_request);
+                                    }
+                                }
+                                println!("{}", serde_json::to_string(&ev)?);
+                            } else {
+                                println!(
+                                    "replied #{} to '{}' ({} bytes)",
+                                    seq,
+                                    query.key_expr(),
+                                    reply_bytes.len()
+                                );
+                            }
+
+                            if budget.record() {
+                                stop = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if stop {
+                    break;
+                }
+            }
+
+            queryable
+                .undeclare()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session
+                .close()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+
         Command::Tui { refresh } => {
             zemon_tui::run(config, refresh).await?;
         }
@@ -483,6 +1032,7 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing::level_filters::LevelFilter;
 
     #[test]
     fn scout_heading_describes_a_scouting_port_without_a_domain() {
@@ -490,5 +1040,43 @@ mod tests {
 
         assert_eq!(heading, "Scouting port 7446  (2 nodes)");
         assert!(!heading.to_lowercase().contains("domain"));
+    }
+
+    /// JSON mode must force logs off even when the user exports `RUST_LOG=trace`,
+    /// otherwise Zenoh's `Config` debug (auth fields included) leaks and breaks
+    /// the single-JSON-line stderr / clean-JSON stdout contract.
+    #[test]
+    fn json_mode_forces_off_despite_rust_log() {
+        let filter = resolve_log_filter(false, true, Some("trace"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::OFF));
+    }
+
+    /// TUI mode must force logs off even with `RUST_LOG` set, to avoid corrupting
+    /// the ratatui display.
+    #[test]
+    fn tui_mode_forces_off_despite_rust_log() {
+        let filter = resolve_log_filter(true, false, Some("trace"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::OFF));
+    }
+
+    /// Plain CLI mode honors `RUST_LOG`.
+    #[test]
+    fn plain_mode_honors_rust_log() {
+        let filter = resolve_log_filter(false, false, Some("trace"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::TRACE));
+    }
+
+    /// Plain CLI mode falls back to the default filter when `RUST_LOG` is unset,
+    /// and also when it is malformed.
+    #[test]
+    fn plain_mode_defaults_without_or_with_invalid_rust_log() {
+        assert_eq!(
+            resolve_log_filter(false, false, None).max_level_hint(),
+            Some(LevelFilter::INFO)
+        );
+        assert_eq!(
+            resolve_log_filter(false, false, Some("=not a valid filter=")).max_level_hint(),
+            Some(LevelFilter::INFO)
+        );
     }
 }

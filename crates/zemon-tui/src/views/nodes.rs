@@ -62,7 +62,7 @@ fn render_node_list(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rec
 
     let (n_admin, n_scout, n_both) = count_by_source(&app.nodes);
     let scout_status = if app.scout_in_progress {
-        " [scouting...]"
+        " [discovering...]"
     } else {
         ""
     };
@@ -80,6 +80,16 @@ fn render_node_list(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rec
         .block(Block::default().borders(Borders::ALL).title(title));
 
     frame.render_widget(table, area);
+
+    if app.nodes.is_empty() {
+        let inner = ratatui::layout::Rect {
+            x: area.x + 2,
+            y: area.y + 2,
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(3),
+        };
+        super::render_empty_state(frame, inner, app.nodes_empty_reason());
+    }
 }
 
 fn render_node_detail(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {

@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use zenoh::Session;
 
-pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
+pub async fn run(mut config: ZemonConfig, refresh: Duration) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
@@ -52,7 +52,7 @@ pub async fn run(mut config: ZemonConfig, tick_rate_ms: u64) -> Result<()> {
         original_hook(info);
     }));
 
-    let mut events = EventHandler::new(tick_rate_ms, zenoh_rx);
+    let mut events = EventHandler::new(refresh, zenoh_rx);
 
     let result = run_loop(
         &mut terminal,
@@ -238,7 +238,7 @@ async fn run_loop(
                 let tx = query_tx.clone();
                 let ke = key_expr.clone();
                 tokio::spawn(async move {
-                    match zemon_core::query::get(&s, &ke, None, Duration::from_secs(5)).await {
+                    match zemon_core::query::get(&s, &ke, None, Duration::from_secs(5), None).await {
                         Ok(results) => {
                             let _ = tx.send(QueryResult::Ok(results));
                         }
