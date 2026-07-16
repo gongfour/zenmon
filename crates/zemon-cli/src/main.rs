@@ -683,6 +683,193 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             }
         }
 
+        Command::Capture {
+            key_expr,
+            output,
+            count,
+            duration,
+        } => {
+            use std::io::Write;
+            use zemon_core::capture::CaptureRecord;
+
+            let session = zemon_core::session::open_session(&config).await?;
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let _handle = zemon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
+
+            let file = std::fs::File::create(&output).map_err(|e| {
+                ZemonError::invalid_input(format!("cannot create {}: {}", output.display(), e))
+            })?;
+            let mut writer = std::io::BufWriter::new(file);
+            let start = std::time::Instant::now();
+            if !cli.json {
+                eprintln!(
+                    "Capturing '{}' to {} ... (Ctrl+C to stop)",
+                    key_expr,
+                    output.display()
+                );
+            }
+
+            let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
+            let mut written: u64 = 0;
+            let mut stop = false;
+            loop {
+                let deadline = budget.deadline();
+                tokio::select! {
+                    biased;
+                    _ = watch::sleep_until_opt(deadline) => break,
+                    _ = tokio::signal::ctrl_c() => {
+                        if !cli.json {
+                            eprintln!("\nStopped.");
+                        }
+                        break;
+                    }
+                    item = rx.recv() => match item {
+                        Some(msg) => {
+                            let rec = CaptureRecord::from_message(&msg, start.elapsed());
+                            let line = serde_json::to_string(&rec)?;
+                            writeln!(writer, "{}", line).map_err(|e| {
+                                ZemonError::internal(format!("write failed: {}", e))
+                            })?;
+                            written += 1;
+                            if budget.record() {
+                                stop = true;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                if stop {
+                    break;
+                }
+            }
+            // Flush the last records on any exit path (count/duration/Ctrl+C).
+            writer
+                .flush()
+                .map_err(|e| ZemonError::internal(format!("flush failed: {}", e)))?;
+
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": true,
+                        "captured": written,
+                        "output": output.display().to_string(),
+                    }))?
+                );
+            } else {
+                eprintln!("Captured {} record(s) to {}", written, output.display());
+            }
+            session
+                .close()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+
+        Command::Replay {
+            input,
+            speed,
+            rate,
+            key_prefix,
+            dry_run,
+        } => {
+            use std::io::BufRead;
+            use tokio::time::Instant;
+            use zemon_core::capture::CaptureRecord;
+
+            let file = std::fs::File::open(&input).map_err(|e| {
+                ZemonError::invalid_input(format!("cannot open {}: {}", input.display(), e))
+            })?;
+            let reader = std::io::BufReader::new(file);
+
+            let session = if dry_run {
+                None
+            } else {
+                Some(zemon_core::session::open_session(&config).await?)
+            };
+
+            let replay_start = Instant::now();
+            let mut published: u64 = 0;
+            let mut seq: u64 = 0; // for fixed-rate scheduling
+
+            for (i, line) in reader.lines().enumerate() {
+                let line =
+                    line.map_err(|e| ZemonError::internal(format!("read failed: {}", e)))?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let rec = CaptureRecord::parse_line(&line, i + 1)?;
+
+                // Schedule this message (skip waiting in dry-run).
+                if !dry_run {
+                    let target = match rate {
+                        Some(hz) => replay_start + Duration::from_secs_f64(seq as f64 / hz),
+                        None => {
+                            replay_start
+                                + Duration::from_secs_f64(
+                                    (rec.received_offset_ms as f64 / 1000.0) / speed,
+                                )
+                        }
+                    };
+                    watch::sleep_until_opt(Some(target)).await;
+                }
+                seq += 1;
+
+                let key = match &key_prefix {
+                    Some(p) => format!("{}/{}", p.trim_end_matches('/'), rec.key_expr),
+                    None => rec.key_expr.clone(),
+                };
+                let payload = rec.payload_bytes()?;
+                let attachment = rec.attachment_bytes()?;
+
+                if dry_run {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&serde_json::json!({
+                                "event": "would_publish",
+                                "key_expr": key,
+                                "bytes": payload.len(),
+                                "encoding": rec.encoding,
+                            }))?
+                        );
+                    } else {
+                        println!("would publish {} ({} bytes)", key, payload.len());
+                    }
+                } else {
+                    let s = session.as_ref().expect("session present when not dry-run");
+                    let mut builder = s.put(&key, payload).encoding(rec.encoding.as_str());
+                    if let Some(att) = attachment {
+                        builder = builder.attachment(att);
+                    }
+                    builder
+                        .await
+                        .map_err(|e| ZemonError::internal(format!("publish failed: {}", e)))?;
+                }
+                published += 1;
+            }
+
+            if let Some(s) = session {
+                s.close().await.map_err(|e| color_eyre::eyre::eyre!(e))?;
+            }
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": true,
+                        "published": published,
+                        "dry_run": dry_run,
+                    }))?
+                );
+            } else {
+                eprintln!(
+                    "{} {} record(s) from {}",
+                    if dry_run { "Would replay" } else { "Replayed" },
+                    published,
+                    input.display()
+                );
+            }
+        }
+
         Command::Queryable {
             command:
                 QueryableCommand::Serve {

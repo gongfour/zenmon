@@ -27,9 +27,53 @@ pub fn parse_count_arg(s: &str) -> Result<u64, String> {
     Ok(n)
 }
 
+/// Parse a replay speed multiplier (`--speed 2.0`). Must be > 0.
+pub fn parse_speed_arg(s: &str) -> Result<f64, String> {
+    let v: f64 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid speed '{}': expected a number like 2.0", s))?;
+    if !(v.is_finite() && v > 0.0) {
+        return Err("speed must be a positive number".to_string());
+    }
+    Ok(v)
+}
+
+/// Parse a fixed replay rate (`--rate 10Hz`) in hertz. Must be > 0.
+pub fn parse_rate_hz_arg(s: &str) -> Result<f64, String> {
+    let trimmed = s.trim();
+    let num = trimmed
+        .strip_suffix("Hz")
+        .or_else(|| trimmed.strip_suffix("hz"))
+        .unwrap_or(trimmed);
+    let v: f64 = num
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid rate '{}': expected e.g. 10Hz", s))?;
+    if !(v.is_finite() && v > 0.0) {
+        return Err("rate must be a positive number of Hz".to_string());
+    }
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_speed() {
+        assert_eq!(parse_speed_arg("2.0").unwrap(), 2.0);
+        assert!(parse_speed_arg("0").is_err());
+        assert!(parse_speed_arg("-1").is_err());
+    }
+
+    #[test]
+    fn parses_rate_hz() {
+        assert_eq!(parse_rate_hz_arg("10Hz").unwrap(), 10.0);
+        assert_eq!(parse_rate_hz_arg("2.5hz").unwrap(), 2.5);
+        assert_eq!(parse_rate_hz_arg("5").unwrap(), 5.0);
+        assert!(parse_rate_hz_arg("0Hz").is_err());
+    }
 
     #[test]
     fn parses_positive_count() {
