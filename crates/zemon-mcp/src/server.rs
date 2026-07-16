@@ -106,6 +106,17 @@ fn default_doctor_timeout_ms() -> u64 {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PubParams {
+    /// Key expression to publish to.
+    pub key_expr: String,
+    /// Value payload (string).
+    pub value: String,
+    /// Optional attachment metadata (string).
+    #[serde(default)]
+    pub att: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SubSnapshotParams {
     /// Key expression to subscribe to.
     pub key_expr: String,
@@ -242,6 +253,22 @@ impl ZemonMcpServer {
             p.max_payload_bytes.map(|n| n as usize),
         )
         .await;
+        self.finish(r).await
+    }
+
+    // `pub` is a Rust keyword, so the method is named `publish`; the tool is
+    // exposed to MCP clients as `pub` via the macro's `name = "..."` argument
+    // (mirrors the CLI's `zemon pub` subcommand name).
+    #[tool(
+        name = "pub",
+        description = "Publish a value to a key expression (test injection; mutates the network)."
+    )]
+    async fn publish(
+        &self,
+        Parameters(p): Parameters<PubParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let session = self.state.session().await.map_err(to_mcp_error)?;
+        let r = handlers::pub_json(&session, &p.key_expr, &p.value, p.att.as_deref()).await;
         self.finish(r).await
     }
 }

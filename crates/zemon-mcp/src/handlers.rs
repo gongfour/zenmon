@@ -196,6 +196,29 @@ pub async fn sub_snapshot_json(
     .map_err(|e| ZemonError::internal(format!("serialize sub snapshot: {e}")))
 }
 
+/// `pub` tool: publish a value to a key expression (test injection; mutates
+/// the network). Mirrors the CLI's `Command::Pub` arm exactly: the
+/// attachment, if present, is attached as raw bytes (not re-wrapped as a
+/// String), and `publish_accepted_json` takes the payload byte length plus
+/// an optional attachment byte length as its third argument.
+pub async fn pub_json(
+    session: &zenoh::Session,
+    key_expr: &str,
+    value: &str,
+    att: Option<&str>,
+) -> Result<String, ZemonError> {
+    let mut builder = session.put(key_expr, value.to_string());
+    if let Some(att) = att {
+        builder = builder.attachment(att.as_bytes());
+    }
+    builder
+        .await
+        .map_err(|e| ZemonError::internal(format!("publish failed: {e}")))?;
+    let attachment_bytes = att.map(|a| a.as_bytes().len());
+    zemon_core::output::publish_accepted_json(key_expr, value.as_bytes().len(), attachment_bytes)
+        .map_err(|e| ZemonError::internal(format!("serialize pub result: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +271,15 @@ mod tests {
         assert!(err.is_some());
         assert!(super::sub_snapshot_bound_error(Some(1), None).is_none());
         assert!(super::sub_snapshot_bound_error(None, Some(Duration::from_millis(1))).is_none());
+    }
+
+    #[test]
+    fn pub_accepted_envelope_shape() {
+        let json = zemon_core::output::publish_accepted_json("test/x", 5, None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["key_expr"], "test/x");
+        assert_eq!(v["bytes"], 5);
     }
 
     #[tokio::test(flavor = "multi_thread")]
