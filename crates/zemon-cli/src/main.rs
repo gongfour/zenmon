@@ -184,7 +184,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             let topics = zemon_core::discover::discover(&session, &key_expr).await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&topics)?);
+                println!("{}", zemon_core::output::to_collection_json(&topics)?);
             } else if topics.is_empty() {
                 println!("No active keys found for '{}'", key_expr);
             } else {
@@ -270,7 +270,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             .await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&results)?);
+                println!("{}", zemon_core::output::to_collection_json(&results)?);
             } else if results.is_empty() {
                 println!("No replies for '{}'", key_expr);
             } else {
@@ -293,7 +293,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             let nodes = zemon_core::registry::query_admin_nodes(&session).await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&nodes)?);
+                println!("{}", zemon_core::output::to_collection_json(&nodes)?);
             } else if nodes.is_empty() {
                 println!("No nodes discovered");
             } else {
@@ -352,7 +352,18 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             builder
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            if let Some(ref att_json) = att {
+            if cli.json {
+                // Action result on stdout; no duplicate stderr message.
+                let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
+                println!(
+                    "{}",
+                    zemon_core::output::publish_accepted_json(
+                        &key_expr,
+                        value.as_bytes().len(),
+                        attachment_bytes,
+                    )?
+                );
+            } else if let Some(ref att_json) = att {
                 eprintln!("Published to '{}': {} [att: {}]", key_expr, value, att_json);
             } else {
                 eprintln!("Published to '{}': {}", key_expr, value);
@@ -368,7 +379,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             let tokens = zemon_core::discover::query_liveliness(&session, &key_expr).await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&tokens)?);
+                println!("{}", zemon_core::output::to_collection_json(&tokens)?);
             } else if tokens.is_empty() {
                 println!("No liveliness tokens found for '{}'", key_expr);
             } else {
@@ -441,7 +452,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
 
             if cli.json {
                 let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
-                println!("{}", serde_json::to_string_pretty(&hits)?);
+                println!("{}", zemon_core::output::to_collection_json(&hits)?);
             } else {
                 print_scout_results(&results, start, end, per_port_timeout);
             }
@@ -452,7 +463,12 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             let detail = zemon_core::info::session_info(&session).await?;
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&detail)?);
+                // `info` is a single resource; wrap it as a one-element
+                // collection for uniformity: {"count":1,"items":[{...}]}.
+                println!(
+                    "{}",
+                    zemon_core::output::to_collection_json(std::slice::from_ref(&detail))?
+                );
             } else {
                 println!("Session ZID:  {}", detail.zid);
                 println!("Mode:         {}", detail.mode);
