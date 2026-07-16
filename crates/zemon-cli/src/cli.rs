@@ -68,6 +68,10 @@ pub enum Command {
         /// Stop after this much time (e.g. 5s, 500ms)
         #[arg(long, value_parser = crate::duration::parse_duration_arg)]
         duration: Option<Duration>,
+
+        /// Cap payload/attachment preview to N bytes in --json output
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        max_payload_bytes: Option<u64>,
     },
 
     /// Send a Zenoh GET query
@@ -82,6 +86,10 @@ pub enum Command {
         /// Query timeout (e.g. 5s, 500ms)
         #[arg(long, default_value = "5s", value_parser = crate::duration::parse_duration_arg)]
         timeout: Duration,
+
+        /// Return at most N replies (output budget; more may exist)
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        limit: Option<u64>,
     },
 
     /// List discovered Zenoh nodes
