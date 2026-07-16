@@ -188,6 +188,90 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
     })
 }
 
+/// A request to extract one payload field over time from the events of one
+/// observed key. `field` is a dot-path into the decoded JSON payload
+/// (e.g. `kind`, `battery.soc_pct`).
+#[derive(Debug, Clone)]
+pub struct TrackSpec {
+    pub key: String,
+    pub field: String,
+}
+
+/// Transitions are emitted only for fields with at most this many distinct
+/// values — so a discrete field (safety `kind`, a bool) gets a change log while
+/// a continuous field (pose `x`) does not flood with a transition per sample.
+const MAX_DISTINCT_FOR_TRANSITIONS: usize = 16;
+
+/// Resolve a dot-path (`battery.soc_pct`) into a JSON value.
+fn resolve_field(payload: &Value, path: &str) -> Option<Value> {
+    let mut cur = payload;
+    for seg in path.split('.') {
+        cur = cur.get(seg)?;
+    }
+    Some(cur.clone())
+}
+
+/// Extract per-field time series from the observed events. For each [`TrackSpec`]
+/// (an exact observed key + a payload dot-path), emit `{count, first, last,
+/// delta?, series, transitions?}`:
+///
+/// - `series`: `[t_rel_ms, value]` for every matching event that carries the field.
+/// - `delta`: `last - first` when both ends are numeric.
+/// - `transitions`: `{t_rel_ms, from, to}` on each consecutive value change,
+///   included only for low-cardinality (discrete) fields.
+///
+/// Pure and network-free; the CLI merges the result into the episode under
+/// `tracks`. Returns an empty object when there are no specs.
+pub fn build_tracks(events: &[ScenarioEvent], specs: &[TrackSpec]) -> Value {
+    let mut ordered: Vec<&ScenarioEvent> = events.iter().collect();
+    ordered.sort_by_key(|e| e.t_rel_ms);
+
+    let mut out = Map::new();
+    for spec in specs {
+        let mut series: Vec<Value> = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
+        let mut times: Vec<u64> = Vec::new();
+        for e in &ordered {
+            if e.key_expr != spec.key {
+                continue;
+            }
+            if let Some(v) = resolve_field(&e.payload, &spec.field) {
+                series.push(json!([e.t_rel_ms, v]));
+                values.push(v);
+                times.push(e.t_rel_ms);
+            }
+        }
+
+        let mut entry = json!({ "count": values.len(), "series": series });
+        if let (Some(first), Some(last)) = (values.first(), values.last()) {
+            entry["first"] = first.clone();
+            entry["last"] = last.clone();
+            if let (Some(a), Some(b)) = (first.as_f64(), last.as_f64()) {
+                entry["delta"] = json!(b - a);
+            }
+        }
+
+        let distinct: std::collections::BTreeSet<String> =
+            values.iter().map(|v| v.to_string()).collect();
+        if distinct.len() <= MAX_DISTINCT_FOR_TRANSITIONS {
+            let mut transitions: Vec<Value> = Vec::new();
+            for i in 1..values.len() {
+                if values[i] != values[i - 1] {
+                    transitions.push(json!({
+                        "t_rel_ms": times[i],
+                        "from": values[i - 1],
+                        "to": values[i],
+                    }));
+                }
+            }
+            entry["transitions"] = json!(transitions);
+        }
+
+        out.insert(format!("{}:{}", spec.key, spec.field), entry);
+    }
+    Value::Object(out)
+}
+
 /// The mission-stall diagnosis topic set (relative suffixes, prefix applied by
 /// [`expand_preset`]).
 const STALL_TOPICS: &[&str] = &[
@@ -333,6 +417,89 @@ mod tests {
         assert_eq!(ep["topics"], json!({}));
         assert_eq!(ep["correlations"], json!({}));
         assert_eq!(ep["timeline"], json!([]));
+    }
+
+    fn spec(key: &str, field: &str) -> TrackSpec {
+        TrackSpec {
+            key: key.to_string(),
+            field: field.to_string(),
+        }
+    }
+
+    #[test]
+    fn track_discrete_field_series_and_transitions() {
+        // safety kind: 0,0,2,2,0 -> two transitions (0->2, 2->0).
+        let events = vec![
+            ev(10, "safety", None, None, json!({ "kind": 0 })),
+            ev(20, "safety", None, None, json!({ "kind": 0 })),
+            ev(30, "safety", None, None, json!({ "kind": 2 })),
+            ev(40, "safety", None, None, json!({ "kind": 2 })),
+            ev(50, "safety", None, None, json!({ "kind": 0 })),
+        ];
+        let t = build_tracks(&events, &[spec("safety", "kind")]);
+        let e = &t["safety:kind"];
+        assert_eq!(e["count"], 5);
+        assert_eq!(e["first"], 0);
+        assert_eq!(e["last"], 0);
+        assert_eq!(e["series"][0], json!([10, 0]));
+        let tr = e["transitions"].as_array().unwrap();
+        assert_eq!(tr.len(), 2);
+        assert_eq!(tr[0], json!({ "t_rel_ms": 30, "from": 0, "to": 2 }));
+        assert_eq!(tr[1], json!({ "t_rel_ms": 50, "from": 2, "to": 0 }));
+    }
+
+    #[test]
+    fn track_numeric_field_reports_delta() {
+        let events = vec![
+            ev(0, "pose", None, None, json!({ "x": 1.0 })),
+            ev(10, "pose", None, None, json!({ "x": 3.5 })),
+        ];
+        let t = build_tracks(&events, &[spec("pose", "x")]);
+        assert_eq!(t["pose:x"]["count"], 2);
+        assert_eq!(t["pose:x"]["delta"], json!(2.5));
+    }
+
+    #[test]
+    fn track_high_cardinality_omits_transitions() {
+        // 20 distinct values (> threshold) -> series+delta but no transitions.
+        let events: Vec<_> = (0..20)
+            .map(|i| ev(i * 10, "pose", None, None, json!({ "x": i as f64 })))
+            .collect();
+        let t = build_tracks(&events, &[spec("pose", "x")]);
+        assert_eq!(t["pose:x"]["count"], 20);
+        assert!(t["pose:x"].get("transitions").is_none());
+        assert_eq!(t["pose:x"]["delta"], json!(19.0));
+    }
+
+    #[test]
+    fn track_resolves_nested_dotted_field() {
+        let events = vec![ev(
+            5,
+            "snap",
+            None,
+            None,
+            json!({ "battery": { "soc_pct": 42.0 } }),
+        )];
+        let t = build_tracks(&events, &[spec("snap", "battery.soc_pct")]);
+        assert_eq!(t["snap:battery.soc_pct"]["last"], 42.0);
+    }
+
+    #[test]
+    fn track_ignores_other_keys_and_missing_field() {
+        let events = vec![
+            ev(10, "safety", None, None, json!({ "kind": 1 })),
+            ev(20, "other", None, None, json!({ "kind": 9 })), // different key
+            ev(30, "safety", None, None, json!({ "nope": 1 })), // field absent
+        ];
+        let t = build_tracks(&events, &[spec("safety", "kind")]);
+        // Only the one matching event with the field present is counted.
+        assert_eq!(t["safety:kind"]["count"], 1);
+    }
+
+    #[test]
+    fn track_no_specs_is_empty_object() {
+        let events = vec![ev(10, "a", None, None, json!({ "x": 1 }))];
+        assert_eq!(build_tracks(&events, &[]), json!({}));
     }
 
     #[test]
