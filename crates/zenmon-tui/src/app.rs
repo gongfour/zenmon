@@ -56,7 +56,7 @@ fn payload_to_string(p: &MessagePayload) -> String {
     }
 }
 
-const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
+const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Network", "Liveliness"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveView {
@@ -64,7 +64,7 @@ pub enum ActiveView {
     Topics,
     Stream,
     Query,
-    Nodes,
+    Network,
     Liveliness,
 }
 
@@ -75,7 +75,7 @@ impl ActiveView {
             ActiveView::Topics => 1,
             ActiveView::Stream => 2,
             ActiveView::Query => 3,
-            ActiveView::Nodes => 4,
+            ActiveView::Network => 4,
             ActiveView::Liveliness => 5,
         }
     }
@@ -417,7 +417,7 @@ impl App {
                 KeyCode::Char('2') => self.active_view = ActiveView::Topics,
                 KeyCode::Char('3') => self.active_view = ActiveView::Stream,
                 KeyCode::Char('4') => self.active_view = ActiveView::Query,
-                KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
+                KeyCode::Char('5') => self.active_view = ActiveView::Network,
                 KeyCode::Char('6') => self.active_view = ActiveView::Liveliness,
                 KeyCode::Esc => {
                     self.active_view = ActiveView::Dashboard;
@@ -548,7 +548,7 @@ impl App {
                 1 => ActiveView::Topics,
                 2 => ActiveView::Stream,
                 3 => ActiveView::Query,
-                4 => ActiveView::Nodes,
+                4 => ActiveView::Network,
                 5 => ActiveView::Liveliness,
                 _ => self.active_view,
             };
@@ -565,7 +565,7 @@ impl App {
             ActiveView::Topics => self.filtered_topics().len(),
             ActiveView::Stream => self.filtered_sub_messages().len(),
             ActiveView::Query => self.query_results.len(),
-            ActiveView::Nodes => self.nodes.len(),
+            ActiveView::Network => self.nodes.len(),
             ActiveView::Liveliness => self.liveliness_tokens.len(),
             ActiveView::Dashboard => return,
         };
@@ -585,7 +585,7 @@ impl App {
             }
             ActiveView::Stream => self.pin_stream_at(idx),
             ActiveView::Query => self.query_selected = idx,
-            ActiveView::Nodes => self.node_selected = idx,
+            ActiveView::Network => self.node_selected = idx,
             ActiveView::Liveliness => {
                 self.liveliness_selected = idx;
                 self.liveliness_log_scroll = 0;
@@ -606,7 +606,7 @@ impl App {
             ActiveView::Query => {
                 self.query_selected = self.query_selected.saturating_sub(1);
             }
-            ActiveView::Nodes => {
+            ActiveView::Network => {
                 self.node_selected = self.node_selected.saturating_sub(1);
             }
             ActiveView::Liveliness => {
@@ -637,7 +637,7 @@ impl App {
                     self.query_selected += 1;
                 }
             }
-            ActiveView::Nodes => {
+            ActiveView::Network => {
                 let max = self.nodes.len().saturating_sub(1);
                 if self.node_selected < max {
                     self.node_selected += 1;
@@ -804,7 +804,7 @@ impl App {
                 }
                 _ => {}
             },
-            ActiveView::Nodes => match key.code {
+            ActiveView::Network => match key.code {
                 KeyCode::Char('y') => {
                     if let Some(node) = self.nodes.get(self.node_selected).cloned() {
                         self.copy_to_clipboard(node.zid, "zid");
@@ -1004,7 +1004,7 @@ impl App {
             ActiveView::Topics => views::topics::render(self, frame, content_area),
             ActiveView::Stream => views::stream::render(self, frame, content_area),
             ActiveView::Query => views::query::render(self, frame, content_area),
-            ActiveView::Nodes => views::nodes::render(self, frame, content_area),
+            ActiveView::Network => views::network::render(self, frame, content_area),
             ActiveView::Liveliness => views::liveliness::render(self, frame, content_area),
         }
 
