@@ -1399,9 +1399,299 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             }
         },
+
+        Command::Scenario {
+            observe,
+            preset,
+            prefix,
+            pub_,
+            task,
+            for_,
+            settle,
+        } => {
+            run_scenario(cli.json, &config, observe, preset, prefix, pub_, task, for_, settle)
+                .await?;
+        }
     }
 
     Ok(())
+}
+
+/// Extract a string field from a message's attachment, if the attachment parses
+/// as a JSON object carrying that key. Used for `correlation_id` / `request_id`.
+fn attachment_str(msg: &zenmon_core::types::ZenohMessage, field: &str) -> Option<String> {
+    let att = msg.attachment.as_ref()?;
+    let v = att.as_json()?;
+    v.get(field).and_then(|f| f.as_str()).map(String::from)
+}
+
+/// The `scenario` orchestration: resolve observed keys, subscribe, optionally
+/// trigger a `--pub`/`--task`, observe a bounded window (early-exiting on the
+/// task response), then build and print the episode.
+#[allow(clippy::too_many_arguments)]
+async fn run_scenario(
+    json: bool,
+    config: &zenmon_core::config::ZenmonConfig,
+    observe: Vec<String>,
+    preset: Option<String>,
+    prefix: String,
+    pub_: Option<Vec<String>>,
+    task: Option<Vec<String>>,
+    for_: Duration,
+    settle: Option<Duration>,
+) -> Result<(), ZenmonError> {
+    use std::time::Instant;
+    use zenmon_core::scenario::{
+        build_episode, expand_preset, EndedReason, ScenarioEvent, ScenarioMeta, TriggerInfo,
+    };
+
+    // Resolve the observed key set: --observe, then --preset expansion, then the
+    // two task-derived topics. Deduplicate while preserving order.
+    let mut observed: Vec<String> = Vec::new();
+    let push_unique = |set: &mut Vec<String>, k: String| {
+        if !set.contains(&k) {
+            set.push(k);
+        }
+    };
+    for k in observe {
+        push_unique(&mut observed, k);
+    }
+    if let Some(name) = &preset {
+        let expanded = expand_preset(name, &prefix);
+        if expanded.is_empty() {
+            return Err(ZenmonError::invalid_input(format!(
+                "unknown --preset '{}' (known: stall)",
+                name
+            )));
+        }
+        for k in expanded {
+            push_unique(&mut observed, k);
+        }
+    }
+
+    // A --task adds its feedback/response topics and defines a response key that
+    // ends the scenario early.
+    let mut response_key: Option<String> = None;
+    let trigger: TriggerInfo = if let Some(pair) = &task {
+        let task_prefix = pair[0].trim_end_matches('/').to_string();
+        let request_json = pair[1].clone();
+        let request_key = format!("{}/request", task_prefix);
+        let feedback_key = format!("{}/feedback", task_prefix);
+        let resp_key = format!("{}/response", task_prefix);
+        push_unique(&mut observed, feedback_key);
+        push_unique(&mut observed, resp_key.clone());
+        response_key = Some(resp_key);
+        TriggerInfo::Task {
+            request_key,
+            request_bytes: request_json.as_bytes().len(),
+        }
+    } else if let Some(pair) = &pub_ {
+        TriggerInfo::Pub {
+            key_expr: pair[0].clone(),
+            bytes: pair[1].as_bytes().len(),
+        }
+    } else {
+        TriggerInfo::None
+    };
+
+    if observed.is_empty() {
+        return Err(ZenmonError::invalid_input(
+            "no topics to observe: pass --observe or --preset",
+        ));
+    }
+
+    let session = zenmon_core::session::open_session(config).await?;
+
+    // Subscribe to every observed key into one channel BEFORE triggering, so we
+    // never miss the reaction to our own actuation.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut handles = Vec::with_capacity(observed.len());
+    for key in &observed {
+        handles.push(zenmon_core::subscriber::subscribe(&session, key, tx.clone()).await?);
+    }
+    // Drop our sender clone so the channel closes when all subscribers stop.
+    drop(tx);
+
+    if !json {
+        eprintln!(
+            "Recording scenario over {} topic(s) for {} ... (Ctrl+C to stop)",
+            observed.len(),
+            humantime::format_duration(for_)
+        );
+    }
+
+    // The stopwatch defines t_rel_ms = 0; trigger fires right after so its
+    // reaction is measured from the same origin.
+    let stopwatch = Instant::now();
+
+    // Fire the trigger (one-shot). A publish failure is fatal.
+    match (&task, &pub_) {
+        (Some(pair), _) => {
+            let request_key = format!("{}/request", pair[0].trim_end_matches('/'));
+            session
+                .put(&request_key, pair[1].clone())
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+        (_, Some(pair)) => {
+            session
+                .put(&pair[0], pair[1].clone())
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+        (None, None) => {}
+    }
+
+    // Observe the window. Ends when the task response arrives OR --for elapses;
+    // then observe --settle more. Ctrl+C ends early with what we have.
+    let window_deadline = stopwatch + for_;
+    let mut events: Vec<ScenarioEvent> = Vec::new();
+    let mut ended_reason = EndedReason::WindowElapsed;
+    let mut settle_until: Option<Instant> = None;
+
+    loop {
+        // In the settle phase the effective deadline is the settle end; before
+        // that it is the --for window end.
+        let deadline = settle_until.unwrap_or(window_deadline);
+        tokio::select! {
+            biased;
+            _ = tokio::time::sleep_until(deadline.into()) => break,
+            _ = tokio::signal::ctrl_c() => {
+                if !json {
+                    eprintln!("\nStopped.");
+                }
+                break;
+            }
+            item = rx.recv() => match item {
+                Some(msg) => {
+                    let t_rel_ms = stopwatch.elapsed().as_millis() as u64;
+                    let is_response = response_key
+                        .as_deref()
+                        .is_some_and(|rk| rk == msg.key_expr);
+                    events.push(ScenarioEvent {
+                        t_rel_ms,
+                        correlation_id: attachment_str(&msg, "correlation_id"),
+                        request_id: attachment_str(&msg, "request_id"),
+                        encoding: msg.encoding.clone(),
+                        kind: msg.kind.clone(),
+                        payload: msg.payload.to_view(),
+                        key_expr: msg.key_expr,
+                    });
+                    // First response ends the active window; then run --settle.
+                    if is_response && settle_until.is_none() {
+                        ended_reason = EndedReason::TaskResponse;
+                        match settle {
+                            Some(s) => settle_until = Some(Instant::now() + s),
+                            None => break,
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+
+    // If --settle was requested but the window elapsed without a response, still
+    // observe the extra settle time before finishing.
+    if settle_until.is_none() {
+        if let Some(s) = settle {
+            let settle_end = Instant::now() + s;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep_until(settle_end.into()) => break,
+                    _ = tokio::signal::ctrl_c() => break,
+                    item = rx.recv() => match item {
+                        Some(msg) => {
+                            let t_rel_ms = stopwatch.elapsed().as_millis() as u64;
+                            events.push(ScenarioEvent {
+                                t_rel_ms,
+                                correlation_id: attachment_str(&msg, "correlation_id"),
+                                request_id: attachment_str(&msg, "request_id"),
+                                encoding: msg.encoding.clone(),
+                                kind: msg.kind.clone(),
+                                payload: msg.payload.to_view(),
+                                key_expr: msg.key_expr,
+                            });
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+    }
+
+    for h in handles {
+        h.abort();
+    }
+    session
+        .close()
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!(e))?;
+
+    let meta = ScenarioMeta {
+        trigger,
+        for_ms: for_.as_millis() as u64,
+        settle_ms: settle.map(|s| s.as_millis() as u64).unwrap_or(0),
+        observed,
+        ended_reason,
+    };
+    let episode = build_episode(&meta, &events);
+
+    if json {
+        println!("{}", serde_json::to_string(&episode)?);
+    } else {
+        print_scenario_summary(&episode);
+    }
+    Ok(())
+}
+
+/// Compact human summary of an episode: trigger, per-topic counts, correlation
+/// chain count, ended reason.
+fn print_scenario_summary(episode: &serde_json::Value) {
+    let meta = &episode["meta"];
+    let trigger = &meta["trigger"];
+    let trigger_str = match trigger["kind"].as_str() {
+        Some("task") => format!("task -> {}", trigger["request_key"].as_str().unwrap_or("")),
+        Some("pub") => format!("pub -> {}", trigger["key_expr"].as_str().unwrap_or("")),
+        _ => "none".to_string(),
+    };
+    println!("trigger:       {}", trigger_str);
+    println!(
+        "window:        {}ms (+{}ms settle)",
+        meta["for_ms"].as_u64().unwrap_or(0),
+        meta["settle_ms"].as_u64().unwrap_or(0)
+    );
+    println!(
+        "messages:      {}",
+        meta["message_count"].as_u64().unwrap_or(0)
+    );
+    println!(
+        "ended:         {}",
+        meta["ended_reason"].as_str().unwrap_or("")
+    );
+
+    if let Some(topics) = episode["topics"].as_object() {
+        println!("topics:");
+        let mut keys: Vec<&String> = topics.keys().collect();
+        keys.sort();
+        for k in keys {
+            let t = &topics[k];
+            println!(
+                "  {:<50} {} msg (t {}..{}ms)",
+                k,
+                t["count"].as_u64().unwrap_or(0),
+                t["first_t_rel_ms"].as_u64().unwrap_or(0),
+                t["last_t_rel_ms"].as_u64().unwrap_or(0),
+            );
+        }
+    }
+
+    let chains = episode["correlations"]
+        .as_object()
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!("correlations:  {} chain(s)", chains);
 }
 
 #[cfg(test)]
