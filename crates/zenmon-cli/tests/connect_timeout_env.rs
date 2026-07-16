@@ -8,10 +8,9 @@
 
 use std::process::Command;
 
-/// Run `zenmon --json info` with the given `ZENMON_CONNECT_TIMEOUT`. `info` fails
-/// deterministically without a router, so a *valid* timeout surfaces a
-/// `connection` error while an *invalid* one is rejected earlier as
-/// `invalid_input`.
+/// Run `zenmon --json info` with the given `ZENMON_CONNECT_TIMEOUT`. An *invalid*
+/// value is rejected at validation as `invalid_input` (exit code 2) before any
+/// connection is attempted, regardless of whether a router is reachable.
 fn run_with_timeout(value: &str) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_zenmon"))
         .env("ZENMON_CONNECT_TIMEOUT", value)
@@ -57,13 +56,16 @@ fn oversized_env_timeout_is_rejected() {
 
 #[test]
 fn valid_env_timeout_passes_validation() {
-    // A valid timeout is not rejected as invalid_input; without a router `info`
-    // then fails to connect (exit code 3), proving the value got through.
+    // A valid timeout must not be rejected as invalid_input (exit code 2).
+    // Whether `info` then connects (exit 0, if a router is reachable) or fails
+    // to connect (exit 3, if not) is environment-dependent and irrelevant here —
+    // both outcomes prove the value passed validation.
     let out = run_with_timeout("5s");
     assert_ne!(
-        error_kind(&out),
-        "invalid_input",
-        "a valid timeout must not be rejected as invalid input"
+        out.status.code(),
+        Some(2),
+        "a valid timeout must not be rejected as invalid_input (got exit {:?}, stderr: {})",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
     );
-    assert_eq!(out.status.code(), Some(3), "connection error exit code");
 }
