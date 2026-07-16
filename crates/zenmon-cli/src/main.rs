@@ -1419,12 +1419,13 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             for_,
             settle,
             track,
+            no_timeline,
         } => {
             // A resolved contract lets --task surface & validate its request schema.
             let contract = load_contract_opt(&cli.contract)?;
             run_scenario(
                 cli.json, &config, observe, preset, prefix, pub_, task, pub_rate, pub_for,
-                pub_count, for_, settle, track, contract,
+                pub_count, for_, settle, track, no_timeline, contract,
             )
             .await?;
         }
@@ -1544,6 +1545,7 @@ async fn run_scenario(
     for_: Duration,
     settle: Option<Duration>,
     track: Vec<String>,
+    no_timeline: bool,
     contract: Option<Contract>,
 ) -> Result<(), ZenmonError> {
     use std::time::Instant;
@@ -1827,6 +1829,11 @@ async fn run_scenario(
     let mut episode = build_episode(&meta, &events);
     if !specs.is_empty() {
         episode["tracks"] = build_tracks(&events, &specs);
+    }
+    if no_timeline {
+        if let Some(obj) = episode.as_object_mut() {
+            obj.remove("timeline");
+        }
     }
 
     if json {
