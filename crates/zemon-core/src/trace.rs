@@ -23,7 +23,7 @@ pub fn format_segment_stamp(t: SystemTime) -> String {
 
 /// Inverse of [`format_segment_stamp`]. Returns `None` on malformed input.
 pub fn parse_segment_stamp(s: &str) -> Option<SystemTime> {
-    if s.len() != 16 || s.as_bytes()[8] != b'T' || s.as_bytes()[15] != b'Z' {
+    if !s.is_ascii() || s.len() != 16 || s.as_bytes()[8] != b'T' || s.as_bytes()[15] != b'Z' {
         return None;
     }
     let rfc = format!(
@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn filenames_sort_chronologically() {
-        let mut names = vec![
+        let mut names = [
             segment_file_name(t(2000), 0),
             segment_file_name(t(1000), 9),
             segment_file_name(t(1000), 1),
@@ -90,5 +90,17 @@ mod tests {
     fn non_segment_files_ignored() {
         assert_eq!(parse_segment_file_name("notes.txt"), None);
         assert_eq!(parse_segment_file_name("zemon-trace-bad.ndjson"), None);
+    }
+
+    #[test]
+    fn parse_segment_stamp_rejects_non_ascii_without_panic() {
+        // Build a 16-BYTE non-ASCII string ('é' is 2 bytes) that passes the
+        // byte-length check; must return None, not panic on char-boundary slicing.
+        let crafted = format!("ABC\u{00e9}DEFTGHIJKL{}", "Z");
+        assert_eq!(crafted.len(), 16);
+        assert_eq!(parse_segment_stamp(&crafted), None);
+        // And a segment-shaped filename with such a stamp must also be ignored, not panic.
+        let name = format!("zemon-trace-{}-00001.ndjson", crafted);
+        assert_eq!(parse_segment_file_name(&name), None);
     }
 }
