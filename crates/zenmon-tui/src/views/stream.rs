@@ -14,15 +14,30 @@ fn format_stream_timestamp(raw: &str) -> String {
     match zenoh::time::Timestamp::from_str(raw) {
         Ok(ts) => {
             let rfc3339 = ts.get_time().to_string_rfc3339_lossy();
-            trim_fractional_zeros(
-                rfc3339
-                    .strip_suffix('Z')
-                    .unwrap_or(&rfc3339)
-                    .replace('T', " "),
-            )
+            let readable = rfc3339
+                .strip_suffix('Z')
+                .unwrap_or(&rfc3339)
+                .replace('T', " ");
+            // `to_string_rfc3339_lossy` fraction width varies by zenoh version
+            // (micro- vs nanosecond). Cap to microseconds so the display is
+            // deterministic, then drop any trailing zeros.
+            trim_fractional_zeros(cap_fractional_digits(readable, 6))
         }
         Err(_) => raw.to_string(),
     }
+}
+
+/// Truncate the fractional-seconds part of a `HH:MM:SS.ffffff` string to at most
+/// `max` digits. Strings with fewer (or no) fractional digits are unchanged.
+/// Assumes no trailing timezone offset (the `Z` suffix is stripped beforehand).
+fn cap_fractional_digits(mut ts: String, max: usize) -> String {
+    if let Some(dot_idx) = ts.find('.') {
+        let frac_end = dot_idx + 1 + max;
+        if ts.len() > frac_end {
+            ts.truncate(frac_end);
+        }
+    }
+    ts
 }
 
 fn trim_fractional_zeros(mut ts: String) -> String {
@@ -180,15 +195,34 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_stream_timestamp, trim_fractional_zeros};
+    use super::{cap_fractional_digits, format_stream_timestamp, trim_fractional_zeros};
 
     #[test]
     fn formats_zenoh_timestamp_as_readable_datetime() {
         let formatted = format_stream_timestamp("7386690599959157260/33");
-        // zenoh 1.9's `to_string_rfc3339_lossy()` renders the fraction at
-        // microsecond precision, so the sub-microsecond nanosecond digits are
-        // dropped before `trim_fractional_zeros` ever sees them.
+        // `to_string_rfc3339_lossy()` fraction width is zenoh-version dependent
+        // (some emit microseconds, some nanoseconds). We cap it to microseconds
+        // ourselves so the display is deterministic regardless of that.
         assert_eq!(formatted, "2024-07-01 15:32:06.860479");
+    }
+
+    #[test]
+    fn caps_fraction_to_microseconds() {
+        // Nanosecond fraction is truncated to 6 digits (version-independent).
+        assert_eq!(
+            cap_fractional_digits("2024-07-01 15:32:06.860479001".to_string(), 6),
+            "2024-07-01 15:32:06.860479"
+        );
+        // Fewer than 6 fractional digits are left untouched.
+        assert_eq!(
+            cap_fractional_digits("2024-07-01 15:32:06.86".to_string(), 6),
+            "2024-07-01 15:32:06.86"
+        );
+        // No fractional part: unchanged.
+        assert_eq!(
+            cap_fractional_digits("2024-07-01 15:32:06".to_string(), 6),
+            "2024-07-01 15:32:06"
+        );
     }
 
     #[test]
