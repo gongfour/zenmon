@@ -28,7 +28,7 @@ pub struct Cli {
 
     /// Connect deadline (e.g. 5s). In client mode, fail if the router isn't
     /// reachable within this window. Ignored for peer mode.
-    #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+    #[arg(long, value_parser = crate::duration::parse_connect_timeout_arg)]
     pub connect_timeout: Option<Duration>,
 
     /// Output in JSON format
