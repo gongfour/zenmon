@@ -14,6 +14,19 @@ pub fn parse_duration_arg(s: &str) -> Result<Duration, String> {
     Ok(d)
 }
 
+/// Parse the `--connect-timeout` option.
+///
+/// Same humantime syntax as [`parse_duration_arg`], but additionally enforces
+/// the connect-timeout bounds (>= 1ms, <= ~49 days) shared with the
+/// `ZEMON_CONNECT_TIMEOUT` environment variable, so a sub-millisecond value like
+/// `1ns` can't silently round to `0ms`.
+pub fn parse_connect_timeout_arg(s: &str) -> Result<Duration, String> {
+    let d = humantime::parse_duration(s.trim())
+        .map_err(|e| format!("invalid duration '{}': {} (try e.g. 5s, 100ms)", s, e))?;
+    zemon_core::config::validate_connect_timeout(d)
+        .map_err(|msg| format!("invalid --connect-timeout '{}': {}", s, msg))
+}
+
 /// Parse a positive count option (`--count N`). Rejects zero and non-numeric
 /// input so bounded watch/subscribe commands get a clear error.
 pub fn parse_count_arg(s: &str) -> Result<u64, String> {
@@ -121,5 +134,35 @@ mod tests {
     #[test]
     fn rejects_bad_suffix() {
         assert!(parse_duration_arg("5x").is_err());
+    }
+
+    #[test]
+    fn connect_timeout_accepts_valid_range() {
+        assert_eq!(
+            parse_connect_timeout_arg("5s").unwrap(),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            parse_connect_timeout_arg("1ms").unwrap(),
+            Duration::from_millis(1)
+        );
+    }
+
+    #[test]
+    fn connect_timeout_rejects_sub_millisecond() {
+        // Would truncate to 0ms via as_millis(); must be rejected, not silenced.
+        assert!(parse_connect_timeout_arg("1ns").is_err());
+        assert!(parse_connect_timeout_arg("500us").is_err());
+    }
+
+    #[test]
+    fn connect_timeout_rejects_zero() {
+        assert!(parse_connect_timeout_arg("0s").is_err());
+    }
+
+    #[test]
+    fn connect_timeout_rejects_too_large() {
+        // > u32::MAX ms (~49.7 days).
+        assert!(parse_connect_timeout_arg("100days").is_err());
     }
 }
