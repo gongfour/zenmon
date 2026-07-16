@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-zemon is a Rust CLI + TUI tool for monitoring and debugging Zenoh networks. Single binary `zemon` with headless CLI subcommands and an interactive ratatui TUI dashboard.
+zenmon is a Rust CLI + TUI tool for monitoring and debugging Zenoh networks. Single binary `zenmon` with headless CLI subcommands and an interactive ratatui TUI dashboard.
 
 ## Build & Run
 
 ```bash
-cargo build --release          # Release binary at ./target/release/zemon
+cargo build --release          # Release binary at ./target/release/zenmon
 cargo check                    # Quick type check
 cargo run -- sub "test/**"     # Run via cargo
 ```
@@ -18,14 +18,14 @@ Requires: Rust 1.75+, zenohd for testing (homebrew: `brew install zenoh`)
 
 ```
 crates/
-  zemon-core/    # Library: Zenoh session, subscribe, query, registry
-  zemon-cli/     # Binary: clap CLI, produces `zemon`
-  zemon-tui/     # Library: ratatui views, event loop, app state
+  zenmon-core/    # Library: Zenoh session, subscribe, query, registry
+  zenmon-cli/     # Binary: clap CLI, produces `zenmon`
+  zenmon-tui/     # Library: ratatui views, event loop, app state
 ```
 
-- `zemon-core` is the shared library — CLI and TUI both depend on it
-- `zemon-tui` is a library crate called by `zemon-cli` via `zemon tui` subcommand
-- Single binary: `zemon` (defined in zemon-cli/Cargo.toml)
+- `zenmon-core` is the shared library — CLI and TUI both depend on it
+- `zenmon-tui` is a library crate called by `zenmon-cli` via `zenmon tui` subcommand
+- Single binary: `zenmon` (defined in zenmon-cli/Cargo.toml)
 
 ## Key Patterns
 
@@ -44,10 +44,10 @@ No unit tests yet. Manual testing:
 zenohd
 
 # Terminal 2: Start TUI
-./target/release/zemon tui
+./target/release/zenmon tui
 
 # Terminal 3: Publish test data
-./target/release/zemon pub test/hello '{"msg":"world"}' --att '{"source":"debug"}'
+./target/release/zenmon pub test/hello '{"msg":"world"}' --att '{"source":"debug"}'
 ```
 
 ## Conventions
