@@ -163,6 +163,34 @@ fn build_config(cli: &Cli) -> ZemonConfig {
     cfg
 }
 
+/// Default tracing filter for plain CLI mode.
+const DEFAULT_LOG_FILTER: &str = "zemon=info,zenoh=warn";
+
+/// Resolve the tracing filter for the process.
+///
+/// In JSON or TUI mode logs are forced fully OFF regardless of `RUST_LOG`:
+/// - JSON mode: stdout must carry only the structured JSON result and stderr
+///   only the single structured error, so no log line may reach either stream.
+///   Honoring `RUST_LOG` here leaks Zenoh's full `Config` debug output (which
+///   includes authentication fields) and breaks the machine-readable contract.
+/// - TUI mode: stray log output corrupts the ratatui display.
+///
+/// Only plain CLI mode consults `RUST_LOG`, falling back to a sensible default.
+fn resolve_log_filter(
+    is_tui: bool,
+    is_json: bool,
+    rust_log: Option<&str>,
+) -> tracing_subscriber::EnvFilter {
+    if is_tui || is_json {
+        return tracing_subscriber::EnvFilter::new("off");
+    }
+    match rust_log {
+        Some(spec) => tracing_subscriber::EnvFilter::try_new(spec)
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER)),
+        None => tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -175,19 +203,12 @@ async fn main() {
         let _ = color_eyre::install();
     }
 
-    // TUI mode: suppress logs to avoid corrupting the terminal display.
-    // JSON mode: suppress logs to keep stderr a clean single JSON error.
-    // Plain CLI mode: show logs on stderr as normal.
-    let default_filter = if is_tui || is_json {
-        "off"
-    } else {
-        "zemon=info,zenoh=warn"
-    };
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| default_filter.into()),
-        )
+        .with_env_filter(resolve_log_filter(
+            is_tui,
+            is_json,
+            std::env::var("RUST_LOG").ok().as_deref(),
+        ))
         .init();
 
     let config = build_config(&cli);
@@ -1004,6 +1025,7 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing::level_filters::LevelFilter;
 
     #[test]
     fn scout_heading_describes_a_scouting_port_without_a_domain() {
@@ -1011,5 +1033,43 @@ mod tests {
 
         assert_eq!(heading, "Scouting port 7446  (2 nodes)");
         assert!(!heading.to_lowercase().contains("domain"));
+    }
+
+    /// JSON mode must force logs off even when the user exports `RUST_LOG=trace`,
+    /// otherwise Zenoh's `Config` debug (auth fields included) leaks and breaks
+    /// the single-JSON-line stderr / clean-JSON stdout contract.
+    #[test]
+    fn json_mode_forces_off_despite_rust_log() {
+        let filter = resolve_log_filter(false, true, Some("trace"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::OFF));
+    }
+
+    /// TUI mode must force logs off even with `RUST_LOG` set, to avoid corrupting
+    /// the ratatui display.
+    #[test]
+    fn tui_mode_forces_off_despite_rust_log() {
+        let filter = resolve_log_filter(true, false, Some("trace"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::OFF));
+    }
+
+    /// Plain CLI mode honors `RUST_LOG`.
+    #[test]
+    fn plain_mode_honors_rust_log() {
+        let filter = resolve_log_filter(false, false, Some("trace"));
+        assert_eq!(filter.max_level_hint(), Some(LevelFilter::TRACE));
+    }
+
+    /// Plain CLI mode falls back to the default filter when `RUST_LOG` is unset,
+    /// and also when it is malformed.
+    #[test]
+    fn plain_mode_defaults_without_or_with_invalid_rust_log() {
+        assert_eq!(
+            resolve_log_filter(false, false, None).max_level_hint(),
+            Some(LevelFilter::INFO)
+        );
+        assert_eq!(
+            resolve_log_filter(false, false, Some("=not a valid filter=")).max_level_hint(),
+            Some(LevelFilter::INFO)
+        );
     }
 }
