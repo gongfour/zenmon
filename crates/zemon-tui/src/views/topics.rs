@@ -1,5 +1,4 @@
 use crate::app::App;
-use zemon_core::types::MessagePayload;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -89,12 +88,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 format!("{:.1}s ago", age.as_secs_f64())
             };
 
-            let payload_str = match &msg.payload {
-                MessagePayload::Json(v) => {
-                    serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
-                }
-                other => format!("{}", other),
-            };
+            let payload_str = msg.payload.pretty();
 
             let mut lines = vec![
                 Line::from(vec![
@@ -137,12 +131,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             }
 
             if let Some(att) = &msg.attachment {
-                let att_str = match att {
-                    MessagePayload::Json(v) => {
-                        serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{}", v))
-                    }
-                    other => format!("{}", other),
-                };
+                let att_str = att.pretty();
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "Attachment:",
