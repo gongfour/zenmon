@@ -1138,7 +1138,8 @@ impl App {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let [current_row, input_row, _gap, list_area, hint_row] = Layout::vertical([
+        let [subtitle_row, current_row, input_row, _gap, list_area, hint_row] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -1146,6 +1147,12 @@ impl App {
             Constraint::Length(1),
         ])
         .areas(inner);
+
+        frame.render_widget(
+            Paragraph::new("Zenoh multicast discovery: 224.0.0.224:<port>")
+                .style(Style::default().fg(Color::DarkGray)),
+            subtitle_row,
+        );
 
         let current_text = match self.scout_port_current {
             Some(p) => format!("Current: {}", p),
