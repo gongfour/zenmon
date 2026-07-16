@@ -444,7 +444,7 @@ impl App {
                 self.scout_port_input.clear();
             }
             KeyCode::Char('s') => {
-                if self.scout_port_input.is_empty() && !self.port_scan_in_progress {
+                if !self.port_scan_in_progress {
                     self.pending_port_scan_request = true;
                 }
             }
@@ -1108,7 +1108,7 @@ impl App {
             ),
             middle_span,
             Span::styled(
-                " q:quit  1-6:view  /:filter  y:copy  P:port  m:mode ",
+                " q:quit  1-6:view  /:filter  y:copy  r:refresh  P:port  m:mode ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
@@ -1128,7 +1128,7 @@ impl App {
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Scout Port ")
+            .title(" Switch Scouting Port ")
             .style(
                 Style::default()
                     .fg(Color::White)
@@ -1148,12 +1148,8 @@ impl App {
         .areas(inner);
 
         let current_text = match self.scout_port_current {
-            Some(p) => format!(
-                "Current: {} (domain {})",
-                p,
-                p.saturating_sub(7446)
-            ),
-            None => "Current: 7446 (default, domain 0)".to_string(),
+            Some(p) => format!("Current: {}", p),
+            None => "Current: 7446 (default)".to_string(),
         };
         frame.render_widget(
             Paragraph::new(current_text).style(Style::default().fg(Color::Gray)),
@@ -1161,9 +1157,9 @@ impl App {
         );
 
         let input_text = if self.scout_port_input.is_empty() {
-            "New port: _".to_string()
+            "Go to port: _".to_string()
         } else {
-            format!("New port: {}_", self.scout_port_input)
+            format!("Go to port: {}_", self.scout_port_input)
         };
         frame.render_widget(
             Paragraph::new(input_text).style(Style::default().fg(Color::Cyan)),
@@ -1206,10 +1202,9 @@ impl App {
                             ConnectionState::Connected(zid) if r.nodes.iter().any(|n| n.zid == *zid)
                         );
                         let base_text = format!(
-                            "{}{:>5}  (domain {:<3})  {} node(s)",
+                            "{}{:>5}   {} node(s)",
                             marker,
                             r.port,
-                            r.port.saturating_sub(7446),
                             r.nodes.len()
                         );
                         let mut spans = vec![Span::styled(
@@ -1239,7 +1234,7 @@ impl App {
         }
 
         frame.render_widget(
-            Paragraph::new(" s:scan  Enter:reconnect  jk/↑↓:select  Esc:close ")
+            Paragraph::new(" s:scan  jk/↑↓:select  Enter:switch  Esc:close ")
                 .style(Style::default().fg(Color::DarkGray)),
             hint_row,
         );
