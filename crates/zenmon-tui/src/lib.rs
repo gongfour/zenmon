@@ -239,8 +239,8 @@ async fn run_loop(
                 let ke = key_expr.clone();
                 tokio::spawn(async move {
                     match zenmon_core::query::get(&s, &ke, None, Duration::from_secs(5), None).await {
-                        Ok(results) => {
-                            let _ = tx.send(QueryResult::Ok(results));
+                        Ok(outcome) => {
+                            let _ = tx.send(QueryResult::Ok(outcome.replies));
                         }
                         Err(e) => {
                             let _ = tx.send(QueryResult::Err(format!("{}", e)));
