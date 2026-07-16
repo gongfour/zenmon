@@ -654,6 +654,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             count,
             duration,
         } => {
+            let value = resolve_payload_arg(&value)?;
             let session = zenmon_core::session::open_session(&config).await?;
             let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
 
@@ -1426,6 +1427,26 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
     Ok(())
 }
 
+/// Resolve a publish/request value argument: `@<path>` reads the value from that
+/// file, `-` reads it from stdin, and anything else is the literal value. Lets
+/// large or dynamically-built payloads (e.g. a VDA5050 mission for `--task`) come
+/// from a file instead of an unwieldy inline CLI string.
+fn resolve_payload_arg(s: &str) -> Result<String, ZenmonError> {
+    if s == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| ZenmonError::invalid_input(format!("reading value from stdin: {e}")))?;
+        Ok(buf)
+    } else if let Some(path) = s.strip_prefix('@') {
+        std::fs::read_to_string(path)
+            .map_err(|e| ZenmonError::invalid_input(format!("reading value from '{path}': {e}")))
+    } else {
+        Ok(s.to_string())
+    }
+}
+
 /// Extract a string field from a message's attachment, if the attachment parses
 /// as a JSON object carrying that key. Used for `correlation_id` / `request_id`.
 fn attachment_str(msg: &zenmon_core::types::ZenohMessage, field: &str) -> Option<String> {
@@ -1480,8 +1501,8 @@ async fn run_scenario(
     observe: Vec<String>,
     preset: Option<String>,
     prefix: String,
-    pub_: Option<Vec<String>>,
-    task: Option<Vec<String>>,
+    mut pub_: Option<Vec<String>>,
+    mut task: Option<Vec<String>>,
     pub_rate: Option<f64>,
     pub_for: Option<Duration>,
     pub_count: Option<u64>,
@@ -1513,6 +1534,14 @@ async fn run_scenario(
             key: key.to_string(),
             field: field.to_string(),
         });
+    }
+
+    // Resolve @file / stdin payloads for the trigger before anyone reads them.
+    if let Some(p) = pub_.as_mut() {
+        p[1] = resolve_payload_arg(&p[1])?;
+    }
+    if let Some(p) = task.as_mut() {
+        p[1] = resolve_payload_arg(&p[1])?;
     }
 
     // If a contract is resolved and we're triggering a --task, surface its
@@ -1824,6 +1853,25 @@ mod tests {
             encoding_matches: matches,
             enveloped: declared.then_some(true),
         }
+    }
+
+    #[test]
+    fn resolve_payload_literal_returned_as_is() {
+        assert_eq!(resolve_payload_arg("{\"a\":1}").unwrap(), "{\"a\":1}");
+    }
+
+    #[test]
+    fn resolve_payload_at_file_reads_contents() {
+        let path = std::env::temp_dir().join("zenmon_resolve_payload_test.json");
+        std::fs::write(&path, "{\"from\":\"file\"}").unwrap();
+        let arg = format!("@{}", path.display());
+        assert_eq!(resolve_payload_arg(&arg).unwrap(), "{\"from\":\"file\"}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn resolve_payload_missing_file_is_error() {
+        assert!(resolve_payload_arg("@/no/such/zenmon/payload/file.json").is_err());
     }
 
     #[test]
