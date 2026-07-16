@@ -3,7 +3,7 @@ mod duration;
 mod watch;
 
 use clap::Parser;
-use cli::{Cli, Command};
+use cli::{Cli, Command, QueryableCommand};
 use zemon_core::config::{ConnectMode, ZemonConfig};
 use zemon_core::error::ZemonError;
 use std::time::Duration;
@@ -681,6 +681,127 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                 println!("equal:         {}", rel.equal);
                 println!("relation:      {:?}", rel.relation);
             }
+        }
+
+        Command::Queryable {
+            command:
+                QueryableCommand::Serve {
+                    key_expr,
+                    reply,
+                    reply_file,
+                    reply_key,
+                    encoding,
+                    count,
+                    duration,
+                    include_request,
+                    max_request_bytes,
+                },
+        } => {
+            use zemon_core::types::MessagePayload;
+
+            // Resolve the fixed reply payload.
+            let reply_bytes: Vec<u8> = match (reply, reply_file) {
+                (Some(s), None) => s.into_bytes(),
+                (None, Some(path)) => std::fs::read(&path).map_err(|e| {
+                    ZemonError::invalid_input(format!(
+                        "cannot read --reply-file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?,
+                (None, None) => {
+                    return Err(ZemonError::invalid_input(
+                        "provide --reply <string> or --reply-file <path>",
+                    ))
+                }
+                (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
+            };
+            let reply_key = zemon_core::queryable::resolve_reply_key(&key_expr, reply_key.as_deref())?;
+            let max_request = max_request_bytes.map(|n| n as usize).unwrap_or(1024);
+
+            let session = zemon_core::session::open_session(&config).await?;
+            let queryable = session
+                .declare_queryable(&key_expr)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            if !cli.json {
+                eprintln!(
+                    "Serving queryable on '{}' (reply key '{}')... (Ctrl+C to stop)",
+                    key_expr, reply_key
+                );
+            }
+
+            let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
+            let mut seq: u64 = 0;
+            let mut stop = false;
+            loop {
+                let deadline = budget.deadline();
+                tokio::select! {
+                    biased;
+                    _ = watch::sleep_until_opt(deadline) => break,
+                    _ = tokio::signal::ctrl_c() => {
+                        if !cli.json {
+                            eprintln!("\nStopped.");
+                        }
+                        break;
+                    }
+                    q = queryable.recv_async() => match q {
+                        Ok(query) => {
+                            seq += 1;
+                            let mut builder = query.reply(reply_key.as_str(), reply_bytes.clone());
+                            if let Some(enc) = &encoding {
+                                builder = builder.encoding(enc.as_str());
+                            }
+                            // A reply failure is fatal (structured error), per the contract.
+                            builder.await.map_err(|e| {
+                                ZemonError::internal(format!("reply failed: {}", e))
+                            })?;
+
+                            if cli.json {
+                                let mut ev = serde_json::json!({
+                                    "event": "replied",
+                                    "key_expr": reply_key,
+                                    "request_seq": seq,
+                                    "reply_bytes": reply_bytes.len(),
+                                });
+                                if include_request {
+                                    ev["request_key_expr"] =
+                                        serde_json::json!(query.key_expr().to_string());
+                                    if let Some(zb) = query.payload() {
+                                        ev["request_payload"] = MessagePayload::from_zbytes(zb)
+                                            .to_view_capped(max_request);
+                                    }
+                                }
+                                println!("{}", serde_json::to_string(&ev)?);
+                            } else {
+                                println!(
+                                    "replied #{} to '{}' ({} bytes)",
+                                    seq,
+                                    query.key_expr(),
+                                    reply_bytes.len()
+                                );
+                            }
+
+                            if budget.record() {
+                                stop = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if stop {
+                    break;
+                }
+            }
+
+            queryable
+                .undeclare()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session
+                .close()
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!(e))?;
         }
 
         Command::Tui { refresh } => {
