@@ -1,9 +1,12 @@
 use crate::app::App;
-use zenmon_core::types::{NodeInfo, NodeSources};
+use crate::views::topology::{
+    build_topology_rows, node_row_count, visual_index_of_node, TopoRow,
+};
+use zenmon_core::types::NodeSources;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use std::time::{Duration, SystemTime};
 
@@ -14,76 +17,120 @@ const BOTH_SOURCES: NodeSources = NodeSources::from_bits_retain(
 
 pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [list_area, detail_area] =
-        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
             .areas(area);
 
-    render_node_list(app, frame, list_area);
+    render_topology(app, frame, list_area);
     render_node_detail(app, frame, detail_area);
 }
 
-fn render_node_list(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
+fn render_topology(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
+    let now = SystemTime::now();
+    let rows = build_topology_rows(&app.nodes, app.self_zid.as_deref(), now);
+    let total_nodes = node_row_count(&rows);
+
+    if rows.is_empty() {
+        app.list_rect = Some(area);
+        let hint = Paragraph::new(Line::from(Span::styled(
+            "No nodes yet — press r to scout",
+            Style::default().fg(Color::DarkGray),
+        )))
+        .block(Block::default().borders(Borders::ALL).title(" Topology "));
+        frame.render_widget(hint, area);
+        return;
+    }
+
+    // Clamp selection and compute a visual scroll offset that keeps the
+    // selected node visible.
+    if total_nodes == 0 {
+        app.node_selected = 0;
+    } else if app.node_selected >= total_nodes {
+        app.node_selected = total_nodes - 1;
+    }
     app.list_rect = Some(area);
-    app.list_first_item_row = area.y + 3;
-    let visible = area.height.saturating_sub(4) as usize;
-    app.list_scroll_offset = if visible > 0 && app.node_selected >= visible {
-        app.node_selected + 1 - visible
+    app.list_first_item_row = area.y + 1;
+    let visible = area.height.saturating_sub(2) as usize;
+    let sel_visual = visual_index_of_node(&rows, app.node_selected).unwrap_or(0);
+    app.list_scroll_offset = if visible > 0 && sel_visual >= visible {
+        sel_visual + 1 - visible
     } else {
         0
     };
 
-    let now = SystemTime::now();
-    let header = Row::new(vec![
-        Cell::from("ZID"),
-        Cell::from("Kind"),
-        Cell::from("Source"),
-    ])
-    .style(
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )
-    .bottom_margin(1);
+    let scout_status = if app.scout_in_progress { " [scouting...]" } else { "" };
+    let port = app.scout_port_current.unwrap_or(7446);
+    let title = format!(" Topology — scout:{} · {} nodes{} ", port, total_nodes, scout_status);
 
-    let self_zid = app.self_zid.as_deref();
-    let rows: Vec<Row> = app
-        .nodes
+    let node_idx_before = rows
         .iter()
-        .enumerate()
+        .take(app.list_scroll_offset)
+        .filter(|r| matches!(r, TopoRow::Node(_)))
+        .count();
+    let mut node_idx = node_idx_before;
+    let lines: Vec<Line> = rows
+        .iter()
         .skip(app.list_scroll_offset)
         .take(visible)
-        .map(|(i, node)| build_row(node, i == app.node_selected, now, self_zid))
+        .map(|row| match row {
+            TopoRow::Header(label) => {
+                Line::from(Span::styled(label.clone(), Style::default().fg(Color::DarkGray)))
+            }
+            TopoRow::Node(n) => {
+                let this = node_idx;
+                node_idx += 1;
+                topo_node_line(n, this == app.node_selected)
+            }
+        })
         .collect();
 
-    let widths = [
-        Constraint::Percentage(50),
-        Constraint::Percentage(15),
-        Constraint::Percentage(35),
-    ];
-
-    let (n_admin, n_scout, n_both) = count_by_source(&app.nodes);
-    let scout_status = if app.scout_in_progress {
-        " [scouting...]"
-    } else {
-        ""
-    };
-    let title = format!(
-        " Nodes ({}) a:{} s:{} b:{}{} ",
-        app.nodes.len(),
-        n_admin,
-        n_scout,
-        n_both,
-        scout_status
-    );
-
-    let table = Table::new(rows, widths)
-        .header(header)
+    let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(title));
+    frame.render_widget(para, area);
+}
 
-    frame.render_widget(table, area);
+fn topo_node_line<'a>(n: &crate::views::topology::TopoNode, selected: bool) -> Line<'a> {
+    let icon = if n.alive { "● " } else { "○ " };
+    let icon_style = if n.alive {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::Red)
+    };
+    let kind_color = match n.kind.as_str() {
+        "router" => Color::Green,
+        "peer" => Color::Blue,
+        "client" => Color::Gray,
+        _ => Color::White,
+    };
+    let name_style = if selected {
+        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let branch = if n.is_child { " ├─ " } else { "" };
+    let cursor = if selected { ">" } else { " " };
+    let zid_short = &n.zid[..n.zid.len().min(16)];
+    let mut spans = vec![
+        Span::raw(format!("{}{}", cursor, branch)),
+        Span::styled(icon, if selected { name_style } else { icon_style }),
+        Span::styled(format!("{:<7}", n.kind), if selected { name_style } else { Style::default().fg(kind_color) }),
+        Span::raw(" "),
+        Span::styled(zid_short.to_string(), name_style),
+        Span::raw("  "),
+        Span::styled(n.locator.clone(), Style::default().fg(Color::DarkGray)),
+    ];
+    if n.is_self {
+        spans.push(Span::styled(" (self)", Style::default().fg(Color::DarkGray)));
+    }
+    if !n.alive {
+        spans.push(Span::styled(" stale", Style::default().fg(Color::Red)));
+    }
+    Line::from(spans)
 }
 
 fn render_node_detail(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    let selected = app.nodes.get(app.node_selected);
+    let rows = build_topology_rows(&app.nodes, app.self_zid.as_deref(), SystemTime::now());
+    let selected_zid = crate::views::topology::nth_node_zid(&rows, app.node_selected);
+    let selected = selected_zid.and_then(|z| app.nodes.iter().find(|n| n.zid == z));
 
     let Some(node) = selected else {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -263,59 +310,6 @@ fn format_ago(d: Duration) -> String {
     }
 }
 
-fn build_row<'a>(
-    node: &'a NodeInfo,
-    selected: bool,
-    now: SystemTime,
-    self_zid: Option<&str>,
-) -> Row<'a> {
-    let stale = node.is_scout_stale(now, STALE_THRESHOLD);
-
-    let base_style = if selected {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else if stale {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default()
-    };
-
-    let kind_cell = if selected {
-        Cell::from(node.kind.clone())
-    } else {
-        let kind_style = match node.kind.as_str() {
-            "router" => Style::default().fg(Color::Green),
-            "peer" => Style::default().fg(Color::Blue),
-            "client" => Style::default().fg(Color::Gray),
-            _ => Style::default(),
-        };
-        Cell::from(node.kind.clone()).style(kind_style)
-    };
-
-    let (source_text, source_color) = source_badge(node.sources, stale);
-    let source_cell = if selected {
-        Cell::from(source_text)
-    } else {
-        Cell::from(source_text).style(Style::default().fg(source_color))
-    };
-
-    let is_self = self_zid.is_some_and(|z| z == node.zid);
-    let zid_text = if is_self {
-        format!("{} (self)", node.zid)
-    } else {
-        node.zid.clone()
-    };
-
-    Row::new(vec![
-        Cell::from(zid_text),
-        kind_cell,
-        source_cell,
-    ])
-    .style(base_style)
-}
-
 fn source_badge(sources: NodeSources, stale: bool) -> (String, Color) {
     if sources == BOTH_SOURCES {
         ("both".to_string(), Color::Cyan)
@@ -330,20 +324,4 @@ fn source_badge(sources: NodeSources, stale: bool) -> (String, Color) {
     } else {
         ("-".to_string(), Color::DarkGray)
     }
-}
-
-fn count_by_source(nodes: &[NodeInfo]) -> (usize, usize, usize) {
-    let mut n_admin = 0;
-    let mut n_scout = 0;
-    let mut n_both = 0;
-    for n in nodes {
-        if n.sources == BOTH_SOURCES {
-            n_both += 1;
-        } else if n.sources.contains(NodeSources::ADMIN) {
-            n_admin += 1;
-        } else if n.sources.contains(NodeSources::SCOUT) {
-            n_scout += 1;
-        }
-    }
-    (n_admin, n_scout, n_both)
 }

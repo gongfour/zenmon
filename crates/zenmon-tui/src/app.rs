@@ -565,7 +565,12 @@ impl App {
             ActiveView::Topics => self.filtered_topics().len(),
             ActiveView::Stream => self.filtered_sub_messages().len(),
             ActiveView::Query => self.query_results.len(),
-            ActiveView::Network => self.nodes.len(),
+            ActiveView::Network => crate::views::topology::build_topology_rows(
+                &self.nodes,
+                self.self_zid.as_deref(),
+                SystemTime::now(),
+            )
+            .len(),
             ActiveView::Liveliness => self.liveliness_tokens.len(),
             ActiveView::Dashboard => return,
         };
@@ -585,7 +590,17 @@ impl App {
             }
             ActiveView::Stream => self.pin_stream_at(idx),
             ActiveView::Query => self.query_selected = idx,
-            ActiveView::Network => self.node_selected = idx,
+            ActiveView::Network => {
+                let rows = crate::views::topology::build_topology_rows(
+                    &self.nodes,
+                    self.self_zid.as_deref(),
+                    SystemTime::now(),
+                );
+                if let Some(n) = crate::views::topology::node_index_at_visual(&rows, idx) {
+                    self.node_selected = n;
+                    self.node_detail_scroll = 0;
+                }
+            }
             ActiveView::Liveliness => {
                 self.liveliness_selected = idx;
                 self.liveliness_log_scroll = 0;
@@ -638,8 +653,14 @@ impl App {
                 }
             }
             ActiveView::Network => {
-                let max = self.nodes.len().saturating_sub(1);
-                if self.node_selected < max {
+                let total = crate::views::topology::node_row_count(
+                    &crate::views::topology::build_topology_rows(
+                        &self.nodes,
+                        self.self_zid.as_deref(),
+                        SystemTime::now(),
+                    ),
+                );
+                if self.node_selected + 1 < total {
                     self.node_selected += 1;
                 }
             }
@@ -804,38 +825,47 @@ impl App {
                 }
                 _ => {}
             },
-            ActiveView::Network => match key.code {
-                KeyCode::Char('y') => {
-                    if let Some(node) = self.nodes.get(self.node_selected).cloned() {
-                        self.copy_to_clipboard(node.zid, "zid");
-                    } else {
-                        self.set_error_toast("No node selected");
+            ActiveView::Network => {
+                let rows = crate::views::topology::build_topology_rows(
+                    &self.nodes,
+                    self.self_zid.as_deref(),
+                    SystemTime::now(),
+                );
+                let total = crate::views::topology::node_row_count(&rows);
+                match key.code {
+                    KeyCode::Char('y') => {
+                        if let Some(z) =
+                            crate::views::topology::nth_node_zid(&rows, self.node_selected)
+                        {
+                            self.copy_to_clipboard(z.to_string(), "zid");
+                        } else {
+                            self.set_error_toast("No node selected");
+                        }
                     }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.node_selected = self.node_selected.saturating_sub(1);
-                    self.node_detail_scroll = 0;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let max = self.nodes.len().saturating_sub(1);
-                    if self.node_selected < max {
-                        self.node_selected += 1;
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.node_selected = self.node_selected.saturating_sub(1);
                         self.node_detail_scroll = 0;
                     }
-                }
-                KeyCode::Char('J') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_add(3);
-                }
-                KeyCode::Char('K') => {
-                    self.node_detail_scroll = self.node_detail_scroll.saturating_sub(3);
-                }
-                KeyCode::Char('s') => {
-                    if !self.scout_in_progress {
-                        self.pending_scout_request = true;
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.node_selected + 1 < total {
+                            self.node_selected += 1;
+                            self.node_detail_scroll = 0;
+                        }
                     }
+                    KeyCode::Char('J') => {
+                        self.node_detail_scroll = self.node_detail_scroll.saturating_add(3);
+                    }
+                    KeyCode::Char('K') => {
+                        self.node_detail_scroll = self.node_detail_scroll.saturating_sub(3);
+                    }
+                    KeyCode::Char('r') => {
+                        if !self.scout_in_progress {
+                            self.pending_scout_request = true;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             ActiveView::Liveliness => match key.code {
                 KeyCode::Char('y') => {
                     if let Some(token) = self.liveliness_tokens.get(self.liveliness_selected).cloned() {
