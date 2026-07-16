@@ -2,6 +2,7 @@
 //! Every function returns a JSON string on success (the exact shape the CLI
 //! `--json` mode produces) or a `ZemonError` on failure.
 
+use std::time::Duration;
 use zemon_core::error::ZemonError;
 
 /// `keyexpr` tool: pure key-expression relationship comparison (no session).
@@ -43,6 +44,42 @@ pub async fn info_json(
         .map_err(|e| ZemonError::internal(format!("serialize info: {e}")))
 }
 
+/// `query` tool: send a GET and collect replies (bounded by `timeout`/`limit`).
+pub async fn query_json(
+    session: &zenoh::Session,
+    key_expr: &str,
+    payload: Option<&str>,
+    timeout: Duration,
+    limit: Option<usize>,
+) -> Result<String, ZemonError> {
+    let replies = zemon_core::query::get(session, key_expr, payload, timeout, limit)
+        .await
+        .map_err(|e| ZemonError::internal(e.to_string()))?;
+    zemon_core::output::to_collection_json(&replies)
+        .map_err(|e| ZemonError::internal(format!("serialize query result: {e}")))
+}
+
+/// `nodes` tool: one snapshot of discovered Zenoh nodes (admin space).
+pub async fn nodes_json(session: &zenoh::Session) -> Result<String, ZemonError> {
+    let nodes = zemon_core::registry::query_admin_nodes(session)
+        .await
+        .map_err(|e| ZemonError::internal(e.to_string()))?;
+    zemon_core::output::to_collection_json(&nodes)
+        .map_err(|e| ZemonError::internal(format!("serialize nodes result: {e}")))
+}
+
+/// `liveliness` tool: query current liveliness tokens.
+pub async fn liveliness_json(
+    session: &zenoh::Session,
+    key_expr: &str,
+) -> Result<String, ZemonError> {
+    let tokens = zemon_core::discover::query_liveliness(session, key_expr)
+        .await
+        .map_err(|e| ZemonError::internal(e.to_string()))?;
+    zemon_core::output::to_collection_json(&tokens)
+        .map_err(|e| ZemonError::internal(format!("serialize liveliness result: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,6 +104,14 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["count"], 0);
         assert!(v["items"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn query_result_uses_count_items_envelope() {
+        let empty: Vec<zemon_core::types::ZenohMessage> = vec![];
+        let json = zemon_core::output::to_collection_json(&empty).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["count"], 0);
     }
 
     #[test]
