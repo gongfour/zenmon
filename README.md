@@ -49,6 +49,17 @@ zenmon --json keyexpr "a/*" "a/b"
 zenmon --json nodes
 zenmon --json sub "sensor/**"
 
+# Publish repeatedly at a fixed rate (bounded — safe for agent tool calls)
+zenmon pub cmd/drive '{"v":0.3}' --rate 10 --duration 5s
+
+# Record a correlated diagnostic session → one episode JSON to reason over
+zenmon --json scenario --pub cmd/drive '{"v":0.3}' --pub-rate 10 --pub-for 5s \
+  --observe state/pose --track state/pose:x --for 6s
+
+# Consume a contract (topic types, schemas, encodings)
+zenmon contract lint mynet.contract.yaml
+zenmon -n myfleet --contract mynet.contract.yaml sub "topic/**"
+
 # Validate and inspect the merged configuration without connecting
 zenmon config validate
 zenmon config show --effective
@@ -90,7 +101,12 @@ Here `a/*` includes `a/b` (every `a/b` is an `a/*`), but not vice-versa. The
   result is exactly `{"count":0,"items":[]}` and exits `0`.
 - **Streaming/watch** (`sub`, `--watch`) emit NDJSON (one object per line, no
   ANSI) in `--json` mode.
-- **`pub`** emits `{"ok":true,"status":"accepted","key_expr":...,"bytes":N}`.
+- **`pub`** emits `{"ok":true,"status":"accepted","key_expr":...,"bytes":N}`;
+  `--rate` adds a `{...,"published":N,"rate_hz":R}` summary after the run.
+- **`query`** reply errors returned by a queryable are surfaced under an
+  `"errors":[...]` array (present only when non-empty), not silently dropped —
+  so an endpoint that exists but rejects a request is distinguishable from one
+  that never replied.
 - **Errors** in `--json` mode are a single line on stderr,
   `{"error":{"kind":"...","message":"..."}}`, with a stable non-zero exit code
   per kind (`invalid_input`=2, `connection`=3, `timeout`=4, `not_found`=5,
@@ -110,6 +126,74 @@ Use `zenmon config show --effective` to see the resolved value and source for ea
 zenmon-managed setting. The command prints only an allow-list of settings and never dumps
 the raw Zenoh config, so plugin credentials and private keys are not exposed. `zenmon
 config validate` performs the same merge and validation without opening a network session.
+
+## Payload decoding
+
+`sub`, `query`, `scenario`, and the TUI decode each payload for display: JSON is
+shown as-is, valid UTF-8 as text, and **MessagePack is auto-decoded to JSON** — a
+conservative content-based fallback, accepted only when it consumes the whole
+buffer and the top level is a map/array, so arbitrary binary still falls back to
+base64. The original wire bytes are preserved, so `capture`/`replay` round-trips
+stay byte-exact.
+
+## Contract-aware monitoring
+
+A **contract** (`*.contract.yaml`) declares the Zenoh protocol a project speaks —
+per-topic key expression, messaging pattern, encoding, producers/consumers, and a
+payload schema. Zenoh itself is schema-less; the contract is that missing layer.
+
+```bash
+zenmon contract lint mynet.contract.yaml      # parse + structural warnings
+zenmon contract list mynet.contract.yaml      # key  pattern  encoding, per topic
+zenmon contract show topic/navigation/pose    # full entry, $ref expanded
+```
+
+With `--contract <path>` (or `ZENMON_CONTRACT`), `sub`/`discover` annotate each
+message with its declared type/description, expected-vs-observed encoding, and an
+"undeclared topic" warning. Enrichment is additive — with no contract, output is
+unchanged.
+
+```bash
+zenmon -n myfleet --contract mynet.contract.yaml --json sub "topic/**"
+```
+
+> Contract keys are relative to the fleet namespace, so pass `-n <fleet>` — the
+> observed keys are then relative and match the contract's keys.
+
+## Scenario — correlated diagnostic sessions
+
+`zenmon scenario` records a correlated, multi-topic session and emits **one episode
+JSON** that an AI (or you) can read to reason about cause and effect. It optionally
+triggers an actuation or a task first, then observes a bounded window. It correlates;
+it does not diagnose.
+
+```bash
+# Trigger a sustained actuation and capture the effect, in one command
+zenmon --json scenario \
+  --pub topic/forklift/drive_velocity '{"linear":{"x":0.3,"y":0,"z":0},"angular":{"x":0,"y":0,"z":0}}' \
+  --pub-rate 10 --pub-for 8s \
+  --observe topic/navigation/robot_pose \
+  --track topic/navigation/robot_pose:x \
+  --for 9s
+
+# Trigger a long-running task, follow feedback/response, observe a diagnosis set
+zenmon -n myfleet --contract mynet.contract.yaml --json scenario \
+  --task task/navigation/trajectory '{"points":[...],"trajectory_id":"t1"}' \
+  --preset stall --for 15s --settle 1s
+```
+
+- **Trigger** — `--pub KEY VALUE` (one-shot, or sustained with `--pub-rate` +
+  `--pub-for`/`--pub-count`), or `--task PREFIX REQUEST_JSON` (publishes to
+  `PREFIX/request`, auto-observes `PREFIX/feedback` + `PREFIX/response`, ends on
+  the response). With a contract, `--task` prints and validates the request schema.
+- **Observe** — `--observe KEY` (repeatable), or `--preset stall` (a built-in
+  mission-diagnosis set: safety state/policies, obstacles, mission state, pose,
+  forklift snapshot, actionflow, task feedback/response).
+- **Track** — `--track KEY:FIELD` extracts a payload field over time: `series`,
+  `delta` (numeric), and `transitions` (for discrete fields like a state enum).
+- **Episode** — `{ meta, topics, correlations (grouped by attachment
+  correlation_id), timeline (decoded, time-ordered), tracks }`. Always bounded by
+  `--for`/`--settle`, so it terminates (agent-safe).
 
 ## TUI Dashboard
 
@@ -185,7 +269,7 @@ crates/
 
 ### Phase 4 — Debugging Utilities
 10. [x] `zenmon keyexpr <A> <B>` — test intersection/inclusion between key expressions
-11. [ ] `zenmon pub --rate <HZ>` — repeated publish at fixed frequency for testing
+11. [x] `zenmon pub --rate <HZ>` — repeated publish at fixed frequency for testing
 12. [ ] `zenmon pub --congestion block|drop` — congestion control mode selection
 13. [ ] DELETE message display — color-code PUT vs DELETE, filter by kind
 
@@ -194,6 +278,13 @@ crates/
 15. [ ] Storage/history query — fetch historical data from zenoh storage backends
 16. [ ] Downsampling display — show rate-limiting configuration from router
 17. [ ] Advanced pub/sub miss detection — detect dropped messages via `zenoh-ext`
+
+### Phase 6 — AI-assisted diagnosis
+18. [x] MessagePack payload auto-decode — read cross-language binary payloads as JSON
+19. [x] Contract consumption — enrich `sub`/`discover`; `contract` inspect subcommand
+20. [x] `zenmon scenario` — correlated diagnostic sessions (trigger, observe, track → episode JSON)
+21. [ ] Automatic `events` in the episode (safety transitions, stalls) beyond `--track`
+22. [ ] Strict contract payload validation (field/type checks against the schema)
 
 ## License
 
