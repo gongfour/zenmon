@@ -9,6 +9,8 @@
 
 use crate::capture::CaptureRecord;
 use crate::error::ZemonError;
+use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -344,6 +346,183 @@ pub fn record_in_window(pr: &PositionedRecord, filter: &ReadFilter) -> Result<bo
     Ok(true)
 }
 
+/// Options for [`read_page`].
+#[derive(Debug, Clone)]
+pub struct ReadOptions {
+    pub filter: ReadFilter,
+    pub limit: Option<u64>,
+    pub last_per_key: bool,
+    pub every: Option<u64>,
+    pub cursor: Option<String>,
+}
+
+/// One page of a `trace read`.
+#[derive(Debug, Clone)]
+pub struct ReadPage {
+    pub records: Vec<PositionedRecord>,
+    pub matched: u64,
+    pub returned: u64,
+    pub cursor: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CursorInner {
+    segment: String,
+    index: u64,
+}
+
+/// Opaque cursor pointing at the next record to read (segment name + index).
+pub fn encode_cursor(segment: &str, index: u64) -> String {
+    let json = serde_json::to_string(&CursorInner { segment: segment.to_string(), index }).unwrap_or_default();
+    base64::engine::general_purpose::STANDARD.encode(json)
+}
+
+pub fn decode_cursor(s: &str) -> Result<(String, u64), ZemonError> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|e| ZemonError::invalid_input(format!("invalid cursor: {}", e)))?;
+    let inner: CursorInner = serde_json::from_slice(&bytes)
+        .map_err(|e| ZemonError::invalid_input(format!("invalid cursor: {}", e)))?;
+    Ok((inner.segment, inner.index))
+}
+
+/// True if a segment (by index `i`) can hold any record in `[since, until)`.
+/// Skips whole segments outside the window using filename bounds only.
+fn segment_overlaps_window(segs: &[Segment], i: usize, filter: &ReadFilter) -> bool {
+    let first = segs[i].first;
+    let upper = segment_upper_bound(segs, i); // exclusive; None = active/open-ended
+    if let Some(until) = filter.until {
+        if first >= until {
+            return false; // starts at/after the window end
+        }
+    }
+    if let Some(since) = filter.since {
+        if let Some(upper) = upper {
+            if upper <= since {
+                return false; // entirely before the window
+            }
+        }
+    }
+    true
+}
+
+fn is_last_segment(segs: &[Segment], i: usize) -> bool {
+    i + 1 == segs.len()
+}
+
+pub fn read_page(dir: &Path, opts: &ReadOptions) -> Result<ReadPage, ZemonError> {
+    let segs = discover_segments(dir)?;
+
+    // Reducer paths scan the whole window, single-shot (cursor ignored).
+    if opts.last_per_key {
+        return read_last_per_key(&segs, opts);
+    }
+    if let Some(n) = opts.every {
+        return read_every_n(&segs, opts, n.max(1));
+    }
+
+    // Plain chronological read with optional cursor + limit.
+    let cursor = opts.cursor.as_deref().map(decode_cursor).transpose()?;
+    let mut records = Vec::new();
+    let mut matched: u64 = 0;
+    let mut resumed = cursor.is_none();
+    let mut next_cursor: Option<(String, u64)> = None;
+    let limit = opts.limit;
+
+    for (i, seg) in segs.iter().enumerate() {
+        if !segment_overlaps_window(&segs, i, &opts.filter) {
+            continue;
+        }
+        let loaded = load_segment(&seg.path, is_last_segment(&segs, i))?;
+        for pr in loaded {
+            // Skip forward to the cursor position on the resume segment.
+            if !resumed {
+                let (cseg, cidx) = cursor.as_ref().unwrap();
+                if &pr.segment == cseg && pr.index < *cidx {
+                    continue;
+                }
+                if &pr.segment == cseg && pr.index >= *cidx {
+                    resumed = true;
+                } else if pr.segment > *cseg {
+                    resumed = true; // cursor segment already gone (retention) — resume here
+                } else {
+                    continue; // still before the cursor segment
+                }
+            }
+            if !record_in_window(&pr, &opts.filter)? {
+                continue;
+            }
+            matched += 1;
+            let over_limit = limit.map(|l| records.len() as u64 >= l).unwrap_or(false);
+            if over_limit {
+                if next_cursor.is_none() {
+                    next_cursor = Some((pr.segment.clone(), pr.index));
+                }
+                // keep counting `matched`, stop collecting
+            } else {
+                records.push(pr);
+            }
+        }
+    }
+
+    let returned = records.len() as u64;
+    let truncated = matched > returned;
+    let cursor = next_cursor.map(|(s, i)| encode_cursor(&s, i));
+    Ok(ReadPage { records, matched, returned, cursor, truncated })
+}
+
+fn read_last_per_key(segs: &[Segment], opts: &ReadOptions) -> Result<ReadPage, ZemonError> {
+    use std::collections::BTreeMap;
+    let mut latest: BTreeMap<String, PositionedRecord> = BTreeMap::new();
+    for (i, seg) in segs.iter().enumerate() {
+        if !segment_overlaps_window(segs, i, &opts.filter) {
+            continue;
+        }
+        for pr in load_segment(&seg.path, is_last_segment(segs, i))? {
+            if record_in_window(&pr, &opts.filter)? {
+                latest.insert(pr.record.key_expr.clone(), pr); // later segments overwrite → last wins
+            }
+        }
+    }
+    finalize_reduced(latest.into_values().collect(), opts.limit)
+}
+
+fn read_every_n(segs: &[Segment], opts: &ReadOptions, n: u64) -> Result<ReadPage, ZemonError> {
+    let mut sampled = Vec::new();
+    let mut seen: u64 = 0;
+    for (i, seg) in segs.iter().enumerate() {
+        if !segment_overlaps_window(segs, i, &opts.filter) {
+            continue;
+        }
+        for pr in load_segment(&seg.path, is_last_segment(segs, i))? {
+            if record_in_window(&pr, &opts.filter)? {
+                if seen.is_multiple_of(n) {
+                    sampled.push(pr);
+                }
+                seen += 1;
+            }
+        }
+    }
+    finalize_reduced(sampled, opts.limit)
+}
+
+fn finalize_reduced(all: Vec<PositionedRecord>, limit: Option<u64>) -> Result<ReadPage, ZemonError> {
+    let matched = all.len() as u64;
+    let records: Vec<_> = match limit {
+        Some(l) => all.into_iter().take(l as usize).collect(),
+        None => all,
+    };
+    let returned = records.len() as u64;
+    Ok(ReadPage {
+        records,
+        matched,
+        returned,
+        cursor: None, // reducers are single-shot
+        truncated: matched > returned,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +829,82 @@ mod tests {
         // "a//b" (empty chunk) is an invalid key expression; as a RECORD key it must
         // yield Ok(false), never an error.
         assert!(!key_matches("a/*", "a//b").unwrap());
+    }
+
+    fn seed_store(tag: &str) -> PathBuf {
+        // 3 segments, 2 records each, keys alternate a/x and b/y, times 1000..1005
+        let dir = tempdir_unique(tag);
+        write_segment(&dir, 1000, 0, &[&rec_line("a/x", 1000), &rec_line("b/y", 1001)]);
+        write_segment(&dir, 1002, 0, &[&rec_line("a/x", 1002), &rec_line("b/y", 1003)]);
+        write_segment(&dir, 1004, 0, &[&rec_line("a/x", 1004), &rec_line("b/y", 1005)]);
+        dir
+    }
+
+    fn plain_opts(key: &str, limit: Option<u64>, cursor: Option<String>) -> ReadOptions {
+        ReadOptions {
+            filter: ReadFilter { key: key.into(), since: None, until: None },
+            limit,
+            last_per_key: false,
+            every: None,
+            cursor,
+        }
+    }
+
+    #[test]
+    fn read_page_limits_and_reports_matched() {
+        let dir = seed_store("rp1");
+        let page = read_page(&dir, &plain_opts("a/*", Some(2), None)).unwrap();
+        assert_eq!(page.returned, 2);
+        assert_eq!(page.matched, 3); // three a/x records match
+        assert!(page.truncated);
+        assert!(page.cursor.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_page_cursor_resumes_without_overlap() {
+        let dir = seed_store("rp2");
+        let p1 = read_page(&dir, &plain_opts("a/*", Some(2), None)).unwrap();
+        let p2 = read_page(&dir, &plain_opts("a/*", Some(2), p1.cursor.clone())).unwrap();
+        assert_eq!(p2.returned, 1); // one a/x record left
+        assert!(!p2.truncated);
+        assert!(p2.cursor.is_none());
+        // No overlap: last of p1 precedes first of p2 chronologically.
+        assert_eq!(p1.records[1].received, Some(t(1002)));
+        assert_eq!(p2.records[0].received, Some(t(1004)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_page_last_per_key_collapses() {
+        let dir = seed_store("rp3");
+        let mut opts = plain_opts("**", None, None);
+        opts.last_per_key = true;
+        let page = read_page(&dir, &opts).unwrap();
+        assert_eq!(page.returned, 2); // one per key: a/x, b/y
+        // latest a/x is t(1004), latest b/y is t(1005)
+        let times: Vec<_> = page.records.iter().map(|r| r.received).collect();
+        assert!(times.contains(&Some(t(1004))) && times.contains(&Some(t(1005))));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_page_every_n_samples() {
+        let dir = seed_store("rp4");
+        let mut opts = plain_opts("**", None, None);
+        opts.every = Some(3);
+        let page = read_page(&dir, &opts).unwrap();
+        // 6 matching records, every 3rd -> indices 0 and 3 -> 2 records
+        assert_eq!(page.returned, 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cursor_roundtrips() {
+        let c = encode_cursor("zemon-trace-20260716T000000Z-00000.ndjson", 4);
+        let (seg, idx) = decode_cursor(&c).unwrap();
+        assert_eq!((seg.as_str(), idx), ("zemon-trace-20260716T000000Z-00000.ndjson", 4));
+        assert_eq!(decode_cursor("!notbase64!").unwrap_err().kind, crate::error::ErrorKind::InvalidInput);
     }
 
 }
