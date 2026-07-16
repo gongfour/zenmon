@@ -21,7 +21,6 @@ use tokio::sync::Mutex;
 use zenoh::Session;
 
 pub async fn run(mut config: ZemonConfig, refresh: Duration) -> Result<()> {
-    let tick_rate_ms = refresh.as_millis() as u64;
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
@@ -53,7 +52,7 @@ pub async fn run(mut config: ZemonConfig, refresh: Duration) -> Result<()> {
         original_hook(info);
     }));
 
-    let mut events = EventHandler::new(tick_rate_ms, zenoh_rx);
+    let mut events = EventHandler::new(refresh, zenoh_rx);
 
     let result = run_loop(
         &mut terminal,
