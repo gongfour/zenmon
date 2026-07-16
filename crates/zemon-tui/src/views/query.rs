@@ -6,6 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+const HISTORY_TITLE: &str = " History ";
+
 pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [input_area, status_area, results_area, history_area] = Layout::vertical([
         Constraint::Length(3),
@@ -121,7 +123,18 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let history = List::new(history_items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" History (k:recall) "),
+            .title(HISTORY_TITLE),
     );
     frame.render_widget(history, history_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_title_does_not_advertise_unimplemented_recall() {
+        assert_eq!(HISTORY_TITLE, " History ");
+        assert!(!HISTORY_TITLE.contains("recall"));
+    }
 }
