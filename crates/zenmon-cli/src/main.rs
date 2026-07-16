@@ -351,6 +351,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         },
 
         Command::Discover { key_expr } => {
+            warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             // Load before opening the session so a broken contract fails fast.
             let contract = load_contract_opt(&cli.contract)?;
             let session = zenmon_core::session::open_session(&config).await?;
@@ -410,6 +411,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             duration,
             max_payload_bytes,
         } => {
+            warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
             // Load before opening the session so a broken contract fails fast.
             let contract = load_contract_opt(&cli.contract)?;
@@ -510,6 +512,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             timeout,
             limit,
         } => {
+            warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             let limit = limit.map(|n| n as usize);
             let session = zenmon_core::session::open_session(&config).await?;
             let outcome = zenmon_core::query::get(
@@ -654,6 +657,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             count,
             duration,
         } => {
+            warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             let value = resolve_payload_arg(&value)?;
             let session = zenmon_core::session::open_session(&config).await?;
             let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
@@ -755,6 +759,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             duration,
             changes_only,
         } => {
+            warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             let session = zenmon_core::session::open_session(&config).await?;
 
             // --changes-only suppresses the initial snapshot entirely (its only
@@ -966,6 +971,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             count,
             duration,
         } => {
+            warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             use std::io::Write;
             use zenmon_core::capture::CaptureRecord;
 
@@ -1427,6 +1433,35 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
     Ok(())
 }
 
+/// If `namespace` is set and `key` already begins with it (on a segment
+/// boundary), return a warning: under `-n` the key is prefixed *again*, so it
+/// silently matches nothing — an easy, hard-to-debug mistake.
+fn namespace_redundant_prefix(key: &str, namespace: Option<&str>) -> Option<String> {
+    let ns = namespace?.trim_matches('/');
+    if ns.is_empty() {
+        return None;
+    }
+    let redundant = key == ns
+        || key
+            .strip_prefix(ns)
+            .is_some_and(|rest| rest.starts_with('/'));
+    redundant.then(|| {
+        format!(
+            "# note: key '{key}' already starts with namespace '{ns}' — under -n it is prefixed \
+             again and will match nothing (drop the namespace from the key)"
+        )
+    })
+}
+
+/// Emit the redundant-namespace warning for each key, if any.
+fn warn_redundant_namespace<'a>(keys: impl IntoIterator<Item = &'a str>, namespace: Option<&str>) {
+    for k in keys {
+        if let Some(w) = namespace_redundant_prefix(k, namespace) {
+            eprintln!("{w}");
+        }
+    }
+}
+
 /// Resolve a publish/request value argument: `@<path>` reads the value from that
 /// file, `-` reads it from stdin, and anything else is the literal value. Lets
 /// large or dynamically-built payloads (e.g. a VDA5050 mission for `--task`) come
@@ -1617,6 +1652,17 @@ async fn run_scenario(
         return Err(ZenmonError::invalid_input(
             "no topics to observe: pass --observe or --preset",
         ));
+    }
+
+    {
+        let mut keys: Vec<&str> = observed.iter().map(String::as_str).collect();
+        if let Some(p) = &pub_ {
+            keys.push(p[0].as_str());
+        }
+        if let Some(p) = &task {
+            keys.push(p[0].as_str());
+        }
+        warn_redundant_namespace(keys, config.namespace.as_deref());
     }
 
     let session = zenmon_core::session::open_session(config).await?;
@@ -1872,6 +1918,26 @@ mod tests {
     #[test]
     fn resolve_payload_missing_file_is_error() {
         assert!(resolve_payload_arg("@/no/such/zenmon/payload/file.json").is_err());
+    }
+
+    #[test]
+    fn namespace_warns_when_key_already_prefixed() {
+        let w = namespace_redundant_prefix("dotori/forky001/topic/x", Some("dotori/forky001"));
+        assert!(w.is_some_and(|m| m.contains("already starts with namespace")));
+        // Exact-equal to the namespace also warns.
+        assert!(namespace_redundant_prefix("dotori/forky001", Some("dotori/forky001")).is_some());
+    }
+
+    #[test]
+    fn namespace_no_warn_for_relative_or_absent() {
+        assert!(namespace_redundant_prefix("topic/x", Some("dotori/forky001")).is_none());
+        assert!(namespace_redundant_prefix("dotori/forky001/topic/x", None).is_none());
+    }
+
+    #[test]
+    fn namespace_no_false_positive_on_partial_segment() {
+        // "forky001x" must not be treated as under namespace "forky001".
+        assert!(namespace_redundant_prefix("dotori/forky001x/topic", Some("dotori/forky001")).is_none());
     }
 
     #[test]
