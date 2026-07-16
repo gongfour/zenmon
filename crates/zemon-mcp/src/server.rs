@@ -77,6 +77,26 @@ impl ZemonMcpServer {
             }
         }
     }
+
+    #[tool(description = "Show the effective, allow-listed configuration. No network.")]
+    fn config_show(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let json = handlers::config_show_json().map_err(to_mcp_error)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    #[tool(description = "Show current Zenoh session information.")]
+    async fn info(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let session = self.state.session().await.map_err(to_mcp_error)?;
+        match handlers::info_json(&session, self.state.config.mode).await {
+            Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
+            Err(e) => {
+                if e.is_connection() {
+                    self.state.invalidate_session().await;
+                }
+                Err(to_mcp_error(e))
+            }
+        }
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
