@@ -10,10 +10,11 @@ use crate::error::ZemonError;
 use crate::types::ZenohMessage;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Current record schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+const SUPPORTED_VERSIONS: &[u32] = &[1, 2];
 
 /// One captured message, serialized as a single NDJSON line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +28,10 @@ pub struct CaptureRecord {
     pub attachment_base64: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_timestamp: Option<String>,
+    /// Receiver wall-clock time this record was captured, RFC3339 (UTC).
+    /// Present from schema v2 on; absent in v1 files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received_at: Option<String>,
     /// Milliseconds since capture start (monotonic), for replay timing.
     pub received_offset_ms: u64,
     pub kind: String,
@@ -43,8 +48,9 @@ fn b64_decode(s: &str, field: &str) -> Result<Vec<u8>, ZemonError> {
 }
 
 impl CaptureRecord {
-    /// Build a record from a received message and its offset since capture start.
-    pub fn from_message(msg: &ZenohMessage, offset: Duration) -> Self {
+    /// Build a record from a received message, its offset since capture start,
+    /// and the receiver wall-clock time it was captured.
+    pub fn from_message(msg: &ZenohMessage, offset: Duration, received_at: SystemTime) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             key_expr: msg.key_expr.clone(),
@@ -54,6 +60,7 @@ impl CaptureRecord {
             source_timestamp: msg.timestamp.clone(),
             received_offset_ms: offset.as_millis() as u64,
             kind: msg.kind.clone(),
+            received_at: Some(humantime::format_rfc3339_seconds(received_at).to_string()),
         }
     }
 
@@ -62,10 +69,10 @@ impl CaptureRecord {
         let rec: CaptureRecord = serde_json::from_str(line).map_err(|e| {
             ZemonError::invalid_input(format!("corrupt record at line {}: {}", line_no, e))
         })?;
-        if rec.schema_version != SCHEMA_VERSION {
+        if !SUPPORTED_VERSIONS.contains(&rec.schema_version) {
             return Err(ZemonError::invalid_input(format!(
-                "unsupported schema_version {} at line {} (expected {})",
-                rec.schema_version, line_no, SCHEMA_VERSION
+                "unsupported schema_version {} at line {} (supported: {:?})",
+                rec.schema_version, line_no, SUPPORTED_VERSIONS
             )));
         }
         Ok(rec)
@@ -108,7 +115,7 @@ mod tests {
     #[test]
     fn roundtrips_text_payload() {
         let m = msg("a/b", b"{\"x\":1}".to_vec(), None);
-        let rec = CaptureRecord::from_message(&m, Duration::from_millis(1500));
+        let rec = CaptureRecord::from_message(&m, Duration::from_millis(1500), std::time::UNIX_EPOCH);
         let line = serde_json::to_string(&rec).unwrap();
         let parsed = CaptureRecord::parse_line(&line, 1).unwrap();
         assert_eq!(parsed, rec);
@@ -120,7 +127,7 @@ mod tests {
     #[test]
     fn roundtrips_binary_payload_and_attachment() {
         let m = msg("a/b", vec![0, 159, 146, 150], Some(vec![1, 2, 3]));
-        let rec = CaptureRecord::from_message(&m, Duration::ZERO);
+        let rec = CaptureRecord::from_message(&m, Duration::ZERO, std::time::UNIX_EPOCH);
         let line = serde_json::to_string(&rec).unwrap();
         let parsed = CaptureRecord::parse_line(&line, 1).unwrap();
         assert_eq!(parsed.payload_bytes().unwrap(), vec![0, 159, 146, 150]);
@@ -130,10 +137,10 @@ mod tests {
     #[test]
     fn record_carries_schema_version() {
         let m = msg("a/b", b"x".to_vec(), None);
-        let rec = CaptureRecord::from_message(&m, Duration::ZERO);
+        let rec = CaptureRecord::from_message(&m, Duration::ZERO, std::time::UNIX_EPOCH);
         assert_eq!(rec.schema_version, SCHEMA_VERSION);
         let line = serde_json::to_string(&rec).unwrap();
-        assert!(line.contains("\"schema_version\":1"));
+        assert!(line.contains("\"schema_version\":2"));
     }
 
     #[test]
@@ -147,5 +154,34 @@ mod tests {
         let line = r#"{"schema_version":999,"key_expr":"a","payload_base64":"","encoding":"","received_offset_ms":0,"kind":"PUT"}"#;
         let err = CaptureRecord::parse_line(line, 3).unwrap_err();
         assert!(err.message.contains("schema_version"));
+    }
+
+    #[test]
+    fn from_message_populates_received_at_as_rfc3339() {
+        let m = msg("a/b", b"{}".to_vec(), None);
+        let t = std::time::UNIX_EPOCH + Duration::from_secs(1_752_668_096);
+        let rec = CaptureRecord::from_message(&m, Duration::from_millis(10), t);
+        assert_eq!(rec.schema_version, 2);
+        let got = rec.received_at.as_deref().unwrap();
+        assert_eq!(got, "2025-07-16T12:14:56Z"); // humantime rfc3339 of that epoch second
+    }
+
+    #[test]
+    fn parse_accepts_v1_without_received_at() {
+        // A legacy v1 line (no received_at) must still parse.
+        let line = r#"{"schema_version":1,"key_expr":"a","payload_base64":"","encoding":"","received_offset_ms":0,"kind":"PUT"}"#;
+        let rec = CaptureRecord::parse_line(line, 1).unwrap();
+        assert_eq!(rec.schema_version, 1);
+        assert!(rec.received_at.is_none());
+    }
+
+    #[test]
+    fn parse_accepts_v2_and_rejects_v3() {
+        let m = msg("a/b", b"x".to_vec(), None);
+        let t = std::time::UNIX_EPOCH + Duration::from_secs(1_752_668_096);
+        let line = serde_json::to_string(&CaptureRecord::from_message(&m, Duration::ZERO, t)).unwrap();
+        assert!(CaptureRecord::parse_line(&line, 1).is_ok());
+        let v3 = line.replace("\"schema_version\":2", "\"schema_version\":3");
+        assert!(CaptureRecord::parse_line(&v3, 5).unwrap_err().message.contains("schema_version"));
     }
 }

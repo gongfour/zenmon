@@ -813,7 +813,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZemonError> {
                     }
                     item = rx.recv() => match item {
                         Some(msg) => {
-                            let rec = CaptureRecord::from_message(&msg, start.elapsed());
+                            let rec = CaptureRecord::from_message(&msg, start.elapsed(), std::time::SystemTime::now());
                             let line = serde_json::to_string(&rec)?;
                             writeln!(writer, "{}", line).map_err(|e| {
                                 ZemonError::internal(format!("write failed: {}", e))
