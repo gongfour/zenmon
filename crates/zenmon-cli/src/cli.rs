@@ -319,6 +319,11 @@ pub enum Command {
         /// `dotori/forky001/topic/safety/safety_state:kind`.
         #[arg(long)]
         track: Vec<String>,
+
+        /// Omit the per-event `timeline` from the episode (keep meta/topics/
+        /// correlations/tracks). Much smaller output for long/high-rate sessions.
+        #[arg(long)]
+        no_timeline: bool,
     },
 }
 
@@ -575,6 +580,14 @@ mod tests {
 
     /// `--pub-rate` sustains the `--pub` actuation; it is meaningless without a
     /// `--pub` trigger and must be rejected then.
+    #[test]
+    fn scenario_no_timeline_flag_parses() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--no-timeline",
+        ])
+        .is_ok());
+    }
+
     #[test]
     fn scenario_pub_rate_requires_pub() {
         assert!(Cli::try_parse_from([
