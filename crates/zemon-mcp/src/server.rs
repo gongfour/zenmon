@@ -69,6 +69,42 @@ pub struct LivelinessParams {
     pub key_expr: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ScoutParams {
+    /// Inclusive multicast port range start (default 7446).
+    #[serde(default = "default_scout_start")]
+    pub start_port: u16,
+    /// Inclusive multicast port range end (default 7546).
+    #[serde(default = "default_scout_end")]
+    pub end_port: u16,
+    /// Per-port timeout in milliseconds (default 1000).
+    #[serde(default = "default_scout_timeout_ms")]
+    pub per_port_timeout_ms: u64,
+}
+
+fn default_scout_start() -> u16 {
+    7446
+}
+
+fn default_scout_end() -> u16 {
+    7546
+}
+
+fn default_scout_timeout_ms() -> u64 {
+    1000
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DoctorParams {
+    /// Overall diagnostic deadline in milliseconds (default 5000).
+    #[serde(default = "default_doctor_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_doctor_timeout_ms() -> u64 {
+    5000
+}
+
 #[tool_router]
 impl ZemonMcpServer {
     pub fn new(state: Arc<ServerState>) -> Self {
@@ -141,6 +177,38 @@ impl ZemonMcpServer {
         let session = self.state.session().await.map_err(to_mcp_error)?;
         self.finish(handlers::liveliness_json(&session, &p.key_expr).await)
             .await
+    }
+
+    #[tool(description = "Scout multicast ports for Zenoh nodes (no router needed).")]
+    async fn scout(
+        &self,
+        Parameters(p): Parameters<ScoutParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let r = handlers::scout_json(
+            &self.state.config,
+            std::time::Duration::from_millis(p.per_port_timeout_ms),
+            (p.start_port, p.end_port),
+        )
+        .await;
+        // scout uses transient sessions, so no shared-session invalidation.
+        r.map(|json| CallToolResult::success(vec![ContentBlock::text(json)]))
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(description = "Diagnose the connection: config, session, connectivity checks.")]
+    async fn doctor(
+        &self,
+        Parameters(p): Parameters<DoctorParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let r = handlers::doctor_json(
+            &self.state.config,
+            std::time::Duration::from_millis(p.timeout_ms),
+        )
+        .await;
+        // doctor opens its own transient session(s), so no shared-session
+        // invalidation.
+        r.map(|json| CallToolResult::success(vec![ContentBlock::text(json)]))
+            .map_err(to_mcp_error)
     }
 }
 

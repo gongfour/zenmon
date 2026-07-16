@@ -80,6 +80,39 @@ pub async fn liveliness_json(
         .map_err(|e| ZemonError::internal(format!("serialize liveliness result: {e}")))
 }
 
+/// `scout` tool: multicast scan of a port range (does its own transient
+/// sessions, no shared session). Mirrors the CLI's `scout --json` shape,
+/// which filters to ports that found nodes rather than serializing every
+/// scanned port.
+pub async fn scout_json(
+    config: &zemon_core::config::ZemonConfig,
+    per_port_timeout: Duration,
+    port_range: (u16, u16),
+) -> Result<String, ZemonError> {
+    let results = zemon_core::scout::scout_port_range(
+        config,
+        port_range.0,
+        port_range.1,
+        per_port_timeout,
+    )
+    .await
+    .map_err(|e| ZemonError::internal(e.to_string()))?;
+    let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
+    zemon_core::output::to_collection_json(&hits)
+        .map_err(|e| ZemonError::internal(format!("serialize scout result: {e}")))
+}
+
+/// `doctor` tool: connection diagnostics. Opens its own transient session(s);
+/// always returns a serializable report, even when checks fail.
+pub async fn doctor_json(
+    config: &zemon_core::config::ZemonConfig,
+    timeout: Duration,
+) -> Result<String, ZemonError> {
+    let report = zemon_core::doctor::run(config, timeout).await;
+    serde_json::to_string(&report)
+        .map_err(|e| ZemonError::internal(format!("serialize doctor report: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +155,18 @@ mod tests {
         assert!(v.get("endpoint").is_some());
         assert!(v.get("connect_timeout").is_some());
         assert!(v.get("password").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn doctor_json_is_serializable() {
+        // Uses a bogus endpoint + tiny timeout so it fails fast without a
+        // router, but still produces a serializable report object.
+        let mut config = zemon_core::config::ZemonConfig::default();
+        config.endpoint = "tcp/127.0.0.1:1".to_string();
+        let json = doctor_json(&config, Duration::from_millis(200))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.is_object());
     }
 }
