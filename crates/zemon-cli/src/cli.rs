@@ -181,6 +181,46 @@ pub enum Command {
         b: String,
     },
 
+    /// Record received messages to a versioned NDJSON trace file
+    Capture {
+        /// Key expression to subscribe and record
+        key_expr: String,
+
+        /// Output NDJSON file
+        #[arg(long, short)]
+        output: PathBuf,
+
+        /// Stop after N recorded messages
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        count: Option<u64>,
+
+        /// Stop after this much time (e.g. 30s)
+        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        duration: Option<Duration>,
+    },
+
+    /// Replay a captured NDJSON trace by re-publishing its messages
+    Replay {
+        /// Input NDJSON trace file
+        input: PathBuf,
+
+        /// Replay original intervals at this speed multiplier (e.g. 2.0)
+        #[arg(long, default_value = "1.0", conflicts_with = "rate", value_parser = crate::duration::parse_speed_arg)]
+        speed: f64,
+
+        /// Replay at a fixed rate instead of original timing (e.g. 10Hz)
+        #[arg(long, conflicts_with = "speed", value_parser = crate::duration::parse_rate_hz_arg)]
+        rate: Option<f64>,
+
+        /// Prepend this prefix to every replayed key expression
+        #[arg(long)]
+        key_prefix: Option<String>,
+
+        /// Print what would be published without actually publishing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Test queryable: serve a fixed reply to incoming GET queries
     Queryable {
         #[command(subcommand)]
