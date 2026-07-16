@@ -86,11 +86,11 @@ pub enum Command {
         watch: bool,
 
         /// With --watch, stop after N snapshots
-        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        #[arg(long, requires = "watch", value_parser = crate::duration::parse_count_arg)]
         count: Option<u64>,
 
         /// With --watch, stop after this much time (e.g. 5s)
-        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        #[arg(long, requires = "watch", value_parser = crate::duration::parse_duration_arg)]
         duration: Option<Duration>,
     },
 
@@ -132,11 +132,11 @@ pub enum Command {
         watch: bool,
 
         /// With --watch, stop after N change events
-        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        #[arg(long, requires = "watch", value_parser = crate::duration::parse_count_arg)]
         count: Option<u64>,
 
         /// With --watch, stop after this much time (e.g. 5s)
-        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+        #[arg(long, requires = "watch", value_parser = crate::duration::parse_duration_arg)]
         duration: Option<Duration>,
     },
 
@@ -149,4 +149,46 @@ pub enum Command {
         #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
         refresh: Duration,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--count`/`--duration` bound only the `--watch` loop; without `--watch`
+    /// the non-watch branch ignores them, so accepting them would be a silent
+    /// no-op that misleads agents. They must be rejected at parse time.
+    #[test]
+    fn nodes_bounds_require_watch() {
+        assert!(Cli::try_parse_from(["zemon", "nodes", "--count", "1"]).is_err());
+        assert!(Cli::try_parse_from(["zemon", "nodes", "--duration", "5s"]).is_err());
+    }
+
+    #[test]
+    fn nodes_bounds_allowed_with_watch() {
+        assert!(Cli::try_parse_from(["zemon", "nodes", "--watch", "--count", "1"]).is_ok());
+        assert!(Cli::try_parse_from(["zemon", "nodes", "--watch", "--duration", "5s"]).is_ok());
+    }
+
+    #[test]
+    fn liveliness_bounds_require_watch() {
+        assert!(Cli::try_parse_from(["zemon", "liveliness", "--count", "1"]).is_err());
+        assert!(Cli::try_parse_from(["zemon", "liveliness", "--duration", "5s"]).is_err());
+    }
+
+    #[test]
+    fn liveliness_bounds_allowed_with_watch() {
+        assert!(Cli::try_parse_from(["zemon", "liveliness", "--watch", "--count", "1"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["zemon", "liveliness", "--watch", "--duration", "5s"]).is_ok()
+        );
+    }
+
+    /// Plain (non-watch) invocations remain valid.
+    #[test]
+    fn plain_nodes_and_liveliness_parse() {
+        assert!(Cli::try_parse_from(["zemon", "nodes"]).is_ok());
+        assert!(Cli::try_parse_from(["zemon", "liveliness"]).is_ok());
+        assert!(Cli::try_parse_from(["zemon", "nodes", "--watch"]).is_ok());
+    }
 }
