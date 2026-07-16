@@ -5,13 +5,13 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(name = "zemon", about = "Zenoh network monitor and debugger")]
 pub struct Cli {
-    /// Zenoh connection endpoint
-    #[arg(short, long, default_value = "tcp/localhost:7447")]
-    pub endpoint: String,
+    /// Zenoh connection endpoint (default: tcp/localhost:7447, resolved via config)
+    #[arg(short, long)]
+    pub endpoint: Option<String>,
 
-    /// Connection mode: peer or client
-    #[arg(short, long, default_value = "client")]
-    pub mode: String,
+    /// Connection mode: peer or client (default: client, resolved via config)
+    #[arg(short, long)]
+    pub mode: Option<String>,
 
     /// Zenoh namespace for key expression isolation
     #[arg(short, long)]
@@ -41,6 +41,12 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Validate or inspect the effective configuration
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+
     /// Discover active keys/topics
     Discover {
         /// Key expression to filter (default: "**")
@@ -276,11 +282,38 @@ pub enum QueryableCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommand {
+    /// Validate the merged configuration without opening a network session
+    Validate,
+
+    /// Show configuration after file, environment, and CLI overrides
+    Show {
+        /// Show the fully resolved effective configuration
+        #[arg(long, required = true)]
+        effective: bool,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use clap::CommandFactory;
 
     use super::*;
+
+    #[test]
+    fn global_defaults_remain_unset_until_resolution() {
+        let cli = Cli::try_parse_from(["zemon", "config", "validate"]).unwrap();
+
+        assert!(cli.endpoint.is_none());
+        assert!(cli.mode.is_none());
+    }
+
+    #[test]
+    fn effective_flag_is_required_for_config_show() {
+        assert!(Cli::try_parse_from(["zemon", "config", "show"]).is_err());
+        assert!(Cli::try_parse_from(["zemon", "config", "show", "--effective"]).is_ok());
+    }
 
     #[test]
     fn scout_help_uses_scouting_port_terminology() {
