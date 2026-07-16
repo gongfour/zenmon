@@ -40,6 +40,35 @@ pub fn to_collection_json_limited<T: Serialize>(
     })
 }
 
+/// Render a query result: successful replies as the usual `{"count":N,"items":[...]}`
+/// collection, plus an `"errors":[...]` array carrying any Zenoh reply errors the
+/// queryable returned. `count`/`items` count only successful replies (the
+/// invariant `count == items.len()` holds); the `errors` field is omitted when
+/// there are none, so a purely successful query renders identically to
+/// [`to_collection_json_limited`]. This ensures an endpoint that replies with an
+/// error is not mistaken for one that never replied.
+pub fn to_query_json<T: Serialize, E: Serialize>(
+    items: &[T],
+    errors: &[E],
+    limited: bool,
+) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Envelope<'a, T, E> {
+        count: usize,
+        items: &'a [T],
+        #[serde(skip_serializing_if = "is_false")]
+        limited: bool,
+        #[serde(skip_serializing_if = "<[E]>::is_empty")]
+        errors: &'a [E],
+    }
+    serde_json::to_string(&Envelope {
+        count: items.len(),
+        items,
+        limited,
+        errors,
+    })
+}
+
 /// Render the result of a `pub` action as a compact JSON object:
 /// `{"ok":true,"status":"accepted","key_expr":"...","bytes":N}` (+
 /// `"attachment_bytes":M` when an attachment is present).
@@ -111,6 +140,43 @@ mod tests {
         // `info` renders one resource as a one-element collection.
         let json = to_collection_json(std::slice::from_ref(&"only")).unwrap();
         assert_eq!(json, r#"{"count":1,"items":["only"]}"#);
+    }
+
+    #[test]
+    fn query_json_without_errors_matches_plain_collection() {
+        // Backward compatible: a query with only successful replies renders the
+        // exact same shape as before — no `errors` field.
+        let no_errors: &[String] = &[];
+        let json = to_query_json(&[1, 2], no_errors, false).unwrap();
+        assert_eq!(json, r#"{"count":2,"items":[1,2]}"#);
+    }
+
+    #[test]
+    fn query_json_surfaces_error_replies() {
+        // Reply errors are no longer dropped: they appear in an `errors` array
+        // even when there are zero successful replies.
+        let items: &[i32] = &[];
+        let json = to_query_json(items, &["parse failed"], false).unwrap();
+        assert_eq!(
+            json,
+            r#"{"count":0,"items":[],"errors":["parse failed"]}"#
+        );
+    }
+
+    #[test]
+    fn query_json_errors_do_not_count_toward_count() {
+        // `count` remains the number of successful replies (items.len()).
+        let json = to_query_json(&[1], &["boom"], false).unwrap();
+        assert_eq!(json, r#"{"count":1,"items":[1],"errors":["boom"]}"#);
+    }
+
+    #[test]
+    fn query_json_limited_and_errors_together() {
+        let json = to_query_json(&[1, 2], &["boom"], true).unwrap();
+        assert_eq!(
+            json,
+            r#"{"count":2,"items":[1,2],"limited":true,"errors":["boom"]}"#
+        );
     }
 
     #[test]
