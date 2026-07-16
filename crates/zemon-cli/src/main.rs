@@ -351,7 +351,10 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             watch,
             count,
             duration,
+            changes_only,
         } => {
+            use zemon_core::nodediff::{diff_nodes, NodeSnapshot};
+
             let session = zemon_core::session::open_session(&config).await?;
 
             if !watch {
@@ -371,6 +374,10 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                 // snapshot and exits. Each snapshot is counted.
                 let mut interval = tokio::time::interval(Duration::from_secs(3));
                 let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
+                // changes-only baseline: None until the first snapshot seeds it,
+                // so the initial state is not reported as a burst of "added".
+                let mut prev: Option<Vec<NodeSnapshot>> = None;
+                let mut done = false;
                 loop {
                     let deadline = budget.deadline();
                     tokio::select! {
@@ -385,18 +392,44 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
                         _ = interval.tick() => {
                             let updated =
                                 zemon_core::registry::query_admin_nodes(&session).await?;
-                            if cli.json {
+                            if changes_only {
+                                let curr: Vec<NodeSnapshot> =
+                                    updated.iter().map(NodeSnapshot::from_info).collect();
+                                match &prev {
+                                    None => {} // seed baseline below, emit nothing
+                                    Some(prev_snap) => {
+                                        for change in diff_nodes(prev_snap, &curr) {
+                                            if cli.json {
+                                                println!("{}", serde_json::to_string(&change)?);
+                                            } else {
+                                                println!("{}", change.describe());
+                                            }
+                                            if budget.record() {
+                                                done = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                prev = Some(curr);
+                            } else if cli.json {
                                 // NDJSON: one collection envelope per snapshot,
                                 // never ANSI.
                                 println!(
                                     "{}",
                                     zemon_core::output::to_collection_json(&updated)?
                                 );
+                                if budget.record() {
+                                    done = true;
+                                }
                             } else {
                                 print!("\x1B[2J\x1B[H");
                                 print_nodes_table(&updated, Some("refreshing every 3s"));
+                                if budget.record() {
+                                    done = true;
+                                }
                             }
-                            if budget.record() {
+                            if done {
                                 break;
                             }
                         }
@@ -445,30 +478,35 @@ async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
             watch,
             count,
             duration,
+            changes_only,
         } => {
             let session = zemon_core::session::open_session(&config).await?;
-            let tokens = zemon_core::discover::query_liveliness(&session, &key_expr).await?;
 
-            // The initial token snapshot and the change events are different
-            // shapes. In JSON watch mode we keep the stream a pure event NDJSON
-            // by skipping the initial collection envelope; humans still see the
-            // initial table.
-            if cli.json {
-                if !watch {
-                    println!("{}", zemon_core::output::to_collection_json(&tokens)?);
+            // --changes-only suppresses the initial snapshot entirely (its only
+            // effect for liveliness), leaving a pure join/leave event stream.
+            let suppress_initial = watch && changes_only;
+            if !suppress_initial {
+                let tokens = zemon_core::discover::query_liveliness(&session, &key_expr).await?;
+                // In JSON watch mode we keep the stream a pure event NDJSON by
+                // skipping the initial collection envelope; humans still see the
+                // initial table.
+                if cli.json {
+                    if !watch {
+                        println!("{}", zemon_core::output::to_collection_json(&tokens)?);
+                    }
+                } else if tokens.is_empty() {
+                    println!("No liveliness tokens found for '{}'", key_expr);
+                } else {
+                    println!("{:<50} {:<20} {}", "KEY", "NAME", "SOURCE_ZID");
+                    println!("{}", "─".repeat(85));
+                    for token in &tokens {
+                        let name = token.node_name().unwrap_or_default();
+                        let zid = token.source_zid.as_deref().unwrap_or("-");
+                        let status = if token.alive { "●" } else { "○" };
+                        println!("{} {:<49} {:<20} {}", status, token.key_expr, name, zid);
+                    }
+                    println!("\n{} token(s)", tokens.len());
                 }
-            } else if tokens.is_empty() {
-                println!("No liveliness tokens found for '{}'", key_expr);
-            } else {
-                println!("{:<50} {:<20} {}", "KEY", "NAME", "SOURCE_ZID");
-                println!("{}", "─".repeat(85));
-                for token in &tokens {
-                    let name = token.node_name().unwrap_or_default();
-                    let zid = token.source_zid.as_deref().unwrap_or("-");
-                    let status = if token.alive { "●" } else { "○" };
-                    println!("{} {:<49} {:<20} {}", status, token.key_expr, name, zid);
-                }
-                println!("\n{} token(s)", tokens.len());
             }
 
             if watch {

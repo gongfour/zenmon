@@ -10,5 +10,6 @@ pub mod subscriber;
 pub mod query;
 pub mod registry;
 pub mod merge;
+pub mod nodediff;
 pub mod scout;
 pub mod info;
