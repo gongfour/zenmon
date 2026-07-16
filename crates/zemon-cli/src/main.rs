@@ -224,6 +224,10 @@ fn resolve_log_filter(
 async fn main() {
     let cli = Cli::parse();
     let is_tui = matches!(cli.command, Command::Tui { .. });
+    // `tracing_subscriber::fmt()` writes to stdout by default, and stdout is
+    // the MCP stdio transport's JSON-RPC channel, so — like TUI mode — any
+    // stray log line would corrupt the protocol stream.
+    let is_mcp = matches!(cli.command, Command::Mcp);
     let is_json = cli.json;
 
     // In JSON mode the only permitted stderr output is the single structured
@@ -234,7 +238,7 @@ async fn main() {
 
     tracing_subscriber::fmt()
         .with_env_filter(resolve_log_filter(
-            is_tui,
+            is_tui || is_mcp,
             is_json,
             std::env::var("RUST_LOG").ok().as_deref(),
         ))
@@ -1077,6 +1081,12 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZemonError> {
                 .close()
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!(e))?;
+        }
+
+        Command::Mcp => {
+            zemon_mcp::serve_stdio(config)
+                .await
+                .map_err(|e| ZemonError::internal(format!("mcp server: {e}")))?;
         }
 
         Command::Tui { refresh } => {

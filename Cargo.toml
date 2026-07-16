@@ -4,6 +4,7 @@ members = [
     "crates/zemon-core",
     "crates/zemon-cli",
     "crates/zemon-tui",
+    "crates/zemon-mcp",
 ]
 
 [workspace.package]

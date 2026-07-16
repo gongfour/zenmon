@@ -47,6 +47,9 @@ pub enum Command {
         command: ConfigCommand,
     },
 
+    /// Run an MCP (Model Context Protocol) server over stdio for AI agents
+    Mcp,
+
     /// Discover active keys/topics
     Discover {
         /// Key expression to filter (default: "**")

@@ -1,0 +1,22 @@
+[package]
+name = "zemon-mcp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zemon-core.workspace = true
+# rmcp resolves to 2.x (confirmed 2.2.0). The `server` feature pulls in the
+# tool macros' runtime support and `transport-io` provides the stdio transport.
+#
+# We intentionally do NOT add a direct `schemars` dependency: rmcp resolves
+# its own `schemars` to 1.2.1 and re-exports it as `rmcp::schemars`. Tool
+# param structs derive `JsonSchema` from that re-export so the trait
+# `Parameters<P: JsonSchema>` expects lines up with the impl we derive; a
+# separately added `schemars = "0.8"` dependency would resolve to a
+# different major version and be a distinct, incompatible trait.
+rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow = "1"
+tracing.workspace = true

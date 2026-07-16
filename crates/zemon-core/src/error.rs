@@ -62,6 +62,20 @@ impl ZemonError {
         Self::new(ErrorKind::Internal, message)
     }
 
+    /// Stable, machine-readable kind as its snake_case string — the exact
+    /// same string `to_json`'s `error.kind` field serializes to. Non-CLI
+    /// consumers (e.g. the MCP adapter) use this to expose the same error
+    /// taxonomy without depending on `ErrorKind`'s `Serialize` impl directly.
+    pub fn kind_str(&self) -> &'static str {
+        match self.kind {
+            ErrorKind::Connection => "connection",
+            ErrorKind::Timeout => "timeout",
+            ErrorKind::InvalidInput => "invalid_input",
+            ErrorKind::NotFound => "not_found",
+            ErrorKind::Internal => "internal",
+        }
+    }
+
     /// Stable process exit code for this error's kind. `0` is reserved for
     /// success (including successful zero-result queries), so every kind maps
     /// to a distinct non-zero code that agents/shells can branch on.
@@ -187,5 +201,23 @@ mod tests {
         let err = serde_json::from_str::<serde_json::Value>("{not json").unwrap_err();
         let e: ZemonError = err.into();
         assert_eq!(e.kind, ErrorKind::Internal);
+    }
+
+    /// `kind_str()` must match the `error.kind` string `to_json` emits, since
+    /// non-CLI consumers rely on `kind_str()` alone for the same taxonomy.
+    #[test]
+    fn kind_str_matches_to_json_kind() {
+        let cases = [
+            ErrorKind::Connection,
+            ErrorKind::Timeout,
+            ErrorKind::InvalidInput,
+            ErrorKind::NotFound,
+            ErrorKind::Internal,
+        ];
+        for kind in cases {
+            let e = ZemonError::new(kind, "x");
+            let v: serde_json::Value = serde_json::from_str(&e.to_json()).unwrap();
+            assert_eq!(v["error"]["kind"], e.kind_str());
+        }
     }
 }
