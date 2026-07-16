@@ -272,7 +272,7 @@ async fn run_loop(
         }
 
         if let Some(new_mode) = app.pending_reconnect_mode.take() {
-            config.mode = new_mode;
+            config.set_mode(new_mode);
             app.current_mode = new_mode;
             app.clear_network_state();
             *session.lock().await = None;

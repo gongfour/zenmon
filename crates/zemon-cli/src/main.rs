@@ -3,8 +3,10 @@ mod duration;
 mod watch;
 
 use clap::Parser;
-use cli::{Cli, Command, QueryableCommand};
-use zemon_core::config::{ConnectMode, ZemonConfig};
+use cli::{Cli, Command, ConfigCommand, QueryableCommand};
+use zemon_core::config::{
+    resolve_config, ConfigOverrides, EffectiveConfig, ResolvedConfig, ResolvedValue,
+};
 use zemon_core::error::ZemonError;
 use std::time::Duration;
 
@@ -138,29 +140,56 @@ fn parse_port_range(s: &str) -> Result<(u16, u16), ZemonError> {
     Ok((start, end))
 }
 
-fn build_config(cli: &Cli) -> Result<ZemonConfig, ZemonError> {
-    let mut cfg = ZemonConfig::from_env()?;
+fn build_config(cli: &Cli) -> Result<ResolvedConfig, ZemonError> {
+    // Resolution failures (bad mode, endpoint, scout port, connect timeout, or
+    // config file) are all user-input errors, so collapse them to invalid_input
+    // (exit 2) to keep the CLI's structured error / exit-code contract.
+    resolve_config(ConfigOverrides {
+        endpoint: cli.endpoint.clone(),
+        mode: cli.mode.clone(),
+        namespace: cli.namespace.clone(),
+        config_file: cli.config.clone(),
+        scout_port: cli.scout_port,
+        connect_timeout: cli.connect_timeout,
+    })
+    .map_err(|e| ZemonError::invalid_input(e.to_string()))
+}
 
-    // CLI flags override env
-    cfg.endpoint = cli.endpoint.clone();
-    cfg.mode = match cli.mode.as_str() {
-        "peer" => ConnectMode::Peer,
-        _ => ConnectMode::Client,
-    };
-    if cli.namespace.is_some() {
-        cfg.namespace = cli.namespace.clone();
-    }
-    if cli.config.is_some() {
-        cfg.config_file = cli.config.clone();
-    }
-    if cli.scout_port.is_some() {
-        cfg.scout_port = cli.scout_port;
-    }
-    if cli.connect_timeout.is_some() {
-        cfg.connect_timeout = cli.connect_timeout;
-    }
+fn print_resolved<T: std::fmt::Display>(label: &str, value: &ResolvedValue<T>) {
+    println!(
+        "{:<16} {} ({})",
+        format!("{}:", label),
+        value.value,
+        value.source
+    );
+}
 
-    Ok(cfg)
+fn print_optional_resolved(label: &str, value: &ResolvedValue<Option<String>>) {
+    let rendered = value.value.as_deref().unwrap_or("(none)");
+    println!("{:<16} {} ({})", format!("{}:", label), rendered, value.source);
+}
+
+fn print_effective_config(effective: &EffectiveConfig, json: bool) -> Result<(), ZemonError> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(effective)?);
+    } else {
+        print_resolved("Endpoint", &effective.endpoint);
+        print_resolved("Mode", &effective.mode);
+        print_optional_resolved("Namespace", &effective.namespace);
+        let config_file = effective
+            .config_file
+            .value
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "(none)".to_string());
+        println!(
+            "{:<16} {} ({})",
+            "Config file:", config_file, effective.config_file.source
+        );
+        print_resolved("Scout port", &effective.scout_port);
+        print_optional_resolved("Connect timeout", &effective.connect_timeout);
+    }
+    Ok(())
 }
 
 /// Default tracing filter for plain CLI mode.
@@ -220,18 +249,47 @@ async fn main() {
         std::process::exit(e.exit_code());
     };
 
-    let config = match build_config(&cli) {
-        Ok(config) => config,
+    let resolved = match build_config(&cli) {
+        Ok(resolved) => resolved,
+        // A `config` command in JSON mode reports a resolution/validation
+        // failure as a structured {"valid": false, ...} document (exit 2)
+        // rather than the generic error envelope.
+        Err(e) if is_json && matches!(&cli.command, Command::Config { .. }) => {
+            let output = serde_json::json!({
+                "valid": false,
+                "error": { "code": "invalid_config", "message": e.to_string() },
+            });
+            println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+            std::process::exit(2);
+        }
         Err(e) => emit_error(e),
     };
 
-    if let Err(e) = run(cli, config).await {
+    if let Err(e) = run(cli, resolved).await {
         emit_error(e);
     }
 }
 
-async fn run(cli: Cli, config: ZemonConfig) -> Result<(), ZemonError> {
+async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZemonError> {
+    let config = resolved.config;
     match cli.command {
+        Command::Config { command } => match command {
+            ConfigCommand::Validate => {
+                if cli.json {
+                    let output = serde_json::json!({
+                        "valid": true,
+                        "config": resolved.effective,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                } else {
+                    println!("Configuration is valid.");
+                }
+            }
+            ConfigCommand::Show { effective: _ } => {
+                print_effective_config(&resolved.effective, cli.json)?;
+            }
+        },
+
         Command::Discover { key_expr } => {
             let session = zemon_core::session::open_session(&config).await?;
             let topics = zemon_core::discover::discover(&session, &key_expr).await?;
