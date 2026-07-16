@@ -185,9 +185,10 @@ mod tests {
     #[test]
     fn formats_zenoh_timestamp_as_readable_datetime() {
         let formatted = format_stream_timestamp("7386690599959157260/33");
-        // zenoh::time::Timestamp now serializes with nanosecond precision;
-        // trim_fractional_zeros only removes trailing zeros, so all 9 digits remain.
-        assert_eq!(formatted, "2024-07-01 15:32:06.860479001");
+        // zenoh 1.9's `to_string_rfc3339_lossy()` renders the fraction at
+        // microsecond precision, so the sub-microsecond nanosecond digits are
+        // dropped before `trim_fractional_zeros` ever sees them.
+        assert_eq!(formatted, "2024-07-01 15:32:06.860479");
     }
 
     #[test]

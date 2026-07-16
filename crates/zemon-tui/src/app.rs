@@ -2162,10 +2162,13 @@ mod tests {
         let mut app = App::new("test".into());
         let make = |key: &str| ZenohMessage {
             key_expr: key.into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(null)),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         };
         app.handle_zenoh_message(make("alpha/topic"));
         app.handle_zenoh_message(make("beta/topic"));
@@ -2194,19 +2197,25 @@ mod tests {
         let mut app = App::new("test".into());
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "selected/topic".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!("selected")),
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!("selected")),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.handle_zenoh_message(ZenohMessage {
             key_expr: "other/topic".into(),
-            payload: zemon_core::types::MessagePayload::Json(serde_json::json!(
+            payload: zemon_core::types::MessagePayload::from_json(&serde_json::json!(
                 "selected/topic"
             )),
+            encoding: String::new(),
+            payload_bytes: 0,
             timestamp: None,
             kind: "put".into(),
             attachment: None,
+            attachment_bytes: None,
         });
         app.topic_filter = "selected/topic".into();
         app.active_view = ActiveView::Topics;
