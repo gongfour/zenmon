@@ -78,6 +78,18 @@ pub(crate) fn apply_detail_scroll(scroll: u16, action: DetailScroll) -> u16 {
     }
 }
 
+/// Human label for a scout/multicast port. Ports in the Zenoh domain range
+/// (7446..=7546, i.e. domains 0..=100) are shown as their domain id; anything
+/// else is a custom port and is labeled as a port, not a domain — so an
+/// arbitrary port below 7446 isn't misreported as "domain 0".
+pub(crate) fn domain_port_label(port: u16) -> String {
+    if (7446..=7546).contains(&port) {
+        format!("domain {} (port {})", port - 7446, port)
+    } else {
+        format!("port {} (custom)", port)
+    }
+}
+
 const TAB_TITLES: [&str; 6] = ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1107,8 +1119,8 @@ impl App {
         };
 
         let port_text = match self.scout_port_current {
-            Some(p) => format!(" scout:{} ", p),
-            None => " scout:7446 ".to_string(),
+            Some(p) => format!(" {} ", domain_port_label(p)),
+            None => " domain 0 (port 7446) ".to_string(),
         };
 
         let mode_text = match self.current_mode {
@@ -1132,7 +1144,7 @@ impl App {
             ),
             middle_span,
             Span::styled(
-                " q:quit  1-6:view  /:filter  y:copy  P:port  m:mode ",
+                " q:quit  1-6:view  /:filter  y:copy  P:domain-scan  m:mode ",
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
@@ -1152,7 +1164,7 @@ impl App {
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Scout Port ")
+            .title(" Domain Scan & Switch ")
             .style(
                 Style::default()
                     .fg(Color::White)
@@ -1172,12 +1184,8 @@ impl App {
         .areas(inner);
 
         let current_text = match self.scout_port_current {
-            Some(p) => format!(
-                "Current: {} (domain {})",
-                p,
-                p.saturating_sub(7446)
-            ),
-            None => "Current: 7446 (default, domain 0)".to_string(),
+            Some(p) => format!("Current: {}", domain_port_label(p)),
+            None => "Current: domain 0 (port 7446, default)".to_string(),
         };
         frame.render_widget(
             Paragraph::new(current_text).style(Style::default().fg(Color::Gray)),
@@ -1185,9 +1193,9 @@ impl App {
         );
 
         let input_text = if self.scout_port_input.is_empty() {
-            "New port: _".to_string()
+            "Custom port: _".to_string()
         } else {
-            format!("New port: {}_", self.scout_port_input)
+            format!("Custom port: {}_", self.scout_port_input)
         };
         frame.render_widget(
             Paragraph::new(input_text).style(Style::default().fg(Color::Cyan)),
@@ -1196,7 +1204,7 @@ impl App {
 
         if self.port_scan_in_progress {
             frame.render_widget(
-                Paragraph::new("Scanning ports 7446-7546 ...")
+                Paragraph::new("Scanning domains 0-100 (ports 7446-7546) ...")
                     .style(Style::default().fg(Color::Yellow)),
                 list_area,
             );
@@ -1208,13 +1216,13 @@ impl App {
                 .collect();
             if hits.is_empty() && self.port_scan_results.is_empty() {
                 frame.render_widget(
-                    Paragraph::new("Press 's' to scan ports 7446-7546")
+                    Paragraph::new("Press 's' to scan domains 0-100 for nodes")
                         .style(Style::default().fg(Color::DarkGray)),
                     list_area,
                 );
             } else if hits.is_empty() {
                 frame.render_widget(
-                    Paragraph::new("No nodes found in 7446-7546")
+                    Paragraph::new("No nodes found in domains 0-100")
                         .style(Style::default().fg(Color::Red)),
                     list_area,
                 );
@@ -1230,10 +1238,9 @@ impl App {
                             ConnectionState::Connected(zid) if r.nodes.iter().any(|n| n.zid == *zid)
                         );
                         let base_text = format!(
-                            "{}{:>5}  (domain {:<3})  {} node(s)",
+                            "{}{}  {} node(s)",
                             marker,
-                            r.port,
-                            r.port.saturating_sub(7446),
+                            domain_port_label(r.port),
                             r.nodes.len()
                         );
                         let mut spans = vec![Span::styled(
@@ -1263,7 +1270,7 @@ impl App {
         }
 
         frame.render_widget(
-            Paragraph::new(" s:scan  Enter:reconnect  jk/↑↓:select  Esc:close ")
+            Paragraph::new(" s:scan domains  Enter:switch  jk/↑↓:select  Esc:close ")
                 .style(Style::default().fg(Color::DarkGray)),
             hint_row,
         );
@@ -1358,6 +1365,20 @@ mod tests {
     fn lowercase_j_k_are_not_detail_scroll() {
         assert_eq!(detail_scroll_action(key(KeyCode::Char('j'))), None);
         assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
+    }
+
+    #[test]
+    fn domain_port_label_maps_domain_range() {
+        assert_eq!(domain_port_label(7446), "domain 0 (port 7446)");
+        assert_eq!(domain_port_label(7450), "domain 4 (port 7450)");
+        assert_eq!(domain_port_label(7546), "domain 100 (port 7546)");
+    }
+
+    #[test]
+    fn domain_port_label_treats_out_of_range_as_custom_port() {
+        // Below 7446 must not be misreported as "domain 0".
+        assert_eq!(domain_port_label(7000), "port 7000 (custom)");
+        assert_eq!(domain_port_label(8000), "port 8000 (custom)");
     }
 
     #[test]

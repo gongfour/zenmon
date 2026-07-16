@@ -62,7 +62,7 @@ fn render_node_list(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rec
 
     let (n_admin, n_scout, n_both) = count_by_source(&app.nodes);
     let scout_status = if app.scout_in_progress {
-        " [scouting...]"
+        " [discovering...]"
     } else {
         ""
     };
