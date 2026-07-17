@@ -25,7 +25,7 @@ Before diagnosing:
 2. Determine how to connect, in this order — use the first that applies:
    - An endpoint/config already given by the user, or `ZENMON_CONTRACT` /
      `-c <config>` / `-e <endpoint>` set in the environment.
-   - A `*.zenmon.yaml` contract file in the repo → pass it with `--contract`.
+   - A `*.contract.yaml` file in the repo (e.g. `contracts/*.contract.yaml`) → pass it with `--contract`.
    - An endpoint or namespace mentioned in the project's CLAUDE.md/README →
      pass with `-e` / `-n`.
    - Otherwise assume the default `tcp/localhost:7447` and **tell the user you
@@ -44,14 +44,14 @@ problem is explained:
 | Who is on the network? | `zenmon nodes`, then `zenmon liveliness` for liveliness tokens |
 | What topics are flowing? | `zenmon discover`, then `zenmon sub "<key-expr>"` on keys of interest |
 | Messages aren't arriving | `zenmon discover` (is anyone publishing?) → `zenmon sub "<ke>"` (do you actually receive?) → `zenmon keyexpr "<pub-ke>" "<sub-ke>"` (do the two key expressions intersect?) |
-| Why did it reach this state? (cause & effect) | `zenmon scenario ...` to collect an episode JSON, then reason over that JSON |
+| Why did it reach this state? (cause & effect) | `zenmon scenario --observe "<key-expr>" --for <e.g. 8s>` to collect an episode JSON, then reason over it. Observe-only; its `--pub`/`--task` actuation forms mutate the network — see §4. |
 
 ## 3. Long-running commands
 
 `sub`, `scenario`, and `queryable` run until stopped. NEVER attach and forget:
 
 - Bound each with its own flag: `sub` takes `--duration <e.g. 5s>` or `--count <N>`; `scenario` requires `--for <e.g. 8s>`. Do not use `--timeout`/`--connect-timeout` for this — those bound connection setup and `doctor`, not stream duration.
-- `queryable serve` has no duration flag, so run it in the background and stop it after a fixed window.
+- `queryable serve` also bounds with `--duration <e.g. 5s>` or `--count <N>`.
 - `tui` is interactive — you cannot drive it. Do NOT launch `tui`. If a
   dashboard would help, recommend the human run `zenmon tui` themselves.
 
@@ -61,6 +61,7 @@ problem is explained:
   conservatively MessagePack). Do not re-parse raw bytes yourself.
 - Topics are discovered from **received messages**, not the admin space — a
   topic that is currently silent only appears once you `sub` to it.
-- **Read-only boundary:** `pub`, `replay`, and `queryable` inject data into a
-  live network. You may *propose* them, but run them only after the user
-  explicitly confirms.
+- **Read-only boundary:** `pub`, `replay`, `queryable`, and `scenario` run with
+  `--pub`/`--task` inject data into a live network. You may *propose* them, but
+  run them only after the user explicitly confirms. Plain `scenario` with only
+  `--observe`/`--preset` is read-only.

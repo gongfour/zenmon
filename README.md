@@ -31,7 +31,7 @@ cp skills/zenmon/SKILL.md ~/.claude/skills/zenmon/
 ```
 
 The skill triggers on Zenoh debugging requests and is read-only by default
-(`pub`/`replay` require explicit confirmation).
+(`pub`/`replay`/`queryable` require explicit confirmation).
 
 ## CLI Usage
 
