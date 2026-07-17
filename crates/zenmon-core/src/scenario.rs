@@ -257,6 +257,34 @@ pub fn build_tracks(events: &[ScenarioEvent], specs: &[TrackSpec]) -> Value {
     Value::Object(out)
 }
 
+/// Flatten the per-track `transitions` from a [`build_tracks`] result into one
+/// time-ordered `events` array: `{t_rel_ms, key, field, from, to}` per value
+/// change. Purely structural (what changed when) — no domain judgement.
+pub fn build_events_from_tracks(tracks: &Value) -> Value {
+    let mut events: Vec<Value> = Vec::new();
+    if let Some(obj) = tracks.as_object() {
+        for (track_key, entry) in obj {
+            let Some(trs) = entry.get("transitions").and_then(Value::as_array) else {
+                continue;
+            };
+            let (key, field) = track_key
+                .rsplit_once(':')
+                .unwrap_or((track_key.as_str(), ""));
+            for tr in trs {
+                events.push(json!({
+                    "t_rel_ms": tr.get("t_rel_ms").cloned().unwrap_or(Value::Null),
+                    "key": key,
+                    "field": field,
+                    "from": tr.get("from").cloned().unwrap_or(Value::Null),
+                    "to": tr.get("to").cloned().unwrap_or(Value::Null),
+                }));
+            }
+        }
+    }
+    events.sort_by_key(|e| e["t_rel_ms"].as_u64().unwrap_or(0));
+    Value::Array(events)
+}
+
 /// Distinct concrete keys (in first-seen order) whose events match the wildcard
 /// `pattern` and carry `field`.
 fn matching_concrete_keys(
@@ -585,6 +613,30 @@ mod tests {
     fn track_no_specs_is_empty_object() {
         let events = vec![ev(10, "a", None, None, json!({ "x": 1 }))];
         assert_eq!(build_tracks(&events, &[]), json!({}));
+    }
+
+    #[test]
+    fn events_aggregate_transitions_across_tracks_in_time_order() {
+        let tracks = json!({
+            "a/x:kind": { "transitions": [ { "t_rel_ms": 30, "from": 0, "to": 2 } ] },
+            "b/y:level": { "transitions": [
+                { "t_rel_ms": 10, "from": 1, "to": 0 },
+                { "t_rel_ms": 50, "from": 0, "to": 3 }
+            ] },
+            "c/z:v": { "count": 5, "series": [] }
+        });
+        let arr = build_events_from_tracks(&tracks);
+        let arr = arr.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], json!({ "t_rel_ms": 10, "key": "b/y", "field": "level", "from": 1, "to": 0 }));
+        assert_eq!(arr[1], json!({ "t_rel_ms": 30, "key": "a/x", "field": "kind", "from": 0, "to": 2 }));
+        assert_eq!(arr[2], json!({ "t_rel_ms": 50, "key": "b/y", "field": "level", "from": 0, "to": 3 }));
+    }
+
+    #[test]
+    fn events_empty_when_no_transitions() {
+        let tracks = json!({ "a/x:v": { "count": 1, "series": [] } });
+        assert_eq!(build_events_from_tracks(&tracks), json!([]));
     }
 
     #[test]
