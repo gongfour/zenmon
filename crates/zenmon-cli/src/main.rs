@@ -1989,22 +1989,22 @@ mod tests {
 
     #[test]
     fn namespace_warns_when_key_already_prefixed() {
-        let w = namespace_redundant_prefix("dotori/forky001/topic/x", Some("dotori/forky001"));
+        let w = namespace_redundant_prefix("myfleet/topic/x", Some("myfleet"));
         assert!(w.is_some_and(|m| m.contains("already starts with namespace")));
         // Exact-equal to the namespace also warns.
-        assert!(namespace_redundant_prefix("dotori/forky001", Some("dotori/forky001")).is_some());
+        assert!(namespace_redundant_prefix("myfleet", Some("myfleet")).is_some());
     }
 
     #[test]
     fn namespace_no_warn_for_relative_or_absent() {
-        assert!(namespace_redundant_prefix("topic/x", Some("dotori/forky001")).is_none());
-        assert!(namespace_redundant_prefix("dotori/forky001/topic/x", None).is_none());
+        assert!(namespace_redundant_prefix("topic/x", Some("myfleet")).is_none());
+        assert!(namespace_redundant_prefix("myfleet/topic/x", None).is_none());
     }
 
     #[test]
     fn namespace_no_false_positive_on_partial_segment() {
-        // "forky001x" must not be treated as under namespace "forky001".
-        assert!(namespace_redundant_prefix("dotori/forky001x/topic", Some("dotori/forky001")).is_none());
+        // "myfleetx" must not be treated as under namespace "myfleet".
+        assert!(namespace_redundant_prefix("myfleetx/topic", Some("myfleet")).is_none());
     }
 
     #[test]

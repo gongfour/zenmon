@@ -2,3 +2,7 @@
 Cargo.lock
 .worktrees/
 .superpowers/
+
+# Internal design/plan docs and project contracts (may reference proprietary systems)
+/docs/superpowers/
+/contracts/

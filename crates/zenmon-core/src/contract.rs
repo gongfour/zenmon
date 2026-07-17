@@ -495,7 +495,7 @@ topics:
     pattern: pub-sub
     encoding: application/json
     producers: [pose_publisher]
-    consumers: [mission_manager]
+    consumers: [orchestrator]
     description: Robot 2D pose
     payload:
       x: f64
@@ -535,9 +535,9 @@ topics:
     pattern: pub-sub
   - key: topic/safety/policy/{policy_name}
     pattern: pub-sub
-  - key: topic/actionflow/**
+  - key: topic/behavior/**
     pattern: pub-sub
-  - key: topic/actionflow/snapshot
+  - key: topic/behavior/snapshot
     pattern: pub-sub
 "#;
 
@@ -717,18 +717,18 @@ topics:
 
     #[test]
     fn lookup_prefers_most_specific_over_double_star() {
-        // Both `topic/actionflow/**` and the literal `topic/actionflow/snapshot`
+        // Both `topic/behavior/**` and the literal `topic/behavior/snapshot`
         // match; the literal (fewer wildcards) must win.
         let c = Contract::from_yaml_str(MATCH).unwrap();
-        let t = c.lookup("topic/actionflow/snapshot").unwrap();
-        assert_eq!(t.key, "topic/actionflow/snapshot");
+        let t = c.lookup("topic/behavior/snapshot").unwrap();
+        assert_eq!(t.key, "topic/behavior/snapshot");
     }
 
     #[test]
     fn lookup_double_star_matches_deep() {
         let c = Contract::from_yaml_str(MATCH).unwrap();
-        let t = c.lookup("topic/actionflow/library/list").unwrap();
-        assert_eq!(t.key, "topic/actionflow/**");
+        let t = c.lookup("topic/behavior/library/list").unwrap();
+        assert_eq!(t.key, "topic/behavior/**");
     }
 
     #[test]
