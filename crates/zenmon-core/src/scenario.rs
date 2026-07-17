@@ -40,7 +40,7 @@ pub enum TriggerInfo {
     None,
     /// One-shot `--pub` actuation.
     Pub { key_expr: String, bytes: usize },
-    /// A dotori Task request published to `<prefix>/request`.
+    /// A Task request published to `<prefix>/request`.
     Task {
         request_key: String,
         request_bytes: usize,
@@ -623,7 +623,7 @@ mod tests {
     fn meta_reflects_trigger_and_ended_reason() {
         let m = ScenarioMeta {
             trigger: TriggerInfo::Task {
-                request_key: "dotori/forky001/task/mission/mission/request".to_string(),
+                request_key: "myfleet/task/mission/mission/request".to_string(),
                 request_bytes: 42,
             },
             for_ms: 8000,
@@ -635,7 +635,7 @@ mod tests {
         assert_eq!(ep["meta"]["trigger"]["kind"], "task");
         assert_eq!(
             ep["meta"]["trigger"]["request_key"],
-            "dotori/forky001/task/mission/mission/request"
+            "myfleet/task/mission/mission/request"
         );
         assert_eq!(ep["meta"]["trigger"]["request_bytes"], 42);
         assert_eq!(ep["meta"]["for_ms"], 8000);
@@ -661,11 +661,11 @@ mod tests {
 
     #[test]
     fn expand_preset_stall_applies_prefix() {
-        let keys = expand_preset("stall", "dotori/forky001");
+        let keys = expand_preset("stall", "myfleet");
         assert_eq!(keys.len(), STALL_TOPICS.len());
-        assert!(keys.contains(&"dotori/forky001/topic/safety/safety_state".to_string()));
-        assert!(keys.contains(&"dotori/forky001/topic/safety/policy/**".to_string()));
-        assert!(keys.contains(&"dotori/forky001/task/**/response".to_string()));
+        assert!(keys.contains(&"myfleet/topic/safety/safety_state".to_string()));
+        assert!(keys.contains(&"myfleet/topic/safety/policy/**".to_string()));
+        assert!(keys.contains(&"myfleet/task/**/response".to_string()));
     }
 
     #[test]
@@ -677,8 +677,8 @@ mod tests {
 
     #[test]
     fn expand_preset_trims_trailing_slash_on_prefix() {
-        let keys = expand_preset("stall", "dotori/forky001/");
-        assert!(keys.contains(&"dotori/forky001/topic/sensor/obstacles".to_string()));
+        let keys = expand_preset("stall", "myfleet/");
+        assert!(keys.contains(&"myfleet/topic/sensor/obstacles".to_string()));
     }
 
     #[test]
