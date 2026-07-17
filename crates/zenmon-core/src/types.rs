@@ -85,7 +85,7 @@ impl MessagePayload {
     /// whole buffer**, and the **top level is a map or array**. Bare scalars are
     /// rejected — a stray binary byte like `0x05` is a valid msgpack integer, so
     /// requiring a container avoids showing garbage for arbitrary binary. This
-    /// matches how dotori serializes payloads (`nlohmann::json::to_msgpack` of a
+    /// matches how some producers serialize payloads (e.g. `nlohmann::json::to_msgpack` of a
     /// JSON object → a msgpack map).
     fn as_msgpack(&self) -> Option<serde_json::Value> {
         let mut cursor: &[u8] = &self.bytes;
@@ -346,7 +346,7 @@ pub enum LivelinessEvent {
 
 impl LivelinessToken {
     /// Extract a human-readable node name from the key expression.
-    /// e.g. "hdx/forky001/node/action_executor_ec98a701" -> "action_executor"
+    /// e.g. "fleet/r1/node/action_executor_ec98a701" -> "action_executor"
     /// Falls back to the last path segment with hash stripped.
     pub fn node_name(&self) -> Option<String> {
         let last = self.key_expr.rsplit('/').next()?;
@@ -364,7 +364,7 @@ impl LivelinessToken {
     }
 
     /// Extract the group/robot prefix from the key expression.
-    /// e.g. "hdx/forky001/node/action_executor_ec98a701" -> "hdx/forky001"
+    /// e.g. "fleet/r1/node/action_executor_ec98a701" -> "fleet/r1"
     pub fn group_prefix(&self) -> Option<String> {
         let parts: Vec<&str> = self.key_expr.split('/').collect();
         if parts.len() >= 3 {
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(v["payload_preview"], "AJ+Slg==");
     }
 
-    // MessagePack wire bytes below are hand-encoded (dotori serializes payloads
+    // MessagePack wire bytes below are hand-encoded (some producers serialize payloads
     // via nlohmann::json::to_msgpack). A JSON object becomes a msgpack map, and a
     // small map is a fixmap leading with 0x8_ — an invalid UTF-8 leading byte, so
     // it falls through the UTF-8 step and reaches the msgpack decode step.

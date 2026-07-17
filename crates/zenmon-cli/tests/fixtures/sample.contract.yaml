@@ -1,5 +1,5 @@
 # Trimmed, self-contained contract fixture for zenmon CLI integration tests.
-# Mirrors the shape of contracts/dotori_rcs.contract.yaml (which is not vendored).
+# A self-contained sample contract used only by tests (no real contract is vendored).
 version: "0.1"
 project: sample
 
@@ -15,13 +15,13 @@ types:
 
 services:
   - pose_publisher
-  - mission_manager
+  - orchestrator
 
 topics:
   - key: topic/navigation/robot_pose
     pattern: pub-sub
     producers: [pose_publisher]
-    consumers: [mission_manager]
+    consumers: [orchestrator]
     description: Robot 2D pose
     payload: { $ref: Pose2D }
 
@@ -30,18 +30,18 @@ topics:
     encoding: application/msgpack
     enveloped: false
     producers: [pose_publisher]
-    consumers: [mission_manager]
+    consumers: [orchestrator]
     description: Per-sensor point cloud
 
   - key: call/mission/pause
     pattern: call
-    consumers: [mission_manager]
+    consumers: [orchestrator]
     description: Pause mission
     request: {}
     response: {}
 
-  - key: topic/actionflow/tick
+  - key: topic/behavior/tick
     pattern: pub-sub
     status: declared-not-implemented
-    producers: [mission_manager]
+    producers: [orchestrator]
     description: BT tick snapshot (not yet implemented)
