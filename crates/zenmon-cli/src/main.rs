@@ -1871,6 +1871,25 @@ async fn run_scenario(
     if !specs.is_empty() {
         episode["tracks"] = build_tracks(&events, &specs);
     }
+    // Annotate each topics entry with its contract context (reusing enrich), so
+    // the episode is self-describing: a reader learns what each topic *is* and
+    // whether its encoding matches, and judges the values itself.
+    if let Some(c) = &contract {
+        if let Some(topics) = episode.get_mut("topics").and_then(|t| t.as_object_mut()) {
+            for (key, entry) in topics.iter_mut() {
+                let enc = events
+                    .iter()
+                    .find(|e| &e.key_expr == key && !e.trigger)
+                    .map(|e| e.encoding.as_str())
+                    .unwrap_or("");
+                if let (Some(obj), Ok(v)) =
+                    (entry.as_object_mut(), serde_json::to_value(c.enrich(key, enc)))
+                {
+                    obj.insert("contract".to_string(), v);
+                }
+            }
+        }
+    }
     if no_timeline {
         if let Some(obj) = episode.as_object_mut() {
             obj.remove("timeline");
