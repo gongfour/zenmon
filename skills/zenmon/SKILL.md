@@ -50,9 +50,8 @@ problem is explained:
 
 `sub`, `scenario`, and `queryable` run until stopped. NEVER attach and forget:
 
-- Bound them with a timeout (e.g. `--timeout`/`--connect-timeout` where the
-  subcommand supports it), or run in the background and stop after a fixed
-  window.
+- Bound each with its own flag: `sub` takes `--duration <e.g. 5s>` or `--count <N>`; `scenario` requires `--for <e.g. 8s>`. Do not use `--timeout`/`--connect-timeout` for this — those bound connection setup and `doctor`, not stream duration.
+- `queryable serve` has no duration flag, so run it in the background and stop it after a fixed window.
 - `tui` is interactive — you cannot drive it. Do NOT launch `tui`. If a
   dashboard would help, recommend the human run `zenmon tui` themselves.
 
