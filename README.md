@@ -176,24 +176,36 @@ zenmon --json scenario \
   --track topic/navigation/robot_pose:x \
   --for 9s
 
-# Trigger a long-running task, follow feedback/response, observe a diagnosis set
+# Trigger a long-running task from a file; keep the episode small
 zenmon -n myfleet --contract mynet.contract.yaml --json scenario \
-  --task task/navigation/trajectory '{"points":[...],"trajectory_id":"t1"}' \
-  --preset stall --for 15s --settle 1s
+  --task task/navigation/trajectory @mission.json \
+  --preset stall --track 'topic/safety/policy/*:level' \
+  --for 15s --settle 1s --no-timeline
+
+# Preview the resolved plan without running (dry run)
+zenmon scenario --preset stall --prefix myfleet --for 15s --explain
 ```
 
 - **Trigger** — `--pub KEY VALUE` (one-shot, or sustained with `--pub-rate` +
   `--pub-for`/`--pub-count`), or `--task PREFIX REQUEST_JSON` (publishes to
   `PREFIX/request`, auto-observes `PREFIX/feedback` + `PREFIX/response`, ends on
-  the response). With a contract, `--task` prints and validates the request schema.
+  the response). A large `VALUE`/`REQUEST_JSON` may be `@<file>` or `-` (stdin).
+  With a contract, `--task` prints and validates the request schema (missing/
+  unknown fields, and `A|B|C` enum values).
 - **Observe** — `--observe KEY` (repeatable), or `--preset stall` (a built-in
   mission-diagnosis set: safety state/policies, obstacles, mission state, pose,
   forklift snapshot, actionflow, task feedback/response).
 - **Track** — `--track KEY:FIELD` extracts a payload field over time: `series`,
-  `delta` (numeric), and `transitions` (for discrete fields like a state enum).
-- **Episode** — `{ meta, topics, correlations (grouped by attachment
-  correlation_id), timeline (decoded, time-ordered), tracks }`. Always bounded by
-  `--for`/`--settle`, so it terminates (agent-safe).
+  `delta` (numeric), and `transitions` (for discrete fields). A wildcard `KEY`
+  (e.g. `topic/safety/policy/*:level`) expands to one track per matching concrete
+  key.
+- **Episode** — `{ meta, topics, correlations, timeline, tracks }`. Each `topics`
+  entry carries `count`, `first`/`last_t_rel_ms`, `rate_hz`, and `latest` (the last
+  decoded payload); `correlations` groups events by attachment `correlation_id`.
+  Always bounded by `--for`/`--settle`, so it terminates (agent-safe).
+- **Size / preview** — `--no-timeline` drops the per-event timeline (keeps the
+  summaries; much smaller for long/high-rate sessions); `--explain` prints the
+  resolved plan and exits without touching the network.
 
 ## TUI Dashboard
 
