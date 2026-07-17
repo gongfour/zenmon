@@ -1552,8 +1552,8 @@ async fn run_scenario(
 ) -> Result<(), ZenmonError> {
     use std::time::Instant;
     use zenmon_core::scenario::{
-        build_episode, build_tracks, expand_preset, EndedReason, ScenarioEvent, ScenarioMeta,
-        TrackSpec, TriggerInfo,
+        build_episode, build_events_from_tracks, build_tracks, expand_preset, EndedReason,
+        ScenarioEvent, ScenarioMeta, TrackSpec, TriggerInfo,
     };
 
     // Parse --track KEY:FIELD specs up front so a malformed one fails before we
@@ -1870,6 +1870,10 @@ async fn run_scenario(
     let mut episode = build_episode(&meta, &events);
     if !specs.is_empty() {
         episode["tracks"] = build_tracks(&events, &specs);
+        let evs = build_events_from_tracks(&episode["tracks"]);
+        if evs.as_array().is_some_and(|a| !a.is_empty()) {
+            episode["events"] = evs;
+        }
     }
     // Annotate each topics entry with its contract context (reusing enrich), so
     // the episode is self-describing: a reader learns what each topic *is* and
