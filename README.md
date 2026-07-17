@@ -19,6 +19,20 @@ cargo build --release
 
 Requires a Rust toolchain (1.75+).
 
+### AI skill (optional)
+
+`cargo install` installs only the binary. To let an AI agent (Claude Code) drive
+zenmon for read-only Zenoh diagnostics, copy the bundled skill into your
+Claude skills directory:
+
+```bash
+mkdir -p ~/.claude/skills/zenmon
+cp skills/zenmon/SKILL.md ~/.claude/skills/zenmon/
+```
+
+The skill triggers on Zenoh debugging requests and is read-only by default
+(`pub`/`replay` require explicit confirmation).
+
 ## CLI Usage
 
 ```bash
