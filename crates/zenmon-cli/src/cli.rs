@@ -287,7 +287,7 @@ pub enum Command {
         #[arg(long = "pub", value_names = ["KEY", "VALUE"], num_args = 2, conflicts_with = "task")]
         pub_: Option<Vec<String>>,
 
-        /// dotori Task trigger: publish REQUEST_JSON to <PREFIX>/request and also
+        /// Task trigger: publish REQUEST_JSON to <PREFIX>/request and also
         /// observe <PREFIX>/feedback and <PREFIX>/response. Mutually exclusive
         /// with --pub.
         #[arg(long, value_names = ["PREFIX", "REQUEST_JSON"], num_args = 2, conflicts_with = "pub_")]
@@ -316,7 +316,7 @@ pub enum Command {
 
         /// Extract a payload field over time into the episode's `tracks` section
         /// (repeatable). Format `KEY:FIELD`, FIELD a dot-path — e.g.
-        /// `dotori/forky001/topic/safety/safety_state:kind`.
+        /// `myfleet/topic/safety/safety_state:kind`.
         #[arg(long)]
         track: Vec<String>,
 
@@ -566,13 +566,13 @@ mod tests {
             "--preset",
             "stall",
             "--prefix",
-            "dotori/forky001",
+            "myfleet",
             "--for",
             "8s",
             "--settle",
             "2s",
             "--task",
-            "dotori/forky001/task/mission/mission",
+            "myfleet/task/mission/mission",
             "{\"mission_id\":\"m1\"}",
         ])
         .is_ok());

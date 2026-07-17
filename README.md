@@ -23,7 +23,7 @@ Requires a Rust toolchain (1.75+).
 
 ```bash
 # Subscribe to topics (real-time stream)
-zenmon sub "forklift/**" --pretty --timestamp
+zenmon sub "sensor/**" --pretty --timestamp
 
 # Publish a message
 zenmon pub test/hello '{"msg":"world"}'
@@ -170,15 +170,15 @@ it does not diagnose.
 ```bash
 # Trigger a sustained actuation and capture the effect, in one command
 zenmon --json scenario \
-  --pub topic/forklift/drive_velocity '{"linear":{"x":0.3,"y":0,"z":0},"angular":{"x":0,"y":0,"z":0}}' \
+  --pub topic/drive/cmd '{"linear":{"x":0.3,"y":0,"z":0},"angular":{"x":0,"y":0,"z":0}}' \
   --pub-rate 10 --pub-for 8s \
-  --observe topic/navigation/robot_pose \
-  --track topic/navigation/robot_pose:x \
+  --observe topic/nav/pose \
+  --track topic/nav/pose:x \
   --for 9s
 
 # Trigger a long-running task from a file; keep the episode small
 zenmon -n myfleet --contract mynet.contract.yaml --json scenario \
-  --task task/navigation/trajectory @mission.json \
+  --task task/nav/route @mission.json \
   --preset stall --track 'topic/safety/policy/*:level' \
   --for 15s --settle 1s --no-timeline
 
@@ -194,7 +194,7 @@ zenmon scenario --preset stall --prefix myfleet --for 15s --explain
   unknown fields, and `A|B|C` enum values).
 - **Observe** — `--observe KEY` (repeatable), or `--preset stall` (a built-in
   mission-diagnosis set: safety state/policies, obstacles, mission state, pose,
-  forklift snapshot, actionflow, task feedback/response).
+  robot state, behavior tree, task feedback/response).
 - **Track** — `--track KEY:FIELD` extracts a payload field over time: `series`,
   `delta` (numeric), and `transitions` (for discrete fields). A wildcard `KEY`
   (e.g. `topic/safety/policy/*:level`) expands to one track per matching concrete
