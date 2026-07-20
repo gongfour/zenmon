@@ -511,6 +511,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             payload,
             timeout,
             limit,
+            consolidation,
         } => {
             warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             let limit = limit.map(|n| n as usize);
@@ -521,6 +522,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 payload.as_deref(),
                 timeout,
                 limit,
+                consolidation.into(),
             )
             .await?;
             let limited = limit.is_some_and(|l| outcome.replies.len() >= l);

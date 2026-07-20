@@ -238,7 +238,16 @@ async fn run_loop(
                 let tx = query_tx.clone();
                 let ke = key_expr.clone();
                 tokio::spawn(async move {
-                    match zenmon_core::query::get(&s, &ke, None, Duration::from_secs(5), None).await {
+                    match zenmon_core::query::get(
+                        &s,
+                        &ke,
+                        None,
+                        Duration::from_secs(5),
+                        None,
+                        zenmon_core::query::ConsolidationMode::Auto,
+                    )
+                    .await
+                    {
                         Ok(outcome) => {
                             let _ = tx.send(QueryResult::Ok(outcome.replies));
                         }
