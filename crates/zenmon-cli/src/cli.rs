@@ -1,6 +1,28 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Duration;
+
+/// Reply consolidation strategy for GET queries. Zenoh's default (auto) keeps
+/// only one reply per key — when multiple queryables share a key expression,
+/// only the fastest reply is observable. `none` delivers every reply.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsolidationArg {
+    Auto,
+    None,
+    Monotonic,
+    Latest,
+}
+
+impl From<ConsolidationArg> for zenoh::query::ConsolidationMode {
+    fn from(arg: ConsolidationArg) -> Self {
+        match arg {
+            ConsolidationArg::Auto => Self::Auto,
+            ConsolidationArg::None => Self::None,
+            ConsolidationArg::Monotonic => Self::Monotonic,
+            ConsolidationArg::Latest => Self::Latest,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "zenmon", about = "Zenoh network monitor and debugger")]
@@ -101,6 +123,12 @@ pub enum Command {
         /// Return at most N replies (output budget; more may exist)
         #[arg(long, value_parser = crate::duration::parse_count_arg)]
         limit: Option<u64>,
+
+        /// Reply consolidation. Default `auto` keeps one reply per key, so
+        /// when several queryables serve the same key only the fastest reply
+        /// is visible; use `none` to receive every reply.
+        #[arg(long, value_enum, default_value_t = ConsolidationArg::Auto)]
+        consolidation: ConsolidationArg,
     },
 
     /// List discovered Zenoh nodes
@@ -514,6 +542,42 @@ mod tests {
         assert!(
             Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--duration", "5s"]).is_err()
         );
+    }
+
+    /// Multiple queryables on a shared key (e.g. dotori `call/*` services) are
+    /// invisible under default consolidation — only the fastest reply survives.
+    /// `--consolidation none` must parse so every reply can be observed.
+    #[test]
+    fn query_consolidation_values_parse() {
+        for (arg, expected) in [
+            ("auto", ConsolidationArg::Auto),
+            ("none", ConsolidationArg::None),
+            ("monotonic", ConsolidationArg::Monotonic),
+            ("latest", ConsolidationArg::Latest),
+        ] {
+            let cli =
+                Cli::try_parse_from(["zenmon", "query", "k/e", "--consolidation", arg]).unwrap();
+            let Command::Query { consolidation, .. } = cli.command else {
+                panic!("expected query command");
+            };
+            assert_eq!(consolidation, expected, "--consolidation {arg}");
+        }
+    }
+
+    /// Without the flag, behavior must stay what it was before the flag
+    /// existed: Zenoh's default (auto).
+    #[test]
+    fn query_consolidation_defaults_to_auto() {
+        let cli = Cli::try_parse_from(["zenmon", "query", "k/e"]).unwrap();
+        let Command::Query { consolidation, .. } = cli.command else {
+            panic!("expected query command");
+        };
+        assert_eq!(consolidation, ConsolidationArg::Auto);
+    }
+
+    #[test]
+    fn query_consolidation_rejects_unknown_value() {
+        assert!(Cli::try_parse_from(["zenmon", "query", "k/e", "--consolidation", "all"]).is_err());
     }
 
     /// `--for` is required: scenario has no default window, so an unbounded

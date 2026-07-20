@@ -5,6 +5,8 @@ use serde::Serialize;
 use std::time::Duration;
 use zenoh::Session;
 
+pub use zenoh::query::ConsolidationMode;
+
 /// A Zenoh reply error returned by a queryable (e.g. a `call/*` RPC server that
 /// rejected the request). Surfaced instead of silently dropped so that an
 /// endpoint which exists but errors is distinguishable from one that never
@@ -28,14 +30,22 @@ pub struct QueryOutcome {
 /// (the output budget is bounded at the network level); the caller detects the
 /// cap by comparing `replies.len()` to the limit. Reply errors are collected
 /// separately and never counted against the limit.
+///
+/// `consolidation` controls reply filtering: with the default (`Auto`) only
+/// one reply per key survives, so when several queryables share a key
+/// expression the fastest reply masks the rest. `None` delivers every reply.
 pub async fn get(
     session: &Session,
     key_expr: &str,
     payload: Option<&str>,
     timeout: Duration,
     limit: Option<usize>,
+    consolidation: ConsolidationMode,
 ) -> Result<QueryOutcome> {
-    let mut builder = session.get(key_expr).timeout(timeout);
+    let mut builder = session
+        .get(key_expr)
+        .timeout(timeout)
+        .consolidation(consolidation);
 
     if let Some(p) = payload {
         builder = builder.payload(p.to_string());
