@@ -37,6 +37,10 @@ zenmon nodes
 # Query (Zenoh GET — requires queryable responder)
 zenmon query "@/*/router"
 
+# See every reply when multiple queryables share a key
+# (default consolidation keeps only one reply per key)
+zenmon query "call/system/params/get" --consolidation none
+
 # Bounded stream/watch (safe for agent tool calls)
 zenmon --json sub "sensor/**" --count 10        # stop after 10 messages
 zenmon --json sub "sensor/**" --duration 5s     # stop after 5s
@@ -92,6 +96,40 @@ Here `a/*` includes `a/b` (every `a/b` is an `a/*`), but not vice-versa. The
 `relation` field summarizes direction as one of `equal`, `a_includes_b`,
 `b_includes_a`, `overlaps`, or `disjoint`.
 
+### Reply consolidation (`query --consolidation`)
+
+Zenoh consolidates GET replies per key: with the default strategy only one
+reply per key survives, chosen by arrival order. When **several queryables
+serve the same key expression** — e.g. an RPC-style `call/**` key that every
+service in a fleet answers — this is a debugging trap: the fastest responder
+masks all others, so a fast error reply (`"Unknown parameter"`) can hide a
+slower success reply even though the operation actually applied.
+
+`--consolidation` selects the strategy:
+
+| Mode | Behavior |
+|------|----------|
+| `auto` (default) | Zenoh picks; effectively one reply per key |
+| `none` | No consolidation — **every** queryable's reply is returned |
+| `monotonic` | Forward replies immediately, drop timestamp regressions per key |
+| `latest` | Hold back and return only the newest reply per key |
+
+```bash
+# Two services answer test/consol. Default shows only the fastest:
+$ zenmon --json query test/consol
+{"count":1,"items":[{"key_expr":"test/consol","payload":"{svc:a}",...}]}
+
+# --consolidation none shows both:
+$ zenmon --json query test/consol --consolidation none
+{"count":2,"items":[{"key_expr":"test/consol","payload":"{svc:b}",...},
+                    {"key_expr":"test/consol","payload":"{svc:a}",...}]}
+```
+
+Use `none` whenever you need to know **who** replied (fan-out RPC keys,
+counting responders, spotting a service that answers with an error), and pair
+it with `--limit` if the fan-out is large. `sub`-side consolidation is not
+affected; this flag only applies to `query`.
+
 ### Agent-friendly output contracts
 
 - **Duration options** use unit strings (`--timeout 5s`, `--refresh 100ms`,
@@ -107,6 +145,11 @@ Here `a/*` includes `a/b` (every `a/b` is an `a/*`), but not vice-versa. The
   `"errors":[...]` array (present only when non-empty), not silently dropped —
   so an endpoint that exists but rejects a request is distinguishable from one
   that never replied.
+- **`query --consolidation none`** disables Zenoh reply consolidation so every
+  queryable's reply is returned. The default (`auto`) keeps one reply per key,
+  so when several services serve the same key expression the fastest reply
+  masks the rest (a fast error can hide a slow success). Also accepts
+  `monotonic` and `latest`.
 - **Errors** in `--json` mode are a single line on stderr,
   `{"error":{"kind":"...","message":"..."}}`, with a stable non-zero exit code
   per kind (`invalid_input`=2, `connection`=3, `timeout`=4, `not_found`=5,
