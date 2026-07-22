@@ -523,6 +523,110 @@ fn finalize_reduced(all: Vec<PositionedRecord>, limit: Option<u64>) -> Result<Re
     })
 }
 
+/// Per-topic rollup for `trace stats`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TopicStat {
+    pub key: String,
+    pub count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_ts: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ts: Option<String>,
+    pub rate_hz: f64,
+    pub last_value_preview: serde_json::Value,
+    pub last_value_bytes: usize,
+    pub encoding: String,
+}
+
+struct Acc {
+    count: u64,
+    first: Option<SystemTime>,
+    last: Option<SystemTime>,
+    first_ts: Option<String>,
+    last_ts: Option<String>,
+    last_payload_b64: String,
+    last_encoding: String,
+}
+
+/// Roll up the store per concrete key: count, observed rate, first/last receive
+/// time, and the latest value (preview capped to `max_payload_bytes`). Sorted
+/// by `count` descending, capped to `top`.
+pub fn topic_stats(
+    dir: &Path,
+    filter: &ReadFilter,
+    top: Option<usize>,
+    max_payload_bytes: Option<usize>,
+) -> Result<Vec<TopicStat>, ZenmonError> {
+    use std::collections::BTreeMap;
+    let segs = discover_segments(dir)?;
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+
+    for i in 0..segs.len() {
+        if !segment_overlaps_window(&segs, i, filter) {
+            continue;
+        }
+        for pr in load_segment(&segs[i].path, is_last_segment(&segs, i))? {
+            if !record_in_window(&pr, filter)? {
+                continue;
+            }
+            let e = acc.entry(pr.record.key_expr.clone()).or_insert_with(|| Acc {
+                count: 0,
+                first: None,
+                last: None,
+                first_ts: None,
+                last_ts: None,
+                last_payload_b64: String::new(),
+                last_encoding: String::new(),
+            });
+            e.count += 1;
+            if e.first.is_none() {
+                e.first = pr.received;
+                e.first_ts = pr.record.received_at.clone();
+            }
+            e.last = pr.received.or(e.last);
+            e.last_ts = pr.record.received_at.clone().or(e.last_ts.take());
+            e.last_payload_b64 = pr.record.payload_base64.clone();
+            e.last_encoding = pr.record.encoding.clone();
+        }
+    }
+
+    let mut stats: Vec<TopicStat> = acc
+        .into_iter()
+        .map(|(key, a)| {
+            let rate_hz = match (a.first, a.last) {
+                (Some(f), Some(l)) if a.count > 1 => {
+                    let secs = l.duration_since(f).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                    if secs > 0.0 { a.count as f64 / secs } else { 0.0 }
+                }
+                _ => 0.0,
+            };
+            let payload = crate::capture::b64_decode_public(&a.last_payload_b64).unwrap_or_default();
+            let mp = crate::types::MessagePayload::from_bytes(payload);
+            let last_value_bytes = mp.len();
+            let last_value_preview = match max_payload_bytes {
+                Some(max) => mp.to_view_capped(max),
+                None => mp.to_view(),
+            };
+            TopicStat {
+                key,
+                count: a.count,
+                first_ts: a.first_ts,
+                last_ts: a.last_ts,
+                rate_hz,
+                last_value_preview,
+                last_value_bytes,
+                encoding: a.last_encoding,
+            }
+        })
+        .collect();
+
+    stats.sort_by(|a, b| b.count.cmp(&a.count).then(a.key.cmp(&b.key)));
+    if let Some(n) = top {
+        stats.truncate(n);
+    }
+    Ok(stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -907,4 +1011,26 @@ mod tests {
         assert_eq!(decode_cursor("!notbase64!").unwrap_err().kind, crate::error::ErrorKind::InvalidInput);
     }
 
+    #[test]
+    fn topic_stats_rolls_up_per_key() {
+        let dir = seed_store("stats1");
+        let f = ReadFilter { key: "**".into(), since: None, until: None };
+        let stats = topic_stats(&dir, &f, None, Some(64)).unwrap();
+        assert_eq!(stats.len(), 2);
+        let ax = stats.iter().find(|s| s.key == "a/x").unwrap();
+        assert_eq!(ax.count, 3);
+        assert!(ax.first_ts.is_some());
+        assert!(ax.rate_hz > 0.0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn topic_stats_top_n_by_volume_and_key_filter() {
+        let dir = seed_store("stats2");
+        let f = ReadFilter { key: "a/*".into(), since: None, until: None };
+        let stats = topic_stats(&dir, &f, Some(1), None).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].key, "a/x"); // only a/* matched
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

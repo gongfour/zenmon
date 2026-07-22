@@ -47,6 +47,11 @@ fn b64_decode(s: &str, field: &str) -> Result<Vec<u8>, ZenmonError> {
         .map_err(|e| ZenmonError::invalid_input(format!("invalid base64 in {}: {}", field, e)))
 }
 
+/// Decode a base64 payload string (used by the trace reader).
+pub fn b64_decode_public(s: &str) -> Result<Vec<u8>, ZenmonError> {
+    b64_decode(s, "payload")
+}
+
 impl CaptureRecord {
     /// Build a record from a received message, its offset since capture start,
     /// and the receiver wall-clock time it was captured.
