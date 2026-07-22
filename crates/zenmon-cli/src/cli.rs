@@ -297,6 +297,12 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Read a rotating capture store (`capture --dir`). Pure, no network.
+    Trace {
+        #[command(subcommand)]
+        command: TraceCommand,
+    },
+
     /// Test queryable: serve a fixed reply to incoming GET queries
     Queryable {
         #[command(subcommand)]
@@ -409,6 +415,73 @@ pub enum ContractCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum TraceCommand {
+    /// Per-topic rollup: count, rate, last value, time span.
+    Stats {
+        /// Trace store directory
+        dir: PathBuf,
+
+        /// Key expression filter (default "**")
+        #[arg(long, default_value = "**")]
+        key: String,
+
+        /// Window start: relative (e.g. 10m) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Window end: relative or RFC3339
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Return only the N highest-volume topics
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        top: Option<u64>,
+
+        /// Cap last-value preview to N bytes
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        max_payload_bytes: Option<u64>,
+    },
+
+    /// Filtered raw records as NDJSON, bounded and paginated.
+    Read {
+        /// Trace store directory
+        dir: PathBuf,
+
+        /// Key expression filter (default "**")
+        #[arg(long, default_value = "**")]
+        key: String,
+
+        /// Window start: relative (e.g. 10m) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Window end: relative or RFC3339
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Max records to return (0 = unbounded; use with care)
+        #[arg(long, default_value = "100")]
+        limit: u64,
+
+        /// Collapse to the latest record per key (whole-window, ignores cursor)
+        #[arg(long)]
+        last_per_key: bool,
+
+        /// Sample every Nth matching record (whole-window, ignores cursor)
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        every: Option<u64>,
+
+        /// Cap each record's payload preview to N bytes
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        max_payload_bytes: Option<u64>,
+
+        /// Resume from a previous page's cursor
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum QueryableCommand {
     /// Serve a fixed reply to incoming GET queries (for testing responder paths).
     Serve {
@@ -477,6 +550,28 @@ mod tests {
     fn effective_flag_is_required_for_config_show() {
         assert!(Cli::try_parse_from(["zenmon", "config", "show"]).is_err());
         assert!(Cli::try_parse_from(["zenmon", "config", "show", "--effective"]).is_ok());
+    }
+
+    #[test]
+    fn trace_stats_and_read_parse() {
+        assert!(Cli::try_parse_from(["zenmon", "trace", "stats", "d"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "trace", "stats", "d", "--key", "a/*", "--since", "10m", "--top", "5"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "trace", "read", "d", "--key", "a/*", "--limit", "50", "--last-per-key"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "trace", "read", "d", "--every", "10", "--cursor", "abc"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn trace_requires_a_subcommand() {
+        assert!(Cli::try_parse_from(["zenmon", "trace"]).is_err());
     }
 
     #[test]
