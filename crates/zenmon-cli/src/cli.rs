@@ -233,14 +233,38 @@ pub enum Command {
         b: String,
     },
 
-    /// Record received messages to a versioned NDJSON trace file
+    /// Record received messages to a versioned NDJSON trace.
+    ///
+    /// `--output` writes one file (pairs with `replay`). `--dir` writes a
+    /// rotating segment store with retention (pairs with `trace`), suitable
+    /// for an always-on recorder.
     Capture {
         /// Key expression to subscribe and record
         key_expr: String,
 
-        /// Output NDJSON file
-        #[arg(long, short)]
-        output: PathBuf,
+        /// Single-file output (NDJSON). Mutually exclusive with --dir.
+        #[arg(long, short, required_unless_present = "dir", conflicts_with = "dir")]
+        output: Option<PathBuf>,
+
+        /// Rotating segment-store directory. Mutually exclusive with --output.
+        #[arg(long, required_unless_present = "output")]
+        dir: Option<PathBuf>,
+
+        /// Rotate the active segment once it reaches this size (dir mode)
+        #[arg(long, default_value = "64MB", value_parser = crate::duration::parse_byte_size_arg)]
+        rotate_size: u64,
+
+        /// …or once it is this old (dir mode)
+        #[arg(long, default_value = "1h", value_parser = crate::duration::parse_duration_arg)]
+        rotate_interval: Duration,
+
+        /// Retention: delete oldest closed segments over this total size (dir mode)
+        #[arg(long, default_value = "1GB", value_parser = crate::duration::parse_byte_size_arg)]
+        max_total_size: u64,
+
+        /// Retention: delete closed segments older than this (dir mode)
+        #[arg(long, default_value = "7d", value_parser = crate::duration::parse_duration_arg)]
+        max_age: Duration,
 
         /// Stop after N recorded messages
         #[arg(long, value_parser = crate::duration::parse_count_arg)]
@@ -271,6 +295,12 @@ pub enum Command {
         /// Print what would be published without actually publishing
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Read a rotating capture store (`capture --dir`). Pure, no network.
+    Trace {
+        #[command(subcommand)]
+        command: TraceCommand,
     },
 
     /// Test queryable: serve a fixed reply to incoming GET queries
@@ -385,6 +415,73 @@ pub enum ContractCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum TraceCommand {
+    /// Per-topic rollup: count, rate, last value, time span.
+    Stats {
+        /// Trace store directory
+        dir: PathBuf,
+
+        /// Key expression filter (default "**")
+        #[arg(long, default_value = "**")]
+        key: String,
+
+        /// Window start: relative (e.g. 10m) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Window end: relative or RFC3339
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Return only the N highest-volume topics
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        top: Option<u64>,
+
+        /// Cap last-value preview to N bytes
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        max_payload_bytes: Option<u64>,
+    },
+
+    /// Filtered raw records as NDJSON, bounded and paginated.
+    Read {
+        /// Trace store directory
+        dir: PathBuf,
+
+        /// Key expression filter (default "**")
+        #[arg(long, default_value = "**")]
+        key: String,
+
+        /// Window start: relative (e.g. 10m) or RFC3339
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Window end: relative or RFC3339
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Max records to return (0 = unbounded; use with care)
+        #[arg(long, default_value = "100")]
+        limit: u64,
+
+        /// Collapse to the latest record per key (whole-window, ignores cursor)
+        #[arg(long)]
+        last_per_key: bool,
+
+        /// Sample every Nth matching record (whole-window, ignores cursor)
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        every: Option<u64>,
+
+        /// Cap each record's payload preview to N bytes
+        #[arg(long, value_parser = crate::duration::parse_count_arg)]
+        max_payload_bytes: Option<u64>,
+
+        /// Resume from a previous page's cursor
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum QueryableCommand {
     /// Serve a fixed reply to incoming GET queries (for testing responder paths).
     Serve {
@@ -453,6 +550,61 @@ mod tests {
     fn effective_flag_is_required_for_config_show() {
         assert!(Cli::try_parse_from(["zenmon", "config", "show"]).is_err());
         assert!(Cli::try_parse_from(["zenmon", "config", "show", "--effective"]).is_ok());
+    }
+
+    #[test]
+    fn trace_stats_and_read_parse() {
+        assert!(Cli::try_parse_from(["zenmon", "trace", "stats", "d"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "trace", "stats", "d", "--key", "a/*", "--since", "10m", "--top", "5"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "trace", "read", "d", "--key", "a/*", "--limit", "50", "--last-per-key"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon", "trace", "read", "d", "--every", "10", "--cursor", "abc"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn trace_requires_a_subcommand() {
+        assert!(Cli::try_parse_from(["zenmon", "trace"]).is_err());
+    }
+
+    #[test]
+    fn capture_requires_output_or_dir() {
+        assert!(Cli::try_parse_from(["zenmon", "capture", "k/**"]).is_err()); // neither
+    }
+
+    #[test]
+    fn capture_output_and_dir_are_exclusive() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "capture", "k/**", "-o", "f.ndjson", "--dir", "d"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn capture_dir_mode_parses_rotation_and_retention() {
+        assert!(Cli::try_parse_from([
+            "zenmon",
+            "capture",
+            "k/**",
+            "--dir",
+            "d",
+            "--rotate-size",
+            "64MB",
+            "--rotate-interval",
+            "1h",
+            "--max-total-size",
+            "1GB",
+            "--max-age",
+            "7d"
+        ])
+        .is_ok());
     }
 
     #[test]

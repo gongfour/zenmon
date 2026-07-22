@@ -3,7 +3,7 @@ mod duration;
 mod watch;
 
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand, ContractCommand, QueryableCommand};
+use cli::{Cli, Command, ConfigCommand, ContractCommand, QueryableCommand, TraceCommand};
 use zenmon_core::config::{
     resolve_config, ConfigOverrides, EffectiveConfig, ResolvedConfig, ResolvedValue,
 };
@@ -967,9 +967,115 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             }
         }
 
+        Command::Trace { command } => {
+            use zenmon_core::trace::{self, ReadFilter, ReadOptions};
+            // Pure file reader — never opens a Zenoh session.
+            let now = std::time::SystemTime::now();
+            let parse_bound =
+                |o: &Option<String>| -> Result<Option<std::time::SystemTime>, ZenmonError> {
+                    o.as_deref().map(|s| trace::parse_time_bound(s, now)).transpose()
+                };
+            match command {
+                TraceCommand::Stats { dir, key, since, until, top, max_payload_bytes } => {
+                    let filter =
+                        ReadFilter { key, since: parse_bound(&since)?, until: parse_bound(&until)? };
+                    let stats = trace::topic_stats(
+                        &dir,
+                        &filter,
+                        top.map(|n| n as usize),
+                        max_payload_bytes.map(|n| n as usize),
+                    )?;
+                    if cli.json {
+                        println!("{}", zenmon_core::output::to_collection_json(&stats)?);
+                    } else if stats.is_empty() {
+                        println!("No records in store for '{}'", filter.key);
+                    } else {
+                        for s in &stats {
+                            println!(
+                                "{:<40} count={:<8} rate={:.2}Hz last={}",
+                                s.key,
+                                s.count,
+                                s.rate_hz,
+                                s.last_ts.as_deref().unwrap_or("-")
+                            );
+                        }
+                    }
+                }
+                TraceCommand::Read {
+                    dir,
+                    key,
+                    since,
+                    until,
+                    limit,
+                    last_per_key,
+                    every,
+                    max_payload_bytes,
+                    cursor,
+                } => {
+                    let filter =
+                        ReadFilter { key, since: parse_bound(&since)?, until: parse_bound(&until)? };
+                    let opts = ReadOptions {
+                        filter,
+                        limit: if limit == 0 { None } else { Some(limit) },
+                        last_per_key,
+                        every,
+                        cursor,
+                    };
+                    let page = trace::read_page(&dir, &opts)?;
+                    let max = max_payload_bytes.map(|n| n as usize);
+                    if cli.json {
+                        // NDJSON: one record per line, then a summary trailer line.
+                        for pr in &page.records {
+                            let mut v = serde_json::to_value(&pr.record)?;
+                            if let (Some(max), Some(obj)) = (max, v.as_object_mut()) {
+                                // Re-cap the payload preview from raw bytes.
+                                if let Ok(bytes) = zenmon_core::capture::b64_decode_public(
+                                    &pr.record.payload_base64,
+                                ) {
+                                    let mp = zenmon_core::types::MessagePayload::from_bytes(bytes);
+                                    obj.insert("payload".to_string(), mp.to_view_capped(max));
+                                }
+                            }
+                            println!("{}", serde_json::to_string(&v)?);
+                        }
+                        println!(
+                            "{}",
+                            serde_json::to_string(&serde_json::json!({
+                                "summary": {
+                                    "returned": page.returned,
+                                    "matched": page.matched,
+                                    "truncated": page.truncated,
+                                    "cursor": page.cursor,
+                                }
+                            }))?
+                        );
+                    } else {
+                        for pr in &page.records {
+                            println!(
+                                "{}  {}",
+                                pr.record.received_at.as_deref().unwrap_or("-"),
+                                pr.record.key_expr
+                            );
+                        }
+                        eprintln!(
+                            "returned {} of {} matched{}",
+                            page.returned,
+                            page.matched,
+                            if page.truncated { " (more — pass --cursor to continue)" } else { "" }
+                        );
+                    }
+                }
+            }
+        }
+
         Command::Capture {
             key_expr,
             output,
+            dir,
+            rotate_size,
+            rotate_interval,
+            max_total_size,
+            max_age,
             count,
             duration,
         } => {
@@ -981,19 +1087,43 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let _handle = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
-            let file = std::fs::File::create(&output).map_err(|e| {
-                ZenmonError::invalid_input(format!("cannot create {}: {}", output.display(), e))
-            })?;
-            let mut writer = std::io::BufWriter::new(file);
-            let start = std::time::Instant::now();
-            if !cli.json {
-                eprintln!(
-                    "Capturing '{}' to {} ... (Ctrl+C to stop)",
-                    key_expr,
-                    output.display()
-                );
+            // Two sinks: one file (pairs with replay) or a rotating store
+            // (pairs with trace).
+            enum Sink {
+                File(std::io::BufWriter<std::fs::File>),
+                Dir {
+                    writer: zenmon_core::trace::SegmentWriter,
+                    dir: std::path::PathBuf,
+                    max_total_size: u64,
+                    max_age: std::time::Duration,
+                },
             }
+            let mut sink = if let Some(dir) = dir {
+                let writer = zenmon_core::trace::SegmentWriter::open(
+                    dir.clone(),
+                    rotate_size,
+                    rotate_interval,
+                )?;
+                if !cli.json {
+                    eprintln!(
+                        "Recording '{}' to {} (rotating) ... (Ctrl+C to stop)",
+                        key_expr,
+                        dir.display()
+                    );
+                }
+                Sink::Dir { writer, dir, max_total_size, max_age }
+            } else {
+                let out = output.clone().expect("clap guarantees output or dir");
+                let file = std::fs::File::create(&out).map_err(|e| {
+                    ZenmonError::invalid_input(format!("cannot create {}: {}", out.display(), e))
+                })?;
+                if !cli.json {
+                    eprintln!("Capturing '{}' to {} ... (Ctrl+C to stop)", key_expr, out.display());
+                }
+                Sink::File(std::io::BufWriter::new(file))
+            };
 
+            let start = std::time::Instant::now();
             let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
             let mut written: u64 = 0;
             let mut stop = false;
@@ -1010,11 +1140,26 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                     item = rx.recv() => match item {
                         Some(msg) => {
-                            let rec = CaptureRecord::from_message(&msg, start.elapsed());
+                            let now = std::time::SystemTime::now();
+                            let rec = CaptureRecord::from_message(&msg, start.elapsed(), now);
                             let line = serde_json::to_string(&rec)?;
-                            writeln!(writer, "{}", line).map_err(|e| {
-                                ZenmonError::internal(format!("write failed: {}", e))
-                            })?;
+                            match &mut sink {
+                                Sink::File(w) => {
+                                    writeln!(w, "{}", line).map_err(|e| {
+                                        ZenmonError::internal(format!("write failed: {}", e))
+                                    })?;
+                                }
+                                Sink::Dir { writer, dir, max_total_size, max_age } => {
+                                    writer.write_line(&line, now)?;
+                                    // Cheap: early-returns when nothing to prune.
+                                    zenmon_core::trace::enforce_retention(
+                                        dir,
+                                        Some(*max_total_size),
+                                        Some(*max_age),
+                                        now,
+                                    )?;
+                                }
+                            }
                             written += 1;
                             if budget.record() {
                                 stop = true;
@@ -1028,9 +1173,17 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             }
             // Flush the last records on any exit path (count/duration/Ctrl+C).
-            writer
-                .flush()
-                .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+            let output_label = match &mut sink {
+                Sink::File(w) => {
+                    w.flush()
+                        .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+                    output.map(|p| p.display().to_string()).unwrap_or_default()
+                }
+                Sink::Dir { writer, dir, .. } => {
+                    writer.flush()?;
+                    dir.display().to_string()
+                }
+            };
 
             if cli.json {
                 println!(
@@ -1038,11 +1191,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     serde_json::to_string(&serde_json::json!({
                         "ok": true,
                         "captured": written,
-                        "output": output.display().to_string(),
+                        "output": output_label,
                     }))?
                 );
             } else {
-                eprintln!("Captured {} record(s) to {}", written, output.display());
+                eprintln!("Captured {} record(s) to {}", written, output_label);
             }
             session
                 .close()

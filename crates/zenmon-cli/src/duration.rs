@@ -79,6 +79,36 @@ pub fn rate_tick_interval(hz: f64) -> Duration {
     Duration::from_secs_f64(1.0 / hz)
 }
 
+/// Parse a byte-size option (`--rotate-size 64MB`). Accepts decimal
+/// (`KB/MB/GB`, ×1000) and binary (`KiB/MiB/GiB`, ×1024) units, or a bare
+/// integer (bytes). Rejects zero.
+pub fn parse_byte_size_arg(s: &str) -> Result<u64, String> {
+    let t = s.trim();
+    let units: &[(&str, u64)] = &[
+        ("KiB", 1 << 10),
+        ("MiB", 1 << 20),
+        ("GiB", 1 << 30),
+        ("KB", 1_000),
+        ("MB", 1_000_000),
+        ("GB", 1_000_000_000),
+        ("B", 1),
+    ];
+    let (num_str, mult) = units
+        .iter()
+        .find_map(|(suf, m)| t.strip_suffix(suf).map(|n| (n.trim(), *m)))
+        .unwrap_or((t, 1));
+    let n: u64 = num_str
+        .parse()
+        .map_err(|_| format!("invalid size '{}': expected e.g. 64MB, 1GB", s))?;
+    let bytes = n
+        .checked_mul(mult)
+        .ok_or_else(|| format!("size '{}' overflows", s))?;
+    if bytes == 0 {
+        return Err("size must be greater than zero".to_string());
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +211,22 @@ mod tests {
     fn connect_timeout_rejects_too_large() {
         // > u32::MAX ms (~49.7 days).
         assert!(parse_connect_timeout_arg("100days").is_err());
+    }
+
+    #[test]
+    fn parses_byte_sizes() {
+        assert_eq!(parse_byte_size_arg("64MB").unwrap(), 64 * 1000 * 1000);
+        assert_eq!(parse_byte_size_arg("1GB").unwrap(), 1_000_000_000);
+        assert_eq!(parse_byte_size_arg("512KB").unwrap(), 512_000);
+        assert_eq!(parse_byte_size_arg("1MiB").unwrap(), 1024 * 1024);
+        assert_eq!(parse_byte_size_arg("2048").unwrap(), 2048); // bare = bytes
+    }
+
+    #[test]
+    fn rejects_zero_and_garbage_byte_size() {
+        assert!(parse_byte_size_arg("0").is_err());
+        assert!(parse_byte_size_arg("0MB").is_err());
+        assert!(parse_byte_size_arg("big").is_err());
+        assert!(parse_byte_size_arg("5PB").is_err()); // unsupported unit
     }
 }

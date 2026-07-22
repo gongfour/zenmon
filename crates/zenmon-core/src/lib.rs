@@ -10,6 +10,7 @@ pub mod types;
 pub mod discover;
 pub mod subscriber;
 pub mod topology;
+pub mod trace;
 pub mod query;
 pub mod queryable;
 pub mod registry;
