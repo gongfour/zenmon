@@ -66,6 +66,15 @@ zenmon pub cmd/drive '{"v":0.3}' --rate 10 --duration 5s
 zenmon --json scenario --pub cmd/drive '{"v":0.3}' --pub-rate 10 --pub-for 5s \
   --observe state/pose --track state/pose:x --for 6s
 
+# Continuously record a rotating store (run under a supervisor for always-on)
+zenmon capture "sensor/**" --dir ./trace --rotate-size 64MB --rotate-interval 1h \
+  --max-total-size 1GB --max-age 7d
+
+# Read the store WITHOUT a live subscription (pure, offline) — inspect the past
+zenmon --json trace stats ./trace --since 1h --top 20        # per-topic rollup
+zenmon --json trace read  ./trace --key "sensor/**" --since 10m --limit 100
+zenmon --json trace read  ./trace --last-per-key             # latest value per topic
+
 # Consume a contract (topic types, schemas, encodings)
 zenmon contract lint mynet.contract.yaml
 zenmon -n myfleet --contract mynet.contract.yaml sub "topic/**"
@@ -184,6 +193,26 @@ conservative content-based fallback, accepted only when it consumes the whole
 buffer and the top level is a map/array, so arbitrary binary still falls back to
 base64. The original wire bytes are preserved, so `capture`/`replay` round-trips
 stay byte-exact.
+
+## Time-shifted inspection (capture store + trace reader)
+
+Live bounded commands (`sub --count/--duration`, `scenario --for`) answer *"what
+is happening now"*; they structurally cannot answer *"what happened while I was
+away"* — an agent operates in discrete turns and cannot hold a subscription open
+between them. The fix is to decouple collection from reading:
+
+- **Collector** — `capture --dir` is a plain long-lived foreground process
+  (supervise it with the OS: Windows Task Scheduler / `nssm` / a terminal). It
+  appends records to rotating NDJSON segments and enforces retention, so the
+  store stays bounded: rotate at `--rotate-size` (64MB) / `--rotate-interval`
+  (1h), prune oldest closed segments over `--max-total-size` (1GB) or older
+  than `--max-age` (7d). The active segment is never pruned.
+- **Reader** — `trace stats` / `trace read` are pure file readers: no Zenoh
+  session, safe to call from any agent turn. `trace read` is bounded by
+  `--limit` (default 100) and reports `{returned, matched, truncated, cursor}`
+  so truncation is never silent — pass `--cursor` to page through the rest.
+  `--last-per-key` collapses to the latest record per topic; `--every N`
+  samples large windows.
 
 ## Contract-aware monitoring
 
@@ -346,6 +375,7 @@ crates/
 20. [x] `zenmon scenario` — correlated diagnostic sessions (trigger, observe, track → episode JSON)
 21. [ ] Automatic `events` in the episode (safety transitions, stalls) beyond `--track`
 22. [ ] Strict contract payload validation (field/type checks against the schema)
+23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
 
 ## License
 
