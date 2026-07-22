@@ -391,13 +391,10 @@ pub enum QueryableCommand {
         /// Key expression to declare the queryable on
         key_expr: String,
 
-        /// Fixed reply payload (string)
-        #[arg(long, conflicts_with = "reply_file")]
-        reply: Option<String>,
-
-        /// Fixed reply payload read from a file
-        #[arg(long, conflicts_with = "reply")]
-        reply_file: Option<PathBuf>,
+        /// Fixed reply payload: a literal string, `@<path>` to read it from a
+        /// file, or `-` to read it from stdin
+        #[arg(long)]
+        reply: String,
 
         /// Concrete reply key (required when key_expr is a wildcard)
         #[arg(long)]
@@ -456,6 +453,28 @@ mod tests {
     fn effective_flag_is_required_for_config_show() {
         assert!(Cli::try_parse_from(["zenmon", "config", "show"]).is_err());
         assert!(Cli::try_parse_from(["zenmon", "config", "show", "--effective"]).is_ok());
+    }
+
+    #[test]
+    fn queryable_serve_requires_reply() {
+        assert!(Cli::try_parse_from(["zenmon", "queryable", "serve", "k/e"]).is_err());
+        assert!(
+            Cli::try_parse_from(["zenmon", "queryable", "serve", "k/e", "--reply", "ok"]).is_ok()
+        );
+    }
+
+    #[test]
+    fn queryable_serve_reply_file_flag_is_gone() {
+        // Replaced by the unified `--reply @<path>` / `-` payload syntax.
+        assert!(Cli::try_parse_from([
+            "zenmon",
+            "queryable",
+            "serve",
+            "k/e",
+            "--reply-file",
+            "x.json"
+        ])
+        .is_err());
     }
 
     #[test]
