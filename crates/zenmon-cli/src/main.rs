@@ -970,6 +970,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         Command::Capture {
             key_expr,
             output,
+            dir,
+            rotate_size,
+            rotate_interval,
+            max_total_size,
+            max_age,
             count,
             duration,
         } => {
@@ -981,19 +986,43 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let _handle = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
-            let file = std::fs::File::create(&output).map_err(|e| {
-                ZenmonError::invalid_input(format!("cannot create {}: {}", output.display(), e))
-            })?;
-            let mut writer = std::io::BufWriter::new(file);
-            let start = std::time::Instant::now();
-            if !cli.json {
-                eprintln!(
-                    "Capturing '{}' to {} ... (Ctrl+C to stop)",
-                    key_expr,
-                    output.display()
-                );
+            // Two sinks: one file (pairs with replay) or a rotating store
+            // (pairs with trace).
+            enum Sink {
+                File(std::io::BufWriter<std::fs::File>),
+                Dir {
+                    writer: zenmon_core::trace::SegmentWriter,
+                    dir: std::path::PathBuf,
+                    max_total_size: u64,
+                    max_age: std::time::Duration,
+                },
             }
+            let mut sink = if let Some(dir) = dir {
+                let writer = zenmon_core::trace::SegmentWriter::open(
+                    dir.clone(),
+                    rotate_size,
+                    rotate_interval,
+                )?;
+                if !cli.json {
+                    eprintln!(
+                        "Recording '{}' to {} (rotating) ... (Ctrl+C to stop)",
+                        key_expr,
+                        dir.display()
+                    );
+                }
+                Sink::Dir { writer, dir, max_total_size, max_age }
+            } else {
+                let out = output.clone().expect("clap guarantees output or dir");
+                let file = std::fs::File::create(&out).map_err(|e| {
+                    ZenmonError::invalid_input(format!("cannot create {}: {}", out.display(), e))
+                })?;
+                if !cli.json {
+                    eprintln!("Capturing '{}' to {} ... (Ctrl+C to stop)", key_expr, out.display());
+                }
+                Sink::File(std::io::BufWriter::new(file))
+            };
 
+            let start = std::time::Instant::now();
             let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
             let mut written: u64 = 0;
             let mut stop = false;
@@ -1010,15 +1039,26 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                     item = rx.recv() => match item {
                         Some(msg) => {
-                            let rec = CaptureRecord::from_message(
-                                &msg,
-                                start.elapsed(),
-                                std::time::SystemTime::now(),
-                            );
+                            let now = std::time::SystemTime::now();
+                            let rec = CaptureRecord::from_message(&msg, start.elapsed(), now);
                             let line = serde_json::to_string(&rec)?;
-                            writeln!(writer, "{}", line).map_err(|e| {
-                                ZenmonError::internal(format!("write failed: {}", e))
-                            })?;
+                            match &mut sink {
+                                Sink::File(w) => {
+                                    writeln!(w, "{}", line).map_err(|e| {
+                                        ZenmonError::internal(format!("write failed: {}", e))
+                                    })?;
+                                }
+                                Sink::Dir { writer, dir, max_total_size, max_age } => {
+                                    writer.write_line(&line, now)?;
+                                    // Cheap: early-returns when nothing to prune.
+                                    zenmon_core::trace::enforce_retention(
+                                        dir,
+                                        Some(*max_total_size),
+                                        Some(*max_age),
+                                        now,
+                                    )?;
+                                }
+                            }
                             written += 1;
                             if budget.record() {
                                 stop = true;
@@ -1032,9 +1072,17 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             }
             // Flush the last records on any exit path (count/duration/Ctrl+C).
-            writer
-                .flush()
-                .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+            let output_label = match &mut sink {
+                Sink::File(w) => {
+                    w.flush()
+                        .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+                    output.map(|p| p.display().to_string()).unwrap_or_default()
+                }
+                Sink::Dir { writer, dir, .. } => {
+                    writer.flush()?;
+                    dir.display().to_string()
+                }
+            };
 
             if cli.json {
                 println!(
@@ -1042,11 +1090,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     serde_json::to_string(&serde_json::json!({
                         "ok": true,
                         "captured": written,
-                        "output": output.display().to_string(),
+                        "output": output_label,
                     }))?
                 );
             } else {
-                eprintln!("Captured {} record(s) to {}", written, output.display());
+                eprintln!("Captured {} record(s) to {}", written, output_label);
             }
             session
                 .close()

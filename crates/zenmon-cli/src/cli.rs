@@ -233,14 +233,38 @@ pub enum Command {
         b: String,
     },
 
-    /// Record received messages to a versioned NDJSON trace file
+    /// Record received messages to a versioned NDJSON trace.
+    ///
+    /// `--output` writes one file (pairs with `replay`). `--dir` writes a
+    /// rotating segment store with retention (pairs with `trace`), suitable
+    /// for an always-on recorder.
     Capture {
         /// Key expression to subscribe and record
         key_expr: String,
 
-        /// Output NDJSON file
-        #[arg(long, short)]
-        output: PathBuf,
+        /// Single-file output (NDJSON). Mutually exclusive with --dir.
+        #[arg(long, short, required_unless_present = "dir", conflicts_with = "dir")]
+        output: Option<PathBuf>,
+
+        /// Rotating segment-store directory. Mutually exclusive with --output.
+        #[arg(long, required_unless_present = "output")]
+        dir: Option<PathBuf>,
+
+        /// Rotate the active segment once it reaches this size (dir mode)
+        #[arg(long, default_value = "64MB", value_parser = crate::duration::parse_byte_size_arg)]
+        rotate_size: u64,
+
+        /// …or once it is this old (dir mode)
+        #[arg(long, default_value = "1h", value_parser = crate::duration::parse_duration_arg)]
+        rotate_interval: Duration,
+
+        /// Retention: delete oldest closed segments over this total size (dir mode)
+        #[arg(long, default_value = "1GB", value_parser = crate::duration::parse_byte_size_arg)]
+        max_total_size: u64,
+
+        /// Retention: delete closed segments older than this (dir mode)
+        #[arg(long, default_value = "7d", value_parser = crate::duration::parse_duration_arg)]
+        max_age: Duration,
 
         /// Stop after N recorded messages
         #[arg(long, value_parser = crate::duration::parse_count_arg)]
@@ -453,6 +477,39 @@ mod tests {
     fn effective_flag_is_required_for_config_show() {
         assert!(Cli::try_parse_from(["zenmon", "config", "show"]).is_err());
         assert!(Cli::try_parse_from(["zenmon", "config", "show", "--effective"]).is_ok());
+    }
+
+    #[test]
+    fn capture_requires_output_or_dir() {
+        assert!(Cli::try_parse_from(["zenmon", "capture", "k/**"]).is_err()); // neither
+    }
+
+    #[test]
+    fn capture_output_and_dir_are_exclusive() {
+        assert!(Cli::try_parse_from([
+            "zenmon", "capture", "k/**", "-o", "f.ndjson", "--dir", "d"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn capture_dir_mode_parses_rotation_and_retention() {
+        assert!(Cli::try_parse_from([
+            "zenmon",
+            "capture",
+            "k/**",
+            "--dir",
+            "d",
+            "--rotate-size",
+            "64MB",
+            "--rotate-interval",
+            "1h",
+            "--max-total-size",
+            "1GB",
+            "--max-age",
+            "7d"
+        ])
+        .is_ok());
     }
 
     #[test]
