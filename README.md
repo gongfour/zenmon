@@ -31,6 +31,12 @@ zenmon pub test/hello '{"msg":"world"}'
 # Publish with attachment metadata
 zenmon pub task/goal '{"action":"move","x":5}' --att '{"request_id":"001","client_id":"zenmon"}'
 
+# Payload arguments accept a literal, @<path> (read from file), or - (stdin)
+zenmon pub test/hello @payload.json
+
+# Serve a fixed reply to GET queries (same payload syntax; binary files OK)
+zenmon queryable serve "call/params/get" --reply @reply.json
+
 # List discovered nodes
 zenmon nodes
 
