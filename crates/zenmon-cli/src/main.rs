@@ -1160,7 +1160,6 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 QueryableCommand::Serve {
                     key_expr,
                     reply,
-                    reply_file,
                     reply_key,
                     encoding,
                     count,
@@ -1171,23 +1170,9 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         } => {
             use zenmon_core::types::MessagePayload;
 
-            // Resolve the fixed reply payload.
-            let reply_bytes: Vec<u8> = match (reply, reply_file) {
-                (Some(s), None) => s.into_bytes(),
-                (None, Some(path)) => std::fs::read(&path).map_err(|e| {
-                    ZenmonError::invalid_input(format!(
-                        "cannot read --reply-file {}: {}",
-                        path.display(),
-                        e
-                    ))
-                })?,
-                (None, None) => {
-                    return Err(ZenmonError::invalid_input(
-                        "provide --reply <string> or --reply-file <path>",
-                    ))
-                }
-                (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
-            };
+            // Resolve the fixed reply payload (@<path> / - / literal). Bytes,
+            // not String, so a binary reply file survives as-is.
+            let reply_bytes: Vec<u8> = resolve_payload_arg_bytes(&reply)?;
             let reply_key = zenmon_core::queryable::resolve_reply_key(&key_expr, reply_key.as_deref())?;
             let max_request = max_request_bytes.map(|n| n as usize).unwrap_or(1024);
 
@@ -1471,18 +1456,26 @@ fn warn_redundant_namespace<'a>(keys: impl IntoIterator<Item = &'a str>, namespa
 /// large or dynamically-built payloads (e.g. a VDA5050 mission for `--task`) come
 /// from a file instead of an unwieldy inline CLI string.
 fn resolve_payload_arg(s: &str) -> Result<String, ZenmonError> {
+    let bytes = resolve_payload_arg_bytes(s)?;
+    String::from_utf8(bytes)
+        .map_err(|_| ZenmonError::invalid_input(format!("value from '{s}' is not valid UTF-8")))
+}
+
+/// Byte-oriented variant of [`resolve_payload_arg`] for payloads that may be
+/// binary, e.g. a queryable reply served from a file.
+fn resolve_payload_arg_bytes(s: &str) -> Result<Vec<u8>, ZenmonError> {
     if s == "-" {
         use std::io::Read;
-        let mut buf = String::new();
+        let mut buf = Vec::new();
         std::io::stdin()
-            .read_to_string(&mut buf)
+            .read_to_end(&mut buf)
             .map_err(|e| ZenmonError::invalid_input(format!("reading value from stdin: {e}")))?;
         Ok(buf)
     } else if let Some(path) = s.strip_prefix('@') {
-        std::fs::read_to_string(path)
+        std::fs::read(path)
             .map_err(|e| ZenmonError::invalid_input(format!("reading value from '{path}': {e}")))
     } else {
-        Ok(s.to_string())
+        Ok(s.as_bytes().to_vec())
     }
 }
 
@@ -1991,6 +1984,29 @@ mod tests {
     #[test]
     fn resolve_payload_missing_file_is_error() {
         assert!(resolve_payload_arg("@/no/such/zenmon/payload/file.json").is_err());
+    }
+
+    #[test]
+    fn resolve_payload_bytes_literal_returned_as_is() {
+        assert_eq!(
+            resolve_payload_arg_bytes("{\"a\":1}").unwrap(),
+            b"{\"a\":1}".to_vec()
+        );
+    }
+
+    #[test]
+    fn resolve_payload_bytes_at_file_reads_raw_bytes() {
+        let path = std::env::temp_dir().join("zenmon_resolve_payload_bytes_test.bin");
+        let data: &[u8] = &[0xff, 0x00, 0x88, 0x01];
+        std::fs::write(&path, data).unwrap();
+        let arg = format!("@{}", path.display());
+        assert_eq!(resolve_payload_arg_bytes(&arg).unwrap(), data.to_vec());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn resolve_payload_bytes_missing_file_is_error() {
+        assert!(resolve_payload_arg_bytes("@/no/such/zenmon/payload/file.bin").is_err());
     }
 
     #[test]
