@@ -1,6 +1,5 @@
+use crate::error::ZenmonError;
 use crate::types::{MessagePayload, ZenohMessage};
-use color_eyre::eyre::eyre;
-use color_eyre::Result;
 use tokio::sync::mpsc;
 use zenoh::Session;
 
@@ -10,8 +9,8 @@ pub async fn subscribe(
     session: &Session,
     key_expr: &str,
     tx: mpsc::UnboundedSender<ZenohMessage>,
-) -> Result<tokio::task::JoinHandle<()>> {
-    let subscriber = session.declare_subscriber(key_expr).await.map_err(|e| eyre!(e))?;
+) -> Result<tokio::task::JoinHandle<()>, ZenmonError> {
+    let subscriber = session.declare_subscriber(key_expr).await?;
     tracing::info!(key_expr = %key_expr, "Subscribed");
 
     let handle = tokio::spawn(async move {

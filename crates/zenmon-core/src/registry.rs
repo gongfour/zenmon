@@ -1,20 +1,18 @@
+use crate::error::ZenmonError;
 use crate::types::{NodeInfo, NodeSources};
-use color_eyre::eyre::eyre;
-use color_eyre::Result;
 use std::collections::HashMap;
 use std::time::SystemTime;
 use zenoh::Session;
 
 /// Query Zenoh admin space and return the admin-derived node set.
-pub async fn query_admin_nodes(session: &Session) -> Result<Vec<NodeInfo>> {
+pub async fn query_admin_nodes(session: &Session) -> Result<Vec<NodeInfo>, ZenmonError> {
     let now = SystemTime::now();
     let mut by_zid: HashMap<String, NodeInfo> = HashMap::new();
 
     let replies = session
         .get("@/*/router")
         .timeout(std::time::Duration::from_secs(5))
-        .await
-        .map_err(|e| eyre!(e))?;
+        .await?;
 
     while let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {

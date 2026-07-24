@@ -12,6 +12,17 @@ use zenmon_core::error::ZenmonError;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// Flatten an untyped failure (Zenoh's `Box<dyn Error>`, the TUI's
+/// `eyre::Report`, ...) into the CLI's error type.
+///
+/// `zenmon-core` no longer exposes `From<color_eyre::Report> for ZenmonError` —
+/// a library must not put an application reporting crate in its public API — so
+/// the flattening lives here, in the application. The mapping is unchanged:
+/// untyped failures are `internal` (exit code 1).
+fn internal_err(e: impl std::fmt::Display) -> ZenmonError {
+    ZenmonError::internal(e.to_string())
+}
+
 /// Resolve a contract path: explicit arg → `--contract` flag → `ZENMON_CONTRACT`.
 fn contract_path(explicit: Option<PathBuf>, cli_flag: &Option<PathBuf>) -> Option<PathBuf> {
     explicit
@@ -397,10 +408,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
                 println!("\n{} key(s) found", topics.len());
             }
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Sub {
@@ -500,10 +508,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                 }
             }
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Query {
@@ -550,10 +555,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     outcome.errors.len()
                 );
             }
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Nodes {
@@ -645,10 +647,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                 }
             }
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Pub {
@@ -671,7 +670,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 if let Some(ref att_json) = att {
                     builder = builder.attachment(att_json.as_bytes());
                 }
-                builder.await.map_err(|e| color_eyre::eyre::eyre!(e))
+                builder.await.map_err(internal_err)
             };
 
             match rate {
@@ -748,10 +747,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                 }
             }
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Liveliness {
@@ -799,7 +795,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     .liveliness()
                     .declare_subscriber(&key_expr)
                     .await
-                    .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                    .map_err(internal_err)?;
                 let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
                 loop {
                     let deadline = budget.deadline();
@@ -842,10 +838,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             }
 
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Scout {
@@ -910,10 +903,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                 }
             }
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Doctor { timeout } => {
@@ -1197,10 +1187,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             } else {
                 eprintln!("Captured {} record(s) to {}", written, output_label);
             }
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Replay {
@@ -1287,7 +1274,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             }
 
             if let Some(s) = session {
-                s.close().await.map_err(|e| color_eyre::eyre::eyre!(e))?;
+                s.close().await.map_err(internal_err)?;
             }
             if cli.json {
                 println!(
@@ -1333,7 +1320,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let queryable = session
                 .declare_queryable(&key_expr)
                 .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                .map_err(internal_err)?;
             if !cli.json {
                 eprintln!(
                     "Serving queryable on '{}' (reply key '{}')... (Ctrl+C to stop)",
@@ -1404,18 +1391,14 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             }
 
-            queryable
-                .undeclare()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
-            session
-                .close()
-                .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+            queryable.undeclare().await.map_err(internal_err)?;
+            session.close().await.map_err(internal_err)?;
         }
 
         Command::Tui { refresh } => {
-            zenmon_tui::run(config, refresh).await?;
+            zenmon_tui::run(config, refresh)
+                .await
+                .map_err(internal_err)?;
         }
 
         Command::Contract { command } => match command {
@@ -1891,7 +1874,7 @@ async fn run_scenario(
             session
                 .put(&request_key, pair[1].clone())
                 .await
-                .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                .map_err(internal_err)?;
             Some(make_trigger_event(&request_key, &pair[1]))
         }
         (_, Some(pair)) => {
@@ -1924,7 +1907,7 @@ async fn run_scenario(
                     session
                         .put(&key, value.clone())
                         .await
-                        .map_err(|e| color_eyre::eyre::eyre!(e))?;
+                        .map_err(internal_err)?;
                 }
             }
             Some(make_trigger_event(&key, &value))
@@ -2003,10 +1986,7 @@ async fn run_scenario(
     for h in handles {
         h.abort();
     }
-    session
-        .close()
-        .await
-        .map_err(|e| color_eyre::eyre::eyre!(e))?;
+    session.close().await.map_err(internal_err)?;
 
     let meta = ScenarioMeta {
         trigger,
