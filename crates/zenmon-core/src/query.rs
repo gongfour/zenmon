@@ -1,6 +1,5 @@
+use crate::error::ZenmonError;
 use crate::types::{MessagePayload, ZenohMessage};
-use color_eyre::eyre::eyre;
-use color_eyre::Result;
 use serde::Serialize;
 use std::time::Duration;
 use zenoh::Session;
@@ -41,7 +40,7 @@ pub async fn get(
     timeout: Duration,
     limit: Option<usize>,
     consolidation: ConsolidationMode,
-) -> Result<QueryOutcome> {
+) -> Result<QueryOutcome, ZenmonError> {
     let mut builder = session
         .get(key_expr)
         .timeout(timeout)
@@ -51,7 +50,7 @@ pub async fn get(
         builder = builder.payload(p.to_string());
     }
 
-    let replies = builder.await.map_err(|e| eyre!(e))?;
+    let replies = builder.await?;
     let mut results = Vec::new();
     let mut errors = Vec::new();
 

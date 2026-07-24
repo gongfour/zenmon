@@ -2,7 +2,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use color_eyre::eyre::{eyre, Result};
+use crate::error::ZenmonError;
+
 use serde::Serialize;
 use serde_json::Value;
 
@@ -78,14 +79,14 @@ impl ConnectMode {
         }
     }
 
-    fn parse(value: &str) -> Result<Self> {
+    fn parse(value: &str) -> Result<Self, ZenmonError> {
         match value.to_ascii_lowercase().as_str() {
             "peer" => Ok(Self::Peer),
             "client" => Ok(Self::Client),
-            _ => Err(eyre!(
+            _ => Err(ZenmonError::invalid_input(format!(
                 "invalid connection mode '{}': expected 'peer' or 'client'",
                 value
-            )),
+            ))),
         }
     }
 }
@@ -215,42 +216,42 @@ impl Default for ZenmonConfig {
 impl ZenmonConfig {
     /// Build a Zenoh Config while preserving file-owned values that were not
     /// explicitly overridden by environment variables or CLI flags.
-    pub fn to_zenoh_config(&self) -> Result<zenoh::Config> {
+    pub fn to_zenoh_config(&self) -> Result<zenoh::Config, ZenmonError> {
         let mut config = match &self.config_file {
-            Some(path) => zenoh::Config::from_file(path).map_err(|e| eyre!(e))?,
+            Some(path) => zenoh::Config::from_file(path).map_err(invalid_config)?,
             None => zenoh::Config::default(),
         };
 
         if let Some(mode) = self.mode_override {
             config
                 .insert_json5("mode", &format!("\"{}\"", mode.as_str()))
-                .map_err(|e| eyre!(e))?;
+                .map_err(invalid_config)?;
         }
 
         if let Some(endpoint) = &self.endpoint_override {
-            let endpoint_json = serde_json::to_string(&[endpoint]).map_err(|e| eyre!(e))?;
+            let endpoint_json = serde_json::to_string(&[endpoint]).map_err(invalid_config)?;
             config
                 .insert_json5("connect/endpoints", &endpoint_json)
-                .map_err(|e| eyre!(e))?;
+                .map_err(invalid_config)?;
         }
 
         if let Some(ns) = &self.namespace {
-            let namespace_json = serde_json::to_string(ns).map_err(|e| eyre!(e))?;
+            let namespace_json = serde_json::to_string(ns).map_err(invalid_config)?;
             config
                 .insert_json5("namespace", &namespace_json)
-                .map_err(|e| eyre!(e))?;
+                .map_err(invalid_config)?;
         }
 
         if let Some(port) = self.scout_port {
             config
                 .insert_json5("scouting/multicast/enabled", "true")
-                .map_err(|e| eyre!(e))?;
+                .map_err(invalid_config)?;
             config
                 .insert_json5(
                     "scouting/multicast/address",
                     &format!("\"224.0.0.224:{}\"", port),
                 )
-                .map_err(|e| eyre!(e))?;
+                .map_err(invalid_config)?;
         }
 
         // Client connect deadline. Zenoh's client mode already defaults to
@@ -262,10 +263,10 @@ impl ZenmonConfig {
                 let ms = timeout.as_millis();
                 config
                     .insert_json5("connect/timeout_ms", &ms.to_string())
-                    .map_err(|e| eyre!(e))?;
+                    .map_err(invalid_config)?;
                 config
                     .insert_json5("connect/exit_on_failure", "true")
-                    .map_err(|e| eyre!(e))?;
+                    .map_err(invalid_config)?;
             }
         }
 
@@ -279,14 +280,21 @@ impl ZenmonConfig {
     }
 }
 
-pub fn resolve_config(overrides: ConfigOverrides) -> Result<ResolvedConfig> {
+/// Every failure inside configuration resolution is a bad input (bad file, bad
+/// env var, bad flag), never a network or internal fault, so they all carry
+/// [`crate::error::ErrorKind::InvalidInput`].
+fn invalid_config(e: impl fmt::Display) -> ZenmonError {
+    ZenmonError::invalid_input(e.to_string())
+}
+
+pub fn resolve_config(overrides: ConfigOverrides) -> Result<ResolvedConfig, ZenmonError> {
     resolve_config_with_env(overrides, ConfigEnvironment::from_process())
 }
 
 pub fn resolve_config_with_env(
     overrides: ConfigOverrides,
     env: ConfigEnvironment,
-) -> Result<ResolvedConfig> {
+) -> Result<ResolvedConfig, ZenmonError> {
     let config_file = overrides
         .config_file
         .clone()
@@ -379,14 +387,17 @@ pub fn resolve_config_with_env(
     let mut connect_timeout = ResolvedValue::new(None, ConfigSource::Default);
     if let Some(value) = env.connect_timeout {
         let parsed = humantime::parse_duration(&value).map_err(|e| {
-            eyre!(
+            ZenmonError::invalid_input(format!(
                 "invalid ZENMON_CONNECT_TIMEOUT '{}': {} (try e.g. 5s, 100ms)",
-                value,
-                e
-            )
+                value, e
+            ))
         })?;
-        let validated = validate_connect_timeout(parsed)
-            .map_err(|msg| eyre!("invalid ZENMON_CONNECT_TIMEOUT '{}': {}", value, msg))?;
+        let validated = validate_connect_timeout(parsed).map_err(|msg| {
+            ZenmonError::invalid_input(format!(
+                "invalid ZENMON_CONNECT_TIMEOUT '{}': {}",
+                value, msg
+            ))
+        })?;
         connect_timeout = ResolvedValue::new(Some(validated), ConfigSource::Env);
     }
     if let Some(value) = overrides.connect_timeout {
@@ -427,15 +438,15 @@ pub fn resolve_config_with_env(
     })
 }
 
-fn parse_scout_port(value: &str, source: &str) -> Result<u16> {
-    value
-        .parse::<u16>()
-        .map_err(|_| eyre!("invalid scout port '{}' from {}", value, source))
+fn parse_scout_port(value: &str, source: &str) -> Result<u16, ZenmonError> {
+    value.parse::<u16>().map_err(|_| {
+        ZenmonError::invalid_input(format!("invalid scout port '{}' from {}", value, source))
+    })
 }
 
-fn read_file_values(path: &Path) -> Result<FileValues> {
-    let config = zenoh::Config::from_file(path).map_err(|e| eyre!(e))?;
-    let value = serde_json::to_value(&config).map_err(|e| eyre!(e))?;
+fn read_file_values(path: &Path) -> Result<FileValues, ZenmonError> {
+    let config = zenoh::Config::from_file(path).map_err(invalid_config)?;
+    let value = serde_json::to_value(&config).map_err(invalid_config)?;
     let mode = value
         .get("mode")
         .and_then(Value::as_str)

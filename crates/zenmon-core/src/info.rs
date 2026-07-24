@@ -1,6 +1,6 @@
 use crate::config::ConnectMode;
+use crate::error::ZenmonError;
 use crate::types::SessionDetail;
-use color_eyre::Result;
 use zenoh::Session;
 
 /// Get detailed information about the current session.
@@ -8,7 +8,10 @@ use zenoh::Session;
 /// `mode` is the *configured* connection mode. We report it verbatim rather
 /// than guessing from router presence, which previously misclassified a peer
 /// connected to a router (as "client") and a disconnected client (as "peer").
-pub async fn session_info(session: &Session, mode: ConnectMode) -> Result<SessionDetail> {
+pub async fn session_info(
+    session: &Session,
+    mode: ConnectMode,
+) -> Result<SessionDetail, ZenmonError> {
     let zid = format!("{}", session.info().zid().await);
 
     let mut routers = Vec::new();

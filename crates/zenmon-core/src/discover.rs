@@ -1,6 +1,5 @@
+use crate::error::ZenmonError;
 use crate::types::{LivelinessEvent, LivelinessToken, TopicInfo};
-use color_eyre::eyre::eyre;
-use color_eyre::Result;
 use tokio::sync::mpsc;
 use zenoh::sample::SampleKind;
 use zenoh::Session;
@@ -8,12 +7,15 @@ use zenoh::Session;
 /// Discover active keys matching the given key expression.
 /// Uses Zenoh admin space to list subscribers and publishers.
 /// Falls back to a plain GET if admin space returns nothing.
-pub async fn discover(session: &Session, key_expr: &str) -> Result<Vec<TopicInfo>> {
+pub async fn discover(
+    session: &Session,
+    key_expr: &str,
+) -> Result<Vec<TopicInfo>, ZenmonError> {
     let mut topics = Vec::new();
 
     // Query admin space for subscriber/publisher info
     let admin_key = format!("@/router/local/**");
-    let replies = session.get(&admin_key).await.map_err(|e| eyre!(e))?;
+    let replies = session.get(&admin_key).await?;
 
     while let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
@@ -38,8 +40,7 @@ pub async fn discover(session: &Session, key_expr: &str) -> Result<Vec<TopicInfo
     let replies = session
         .get(key_expr)
         .timeout(std::time::Duration::from_secs(2))
-        .await
-        .map_err(|e| eyre!(e))?;
+        .await?;
 
     while let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
@@ -51,7 +52,7 @@ pub async fn discover(session: &Session, key_expr: &str) -> Result<Vec<TopicInfo
     }
 
     // Also use liveliness to discover active tokens
-    let replies = session.liveliness().get(key_expr).await.map_err(|e| eyre!(e))?;
+    let replies = session.liveliness().get(key_expr).await?;
     while let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
             let key = sample.key_expr().as_str().to_string();
@@ -80,14 +81,13 @@ fn extract_source_zid(sample: &zenoh::sample::Sample) -> Option<String> {
 pub async fn query_liveliness(
     session: &Session,
     key_expr: &str,
-) -> Result<Vec<LivelinessToken>> {
+) -> Result<Vec<LivelinessToken>, ZenmonError> {
     let mut tokens = Vec::new();
     let replies = session
         .liveliness()
         .get(key_expr)
         .timeout(std::time::Duration::from_secs(3))
-        .await
-        .map_err(|e| eyre!(e))?;
+        .await?;
 
     while let Ok(reply) = replies.recv_async().await {
         match reply.result() {
@@ -114,13 +114,12 @@ pub async fn subscribe_liveliness(
     session: &Session,
     key_expr: &str,
     tx: mpsc::UnboundedSender<LivelinessEvent>,
-) -> Result<()> {
+) -> Result<(), ZenmonError> {
     let subscriber = session
         .liveliness()
         .declare_subscriber(key_expr)
         .history(true)
-        .await
-        .map_err(|e| eyre!(e))?;
+        .await?;
 
     tokio::spawn(async move {
         while let Ok(sample) = subscriber.recv_async().await {

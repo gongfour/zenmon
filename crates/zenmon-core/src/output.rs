@@ -1,5 +1,10 @@
 //! Shared JSON output shapes for the CLI.
 //!
+//! **zenmon application internals — not part of the public API.** This module
+//! encodes the `zenmon` CLI's stdout contract; it is `pub` only because
+//! `zenmon-cli` is a separate crate. External consumers should format their
+//! own output and must not rely on these shapes staying stable.
+//!
 //! Finite collection queries (`discover`, `query`, `nodes`, `liveliness`,
 //! `scout`, `info`) render a common envelope so agents can parse every command
 //! the same way and never confuse "queried successfully, zero results" with a

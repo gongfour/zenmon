@@ -1,13 +1,16 @@
 use crate::config::ZenmonConfig;
+use crate::error::ZenmonError;
 use crate::types::{PortScoutResult, ScoutInfo};
-use color_eyre::eyre::{eyre, Result};
 use std::time::Duration;
 use zenoh::config::WhatAmI;
 
 /// Scout the network for Zenoh nodes.
 /// This does NOT require a session — it uses multicast scouting directly.
 /// Returns after `timeout` duration.
-pub async fn scout(config: &ZenmonConfig, timeout: Duration) -> Result<Vec<ScoutInfo>> {
+pub async fn scout(
+    config: &ZenmonConfig,
+    timeout: Duration,
+) -> Result<Vec<ScoutInfo>, ZenmonError> {
     let zenoh_config = config.to_zenoh_config()?;
     run_scout(zenoh_config, timeout).await
 }
@@ -18,7 +21,7 @@ pub async fn scout_on_port(
     config: &ZenmonConfig,
     port: u16,
     timeout: Duration,
-) -> Result<Vec<ScoutInfo>> {
+) -> Result<Vec<ScoutInfo>, ZenmonError> {
     let mut cfg = config.clone();
     cfg.scout_port = Some(port);
     let zenoh_config = cfg.to_zenoh_config()?;
@@ -33,13 +36,12 @@ pub async fn scout_port_range(
     start: u16,
     end: u16,
     per_port_timeout: Duration,
-) -> Result<Vec<PortScoutResult>> {
+) -> Result<Vec<PortScoutResult>, ZenmonError> {
     if start > end {
-        return Err(eyre!(
+        return Err(ZenmonError::invalid_input(format!(
             "invalid port range: start {} > end {}",
-            start,
-            end
-        ));
+            start, end
+        )));
     }
 
     let mut set = tokio::task::JoinSet::new();
@@ -47,22 +49,24 @@ pub async fn scout_port_range(
         let config = config.clone();
         set.spawn(async move {
             let nodes = scout_on_port(&config, port, per_port_timeout).await?;
-            Ok::<PortScoutResult, color_eyre::Report>(PortScoutResult { port, nodes })
+            Ok::<PortScoutResult, ZenmonError>(PortScoutResult { port, nodes })
         });
     }
 
     let mut results = Vec::with_capacity((end - start + 1) as usize);
     while let Some(joined) = set.join_next().await {
-        results.push(joined.map_err(|e| eyre!(e))??);
+        results.push(joined.map_err(|e| ZenmonError::internal(e.to_string()))??);
     }
     results.sort_by_key(|r| r.port);
     Ok(results)
 }
 
-async fn run_scout(zenoh_config: zenoh::Config, timeout: Duration) -> Result<Vec<ScoutInfo>> {
-    let receiver = zenoh::scout(WhatAmI::Router | WhatAmI::Peer | WhatAmI::Client, zenoh_config)
-        .await
-        .map_err(|e| eyre!(e))?;
+async fn run_scout(
+    zenoh_config: zenoh::Config,
+    timeout: Duration,
+) -> Result<Vec<ScoutInfo>, ZenmonError> {
+    let receiver =
+        zenoh::scout(WhatAmI::Router | WhatAmI::Peer | WhatAmI::Client, zenoh_config).await?;
 
     let mut nodes = Vec::new();
 
