@@ -5,6 +5,10 @@
 //! episode shape is deterministically unit-testable. The CLI stamps each
 //! received message into a [`ScenarioEvent`] and calls [`build_episode`] on
 //! completion.
+//!
+//! **zenmon application internals — not part of the public API.** The episode
+//! shape and the named presets are the `zenmon scenario` command's own UX;
+//! this module is `pub` only because `zenmon-cli` is a separate crate.
 
 use serde_json::{json, Map, Value};
 use zenoh::key_expr::keyexpr;

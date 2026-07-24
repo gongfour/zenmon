@@ -227,6 +227,8 @@ async fn run_loop(
     let mut needs_redraw = true;
 
     let tx = events.sender();
+    // Owns the "**" stream subscription for as long as the session it belongs to.
+    let mut stream_subscription: Option<zenmon_core::subscriber::Subscription> = None;
     spawn_admin_polling_task(session.clone(), tx.clone());
     spawn_scout_task(config.clone(), tx.clone(), Duration::from_secs(3));
 
@@ -327,7 +329,15 @@ async fn run_loop(
                         app.liveliness_events.clear();
                         app.liveliness_selected = 0;
                         app.liveliness_log_scroll = 0;
-                        let _ = zenmon_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await;
+                        // Tear the previous stream subscription down explicitly;
+                        // holding it keeps the pump alive across loop turns.
+                        if let Some(previous) = stream_subscription.take() {
+                            previous.stop().await;
+                        }
+                        stream_subscription =
+                            zenmon_core::subscriber::subscribe(&s, "**", zenoh_tx.clone())
+                                .await
+                                .ok();
                         spawn_liveliness_subscriber(&s, tx.clone());
                         *session.lock().await = Some(s);
                     }
