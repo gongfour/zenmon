@@ -1,13 +1,22 @@
-//! Typed errors for the core/CLI boundary.
+//! The single error type of the `zenmon-core` public API.
 //!
-//! Zenoh's own errors don't implement `Into<color_eyre::Report>` and most
-//! call sites flatten to string reports, so consumers can't reliably tell a
-//! connection failure from an internal bug. `ZenmonError` gives a stable,
-//! machine-readable `kind` that the CLI maps to a single-line JSON error and
-//! (in #10) to a stable exit code.
+//! `zenmon-core` is a library: it is linked by zenmon's own CLI and TUI, and by
+//! unrelated applications. Application-level reporting crates (`color_eyre`,
+//! `anyhow`, ...) therefore never appear in its signatures — a library that
+//! returns `color_eyre::Report` forces every consumer to adopt `color_eyre`.
+//!
+//! Every fallible public function in this crate returns [`ZenmonError`], a
+//! `thiserror`-derived error carrying a stable, machine-readable [`ErrorKind`].
+//! Consumers can either match on the kind, or convert into whatever report type
+//! they already use: `ZenmonError` implements
+//! `std::error::Error + Send + Sync + 'static`, so `?` into `anyhow::Error`,
+//! `eyre::Report` or `Box<dyn Error>` works with no glue.
 
 use serde::Serialize;
-use std::fmt;
+use thiserror::Error;
+
+/// Convenience alias for results carrying a [`ZenmonError`].
+pub type Result<T, E = ZenmonError> = std::result::Result<T, E>;
 
 /// Stable, machine-readable error category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -28,7 +37,8 @@ pub enum ErrorKind {
 /// A typed error carrying a stable `kind` and a human-readable message.
 ///
 /// The message must not leak backtraces or sensitive config values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
+#[error("{message}")]
 pub struct ZenmonError {
     pub kind: ErrorKind,
     pub message: String,
@@ -107,17 +117,13 @@ impl ZenmonError {
     }
 }
 
-impl fmt::Display for ZenmonError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for ZenmonError {}
-
-impl From<color_eyre::Report> for ZenmonError {
-    fn from(report: color_eyre::Report) -> Self {
-        ZenmonError::internal(report.to_string())
+/// Zenoh's own error type (`Box<dyn Error + Send + Sync>`) carries no category,
+/// so it maps to [`ErrorKind::Internal`]. Call sites that *know* the failure is
+/// a connection or input problem should build the error explicitly instead of
+/// relying on `?`.
+impl From<zenoh::Error> for ZenmonError {
+    fn from(err: zenoh::Error) -> Self {
+        ZenmonError::internal(err.to_string())
     }
 }
 
@@ -166,11 +172,22 @@ mod tests {
     }
 
     #[test]
-    fn from_report_is_internal() {
-        let report = color_eyre::eyre::eyre!("some failure");
-        let e: ZenmonError = report.into();
+    fn from_zenoh_error_is_internal() {
+        let boxed: zenoh::Error = "some failure".into();
+        let e: ZenmonError = boxed.into();
         assert_eq!(e.kind, ErrorKind::Internal);
         assert!(e.message.contains("some failure"));
+    }
+
+    /// A library error must be usable as a `std::error::Error` by consumers that
+    /// erase it into their own report type (`anyhow`, `eyre`, `Box<dyn Error>`).
+    #[test]
+    fn is_a_send_sync_std_error() {
+        fn assert_std_error<E: std::error::Error + Send + Sync + 'static>(_: &E) {}
+        let e = ZenmonError::timeout("deadline");
+        assert_std_error(&e);
+        let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(e);
+        assert_eq!(boxed.to_string(), "deadline");
     }
 
     #[test]
