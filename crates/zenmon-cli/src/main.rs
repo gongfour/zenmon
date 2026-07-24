@@ -425,7 +425,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let contract = load_contract_opt(&cli.contract)?;
             let session = zenmon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let _handle = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
+            let subscription = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
             if !cli.json {
                 eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
@@ -508,6 +508,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                 }
             }
+            subscription.stop().await;
             session.close().await.map_err(internal_err)?;
         }
 
@@ -1075,7 +1076,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
 
             let session = zenmon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let _handle = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
+            let subscription = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
             // Two sinks: one file (pairs with replay) or a rotating store
             // (pairs with trace).
@@ -1187,6 +1188,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             } else {
                 eprintln!("Captured {} record(s) to {}", written, output_label);
             }
+            subscription.stop().await;
             session.close().await.map_err(internal_err)?;
         }
 
@@ -1844,9 +1846,9 @@ async fn run_scenario(
     // Subscribe to every observed key into one channel BEFORE triggering, so we
     // never miss the reaction to our own actuation.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut handles = Vec::with_capacity(observed.len());
+    let mut subscriptions = Vec::with_capacity(observed.len());
     for key in &observed {
-        handles.push(zenmon_core::subscriber::subscribe(&session, key, tx.clone()).await?);
+        subscriptions.push(zenmon_core::subscriber::subscribe(&session, key, tx.clone()).await?);
     }
     // Drop our sender clone so the channel closes when all subscribers stop.
     drop(tx);
@@ -1983,8 +1985,10 @@ async fn run_scenario(
     if let Some(h) = pub_task {
         h.abort();
     }
-    for h in handles {
-        h.abort();
+    // Deterministic teardown: each subscriber is undeclared before the session
+    // closes, instead of being aborted and undeclared by drop glue.
+    for subscription in subscriptions {
+        subscription.stop().await;
     }
     session.close().await.map_err(internal_err)?;
 

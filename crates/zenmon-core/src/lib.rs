@@ -31,12 +31,18 @@
 //! //    to point somewhere else.
 //! let session = open_session(&ZenmonConfig::default()).await?;
 //!
-//! // 2. Subscribe. Samples are decoded into `ZenohMessage` and pushed to the
-//! //    channel by a background task; hold the handle to keep it alive.
-//! let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ZenohMessage>();
-//! let _pump = subscriber::subscribe(&session, "demo/**", tx).await?;
+//! // 2. Subscribe. A background pump decodes samples into `ZenohMessage` and
+//! //    delivers them to the sink. A bounded channel makes a slow reader
+//! //    throttle the subscriber; `unbounded_channel()` is accepted too.
+//! let (tx, mut rx) = tokio::sync::mpsc::channel::<ZenohMessage>(256);
+//! let subscription = subscriber::subscribe(&session, "demo/**", tx).await?;
 //! while let Some(msg) = rx.recv().await {
 //!     println!("{} {}", msg.key_expr, msg.payload.pretty());
+//! }
+//! // Deterministic teardown that also reports why the subscription ended.
+//! let end = subscription.stop().await;
+//! if let Some(err) = end.error() {
+//!     eprintln!("subscription failed: {err}");
 //! }
 //!
 //! // 3. Query. One round trip, bounded by an explicit timeout.
@@ -66,7 +72,10 @@
 //!   [`query`], [`queryable`], [`discover`], [`scout`], [`registry`], [`info`],
 //!   [`keyexpr`], [`types`]. These are general-purpose Zenoh primitives; they
 //!   are what an external application is expected to build on, and they will not
-//!   change shape without a version bump.
+//!   change shape without a version bump. [`subscriber`] in particular hands back
+//!   a [`subscriber::Subscription`] that owns its pump task, so a long-running
+//!   consumer can stop a subscription deterministically, learn why one ended, and
+//!   choose bounded (backpressuring) or unbounded delivery.
 //!
 //! - **Support surface.** [`doctor`], [`merge`], [`nodediff`], [`topology`],
 //!   [`capture`], [`trace`]. Useful outside zenmon (connectivity checks, node
@@ -102,7 +111,6 @@ pub mod registry;
 pub mod scout;
 /// Opening a Zenoh session from a `ZenmonConfig`.
 pub mod session;
-/// Subscribing to a key expression.
 pub mod subscriber;
 /// Data types crossing the API boundary: messages, payloads, nodes, tokens.
 pub mod types;
