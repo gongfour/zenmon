@@ -6,6 +6,10 @@
 //! loads a contract file and answers "what is this topic?" for observed keys.
 //! It *displays* schemas rather than *validating* them, so payload schemas are
 //! kept as loose [`serde_json::Value`] rather than parsed into typed schemas.
+//!
+//! **zenmon application internals — not part of the public API.** The contract
+//! file format is owned by the `zenmon` CLI; this module is `pub` only because
+//! `zenmon-cli` is a separate crate, and carries no stability promise.
 
 use crate::error::ZenmonError;
 use serde::Deserialize;
