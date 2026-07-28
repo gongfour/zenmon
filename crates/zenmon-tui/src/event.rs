@@ -74,11 +74,10 @@ impl EventHandler {
                                             break;
                                         }
                                     }
-                                    crossterm::event::Event::Mouse(m) => {
-                                        if key_tx.send(AppEvent::Mouse(m)).is_err() {
+                                    crossterm::event::Event::Mouse(m)
+                                        if key_tx.send(AppEvent::Mouse(m)).is_err() => {
                                             break;
                                         }
-                                    }
                                     _ => {}
                                 }
                             }

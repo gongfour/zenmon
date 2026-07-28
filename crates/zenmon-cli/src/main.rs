@@ -134,7 +134,7 @@ fn print_scout_results(
         }
         println!("{}", scouting_port_heading(result.port, result.nodes.len()));
         println!("{}", "─".repeat(78));
-        println!("  {:<8} {:<34} {}", "TYPE", "ZID", "LOCATOR");
+        println!("  {:<8} {:<34} LOCATOR", "TYPE", "ZID");
         for node in &result.nodes {
             let loc = pick_best_locator(&node.locators).unwrap_or("(none)");
             let zid_short = if node.zid.len() > 32 {
@@ -170,7 +170,7 @@ fn scouting_port_heading(port: u16, node_count: usize) -> String {
 /// Print the nodes table (header, rows, count footer). `note`, when present,
 /// is appended to the footer (e.g. "refreshing every 3s" in watch mode).
 fn print_nodes_table(nodes: &[zenmon_core::types::NodeInfo], note: Option<&str>) {
-    println!("{:<40} {:<10} {}", "ZID", "KIND", "LOCATORS");
+    println!("{:<40} {:<10} LOCATORS", "ZID", "KIND");
     println!("{}", "-".repeat(70));
     for node in nodes {
         println!(
@@ -670,7 +670,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             let value = resolve_payload_arg(&value)?;
             let session = zenmon_core::session::open_session(&config).await?;
-            let attachment_bytes = att.as_ref().map(|a| a.as_bytes().len());
+            let attachment_bytes = att.as_ref().map(|a| a.len());
 
             // Publish the same value/attachment once. Rebuilt per tick because
             // the put builder is consumed by `.await`.
@@ -726,7 +726,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                             "{}",
                             zenmon_core::output::publish_rate_summary_json(
                                 &key_expr,
-                                value.as_bytes().len(),
+                                value.len(),
                                 attachment_bytes,
                                 published,
                                 hz,
@@ -745,7 +745,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                             "{}",
                             zenmon_core::output::publish_accepted_json(
                                 &key_expr,
-                                value.as_bytes().len(),
+                                value.len(),
                                 attachment_bytes,
                             )?
                         );
@@ -784,7 +784,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 } else if tokens.is_empty() {
                     println!("No liveliness tokens found for '{}'", key_expr);
                 } else {
-                    println!("{:<50} {:<20} {}", "KEY", "NAME", "SOURCE_ZID");
+                    println!("{:<50} {:<20} SOURCE_ZID", "KEY", "NAME");
                     println!("{}", "─".repeat(85));
                     for token in &tokens {
                         let name = token.node_name().unwrap_or_default();
@@ -1822,12 +1822,12 @@ async fn run_scenario(
         response_key = Some(resp_key);
         TriggerInfo::Task {
             request_key,
-            request_bytes: request_json.as_bytes().len(),
+            request_bytes: request_json.len(),
         }
     } else if let Some(pair) = &pub_ {
         TriggerInfo::Pub {
             key_expr: pair[0].clone(),
-            bytes: pair[1].as_bytes().len(),
+            bytes: pair[1].len(),
         }
     } else {
         TriggerInfo::None

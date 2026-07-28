@@ -187,6 +187,9 @@ fn spawn_liveliness_subscriber(session: &Session, tx: mpsc::UnboundedSender<AppE
     });
 }
 
+// Central event-loop coordinator: threading these handles through a struct
+// would add indirection without clarifying the wiring, so allow the count.
+#[allow(clippy::too_many_arguments)]
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,

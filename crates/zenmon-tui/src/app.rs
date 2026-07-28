@@ -657,21 +657,17 @@ impl App {
                 KeyCode::Char('?') => {
                     self.help_open = true;
                     self.help_scroll = 0;
-                    return;
                 }
                 KeyCode::Char('q') => {
                     self.should_quit = true;
-                    return;
                 }
                 KeyCode::Char('P') => {
                     self.scout_port_modal_open = true;
                     self.scout_port_input.clear();
-                    return;
                 }
                 KeyCode::Char('m') => {
                     self.mode_modal_open = true;
                     self.mode_modal_selection = self.current_mode;
-                    return;
                 }
                 KeyCode::Char('1') => self.active_view = ActiveView::Dashboard,
                 KeyCode::Char('2') => self.active_view = ActiveView::Topics,
@@ -1173,10 +1169,8 @@ impl App {
                         self.node_detail_scroll = 0;
                     }
                 }
-                KeyCode::Char('s') => {
-                    if !self.scout_in_progress {
-                        self.pending_scout_request = true;
-                    }
+                KeyCode::Char('s') if !self.scout_in_progress => {
+                    self.pending_scout_request = true;
                 }
                 _ => {}
             },

@@ -11,7 +11,7 @@ pub async fn discover(session: &Session, key_expr: &str) -> Result<Vec<TopicInfo
     let mut topics = Vec::new();
 
     // Query admin space for subscriber/publisher info
-    let admin_key = format!("@/router/local/**");
+    let admin_key = "@/router/local/**".to_string();
     let replies = session.get(&admin_key).await?;
 
     while let Ok(reply) = replies.recv_async().await {

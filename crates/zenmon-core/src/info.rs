@@ -15,14 +15,14 @@ pub async fn session_info(
     let zid = format!("{}", session.info().zid().await);
 
     let mut routers = Vec::new();
-    let mut router_iter = session.info().routers_zid().await;
-    while let Some(rid) = router_iter.next() {
+    let router_iter = session.info().routers_zid().await;
+    for rid in router_iter {
         routers.push(format!("{}", rid));
     }
 
     let mut peers = Vec::new();
-    let mut peer_iter = session.info().peers_zid().await;
-    while let Some(pid) = peer_iter.next() {
+    let peer_iter = session.info().peers_zid().await;
+    for pid in peer_iter {
         peers.push(format!("{}", pid));
     }
 
