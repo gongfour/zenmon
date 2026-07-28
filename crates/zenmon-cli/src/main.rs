@@ -294,7 +294,10 @@ fn resolve_log_filter(
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    #[cfg(feature = "tui")]
     let is_tui = matches!(cli.command, Command::Tui { .. });
+    #[cfg(not(feature = "tui"))]
+    let is_tui = false;
     let is_json = cli.json;
 
     // In JSON mode the only permitted stderr output is the single structured
@@ -1397,6 +1400,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             session.close().await.map_err(internal_err)?;
         }
 
+        #[cfg(feature = "tui")]
         Command::Tui { refresh } => {
             zenmon_tui::run(config, refresh)
                 .await

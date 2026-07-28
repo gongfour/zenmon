@@ -310,6 +310,7 @@ pub enum Command {
     },
 
     /// Launch interactive TUI dashboard
+    #[cfg(feature = "tui")]
     Tui {
         /// UI refresh interval (e.g. 100ms, 1s)
         #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]

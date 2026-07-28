@@ -7,9 +7,16 @@ edition.workspace = true
 name = "zenmon"
 path = "src/main.rs"
 
+[features]
+default = ["tui"]
+# `tui` pulls in the ratatui dashboard (and its arboard clipboard dep, which
+# needs X11/Wayland). Build `--no-default-features` for headless targets like
+# Android/Termux where no display server is present.
+tui = ["dep:zenmon-tui"]
+
 [dependencies]
 zenmon-core.workspace = true
-zenmon-tui.workspace = true
+zenmon-tui = { workspace = true, optional = true }
 zenoh.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
