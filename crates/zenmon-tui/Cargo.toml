@@ -3,6 +3,14 @@ name = "zenmon-tui"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["clipboard"]
+# `clipboard` pulls in arboard, whose Linux backend needs X11/Wayland. The
+# ratatui dashboard itself runs anywhere a terminal does (incl. Termux on
+# Android), so build without this feature to get the full TUI minus the
+# copy-to-clipboard action on display-less targets.
+clipboard = ["dep:arboard"]
+
 [dependencies]
 zenmon-core.workspace = true
 zenoh.workspace = true
@@ -10,7 +18,7 @@ tokio.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 color-eyre.workspace = true
-arboard = "3"
+arboard = { version = "3", optional = true }
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"

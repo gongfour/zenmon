@@ -13,7 +13,7 @@ license = "MIT"
 
 [workspace.dependencies]
 zenmon-core = { path = "crates/zenmon-core" }
-zenmon-tui = { path = "crates/zenmon-tui" }
+zenmon-tui = { path = "crates/zenmon-tui", default-features = false }
 zenoh = { version = "1.7", features = ["unstable"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }

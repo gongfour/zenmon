@@ -27,17 +27,25 @@ jobs:
         run: cargo test --workspace
 
   headless:
-    name: headless build (no TUI / Android-like)
+    name: headless build (Android-like, no X11)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      # Guards the Option A guarantee: the CLI must compile with the `tui`
-      # feature (and its arboard/X11 clipboard dep) removed, so display-less
-      # targets like Android/Termux keep building. Without this check, a change
-      # that couples the CLI to the TUI would only surface on an Android build.
-      - name: check --no-default-features
+      # display-less targets (Android/Termux) have no X11, so arboard can't
+      # build. Two supported configs must keep compiling there:
+      #   --no-default-features            -> headless CLI only (no TUI)
+      #   --features tui (no clipboard)    -> full ratatui dashboard, minus copy
+      # Without these gates, a change that recouples the CLI to the TUI, or the
+      # TUI to arboard, would only surface on an actual Android build.
+      - name: check headless CLI (--no-default-features)
         run: cargo check -p zenmon-cli --no-default-features
-      - name: clippy --no-default-features
+      - name: clippy headless CLI
         run: cargo clippy -p zenmon-cli --no-default-features --all-targets
+      - name: check TUI without clipboard (--features tui)
+        run: cargo check -p zenmon-cli --no-default-features --features tui
+      - name: clippy TUI without clipboard
+        run: cargo clippy -p zenmon-cli --no-default-features --features tui --all-targets

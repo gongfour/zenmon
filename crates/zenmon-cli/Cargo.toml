@@ -8,11 +8,15 @@ name = "zenmon"
 path = "src/main.rs"
 
 [features]
-default = ["tui"]
-# `tui` pulls in the ratatui dashboard (and its arboard clipboard dep, which
-# needs X11/Wayland). Build `--no-default-features` for headless targets like
-# Android/Termux where no display server is present.
+default = ["tui", "clipboard"]
+# `tui` pulls in the ratatui dashboard. It runs anywhere a terminal does,
+# including Termux on Android. `clipboard` adds the arboard-backed copy action,
+# which needs X11/Wayland — split out so display-less targets can keep the TUI.
+#   default                          -> desktop: full TUI + clipboard
+#   --no-default-features --features tui -> Android/Termux: TUI, no clipboard
+#   --no-default-features            -> headless CLI only
 tui = ["dep:zenmon-tui"]
+clipboard = ["zenmon-tui/clipboard"]
 
 [dependencies]
 zenmon-core.workspace = true

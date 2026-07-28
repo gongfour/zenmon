@@ -542,6 +542,7 @@ impl App {
         self.node_detail_scroll = 0;
     }
 
+    #[cfg(feature = "clipboard")]
     fn copy_to_clipboard(&mut self, text: String, label: &str) {
         let byte_len = text.len();
         match arboard::Clipboard::new() {
@@ -551,6 +552,13 @@ impl App {
             },
             Err(e) => self.set_error_toast(format!("Clipboard unavailable: {}", e)),
         }
+    }
+
+    // Built without the `clipboard` feature (e.g. Termux/Android, no X11): keep
+    // the keybinding responsive but tell the user copy is unavailable here.
+    #[cfg(not(feature = "clipboard"))]
+    fn copy_to_clipboard(&mut self, _text: String, _label: &str) {
+        self.set_error_toast("Clipboard not supported in this build".to_string());
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
