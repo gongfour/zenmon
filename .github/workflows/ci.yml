@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  build-and-test:
+    name: build & test (default)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets
+      - name: test
+        run: cargo test --workspace
+
+  headless:
+    name: headless build (no TUI / Android-like)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Guards the Option A guarantee: the CLI must compile with the `tui`
+      # feature (and its arboard/X11 clipboard dep) removed, so display-less
+      # targets like Android/Termux keep building. Without this check, a change
+      # that couples the CLI to the TUI would only surface on an Android build.
+      - name: check --no-default-features
+        run: cargo check -p zenmon-cli --no-default-features
+      - name: clippy --no-default-features
+        run: cargo clippy -p zenmon-cli --no-default-features --all-targets
