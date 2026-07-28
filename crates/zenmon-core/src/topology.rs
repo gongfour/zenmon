@@ -139,13 +139,23 @@ pub fn to_adjacency_lines(topo: &Topology) -> Vec<String> {
     for (from, edges) in &by_from {
         lines.push(format!("{} [{}]", from, kind_of(from)));
         for (i, e) in edges.iter().enumerate() {
-            let branch = if i + 1 == edges.len() { "└─" } else { "├─" };
+            let branch = if i + 1 == edges.len() {
+                "└─"
+            } else {
+                "├─"
+            };
             let dst = e
                 .link_dst
                 .as_deref()
                 .map(|d| format!("  {}", d))
                 .unwrap_or_default();
-            lines.push(format!("  {} {} [{}]{}", branch, e.to_zid, kind_of(&e.to_zid), dst));
+            lines.push(format!(
+                "  {} {} [{}]{}",
+                branch,
+                e.to_zid,
+                kind_of(&e.to_zid),
+                dst
+            ));
         }
     }
     if lines.is_empty() {
@@ -176,7 +186,11 @@ mod tests {
     #[test]
     fn builds_edges_from_sessions() {
         let nodes = vec![
-            node("r1", "router", Some(json!([{"peer":"p1","links":[{"dst":"tcp/1"}]}]))),
+            node(
+                "r1",
+                "router",
+                Some(json!([{"peer":"p1","links":[{"dst":"tcp/1"}]}])),
+            ),
             node("p1", "peer", Some(json!([]))),
         ];
         let t = build_topology(&nodes);
@@ -204,7 +218,11 @@ mod tests {
     #[test]
     fn dangling_peer_is_marked_and_partial() {
         // r1 references p1, which is not in the registry.
-        let nodes = vec![node("r1", "router", Some(json!([{"peer":"p1","links":[]}])))];
+        let nodes = vec![node(
+            "r1",
+            "router",
+            Some(json!([{"peer":"p1","links":[]}])),
+        )];
         let t = build_topology(&nodes);
         assert!(t.partial);
         let p1 = t.nodes.iter().find(|n| n.zid == "p1").unwrap();

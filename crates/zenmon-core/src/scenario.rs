@@ -291,11 +291,7 @@ pub fn build_events_from_tracks(tracks: &Value) -> Value {
 
 /// Distinct concrete keys (in first-seen order) whose events match the wildcard
 /// `pattern` and carry `field`.
-fn matching_concrete_keys(
-    ordered: &[&ScenarioEvent],
-    pattern: &str,
-    field: &str,
-) -> Vec<String> {
+fn matching_concrete_keys(ordered: &[&ScenarioEvent], pattern: &str, field: &str) -> Vec<String> {
     let Ok(pat) = keyexpr::new(pattern) else {
         return Vec::new();
     };
@@ -632,9 +628,18 @@ mod tests {
         let arr = build_events_from_tracks(&tracks);
         let arr = arr.as_array().unwrap();
         assert_eq!(arr.len(), 3);
-        assert_eq!(arr[0], json!({ "t_rel_ms": 10, "key": "b/y", "field": "level", "from": 1, "to": 0 }));
-        assert_eq!(arr[1], json!({ "t_rel_ms": 30, "key": "a/x", "field": "kind", "from": 0, "to": 2 }));
-        assert_eq!(arr[2], json!({ "t_rel_ms": 50, "key": "b/y", "field": "level", "from": 0, "to": 3 }));
+        assert_eq!(
+            arr[0],
+            json!({ "t_rel_ms": 10, "key": "b/y", "field": "level", "from": 1, "to": 0 })
+        );
+        assert_eq!(
+            arr[1],
+            json!({ "t_rel_ms": 30, "key": "a/x", "field": "kind", "from": 0, "to": 2 })
+        );
+        assert_eq!(
+            arr[2],
+            json!({ "t_rel_ms": 50, "key": "b/y", "field": "level", "from": 0, "to": 3 })
+        );
     }
 
     #[test]

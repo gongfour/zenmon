@@ -192,9 +192,9 @@ fn rmpv_to_json(value: rmpv::Value) -> serde_json::Value {
             Some(s) => serde_json::Value::String(s),
             None => serde_json::Value::Null,
         },
-        Value::Binary(b) | Value::Ext(_, b) => serde_json::Value::String(
-            base64::engine::general_purpose::STANDARD.encode(&b),
-        ),
+        Value::Binary(b) | Value::Ext(_, b) => {
+            serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(&b))
+        }
         Value::Array(items) => {
             serde_json::Value::Array(items.into_iter().map(rmpv_to_json).collect())
         }
@@ -213,9 +213,7 @@ fn rmpv_key_to_string(key: rmpv::Value) -> String {
     use rmpv::Value;
     match key {
         Value::String(s) => s.into_str().unwrap_or_default(),
-        Value::Binary(b) | Value::Ext(_, b) => {
-            base64::engine::general_purpose::STANDARD.encode(&b)
-        }
+        Value::Binary(b) | Value::Ext(_, b) => base64::engine::general_purpose::STANDARD.encode(&b),
         other => rmpv_to_json(other).to_string(),
     }
 }
@@ -393,10 +391,7 @@ mod tests {
         let p = MessagePayload::from_bytes(br#"{"a":1}"#.to_vec());
         assert_eq!(p.as_json().unwrap(), serde_json::json!({"a": 1}));
         // Serializes as the parsed JSON value.
-        assert_eq!(
-            serde_json::to_string(&p).unwrap(),
-            r#"{"a":1}"#
-        );
+        assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"a":1}"#);
     }
 
     #[test]
@@ -482,7 +477,10 @@ mod tests {
         // the whole buffer, so it is rejected.
         let p = MessagePayload::from_bytes(vec![0x81, 0xa1, 0x61, 0x01, 0xff, 0xff]);
         let v = p.to_view();
-        assert!(v["binary_base64"].is_string(), "expected base64 fallback, got {v}");
+        assert!(
+            v["binary_base64"].is_string(),
+            "expected base64 fallback, got {v}"
+        );
         assert_eq!(v["bytes"], 6);
     }
 

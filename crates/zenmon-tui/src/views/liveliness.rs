@@ -7,8 +7,7 @@ use ratatui::Frame;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [top_area, log_area] =
-        Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .areas(area);
+        Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(area);
 
     let [list_area, detail_area] =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -29,7 +28,9 @@ fn build_grouped_rows(app: &App) -> Vec<GroupedRow> {
     // Group tokens by prefix
     let mut groups: Vec<(String, Vec<(usize, &zenmon_core::types::LivelinessToken)>)> = Vec::new();
     for (i, token) in tokens.iter().enumerate() {
-        let group = token.group_prefix().unwrap_or_else(|| "(ungrouped)".to_string());
+        let group = token
+            .group_prefix()
+            .unwrap_or_else(|| "(ungrouped)".to_string());
         if let Some(g) = groups.iter_mut().find(|(k, _)| *k == group) {
             g.1.push((i, token));
         } else {
@@ -57,8 +58,14 @@ fn build_grouped_rows(app: &App) -> Vec<GroupedRow> {
 }
 
 enum GroupedRow {
-    Header { label: String },
-    Token { token_idx: usize, name: String, alive: bool },
+    Header {
+        label: String,
+    },
+    Token {
+        token_idx: usize,
+        name: String,
+        alive: bool,
+    },
 }
 
 fn render_token_list(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -81,7 +88,11 @@ fn render_token_list(app: &mut App, frame: &mut Frame, area: ratatui::layout::Re
             GroupedRow::Header { label } => {
                 Line::from(Span::styled(label, Style::default().fg(Color::DarkGray)))
             }
-            GroupedRow::Token { token_idx, name, alive } => {
+            GroupedRow::Token {
+                token_idx,
+                name,
+                alive,
+            } => {
                 let selected = *token_idx == app.liveliness_selected;
                 let (icon, icon_style) = if *alive {
                     ("● ", Style::default().fg(Color::Green))
@@ -106,8 +117,8 @@ fn render_token_list(app: &mut App, frame: &mut Frame, area: ratatui::layout::Re
         })
         .collect();
 
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(title));
+    let paragraph =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(paragraph, area);
 }
 
@@ -215,14 +226,8 @@ fn format_event_line<'a>(evt: &LivelinessEventRecord, now: std::time::Instant) -
             format!("  {} ", time_str),
             Style::default().fg(Color::DarkGray),
         ),
-        Span::styled(
-            format!("{} ", kind_text),
-            Style::default().fg(kind_color),
-        ),
-        Span::styled(
-            evt.node_name.clone(),
-            Style::default().fg(Color::White),
-        ),
+        Span::styled(format!("{} ", kind_text), Style::default().fg(kind_color)),
+        Span::styled(evt.node_name.clone(), Style::default().fg(Color::White)),
         Span::styled(group_suffix, Style::default().fg(Color::DarkGray)),
     ])
 }

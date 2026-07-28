@@ -65,8 +65,11 @@ async fn run_scout(
     zenoh_config: zenoh::Config,
     timeout: Duration,
 ) -> Result<Vec<ScoutInfo>, ZenmonError> {
-    let receiver =
-        zenoh::scout(WhatAmI::Router | WhatAmI::Peer | WhatAmI::Client, zenoh_config).await?;
+    let receiver = zenoh::scout(
+        WhatAmI::Router | WhatAmI::Peer | WhatAmI::Client,
+        zenoh_config,
+    )
+    .await?;
 
     let mut nodes = Vec::new();
 

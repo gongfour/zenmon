@@ -62,7 +62,9 @@ pub async fn get(
                 let msg_payload = MessagePayload::from_zbytes(sample.payload());
                 let encoding = sample.encoding().to_string();
                 let timestamp = sample.timestamp().map(|ts| ts.to_string());
-                let attachment = sample.attachment().map(|att| MessagePayload::from_zbytes(&att));
+                let attachment = sample
+                    .attachment()
+                    .map(|att| MessagePayload::from_zbytes(&att));
 
                 let payload_bytes = msg_payload.len();
                 let attachment_bytes = attachment.as_ref().map(|a| a.len());

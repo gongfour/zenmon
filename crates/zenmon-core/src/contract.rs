@@ -374,7 +374,10 @@ pub fn validate_against_schema(schema: &Value, provided: &Value) -> Vec<String> 
             Some(value) => {
                 // Enum notation `A|B|C`: the provided value must be one of them.
                 if let Some(opts) = spec_str.and_then(enum_options) {
-                    let got = value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string());
+                    let got = value
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value.to_string());
                     if !opts.contains(&got.as_str()) {
                         warnings.push(format!(
                             "field '{}' must be one of [{}], got '{}'",
@@ -395,7 +398,8 @@ pub fn validate_against_schema(schema: &Value, provided: &Value) -> Vec<String> 
 /// the value is not an enum.
 fn enum_options(spec: &str) -> Option<Vec<&str>> {
     let s = spec.strip_suffix('?').unwrap_or(spec).trim();
-    s.contains('|').then(|| s.split('|').map(str::trim).collect())
+    s.contains('|')
+        .then(|| s.split('|').map(str::trim).collect())
 }
 
 #[cfg(test)]
@@ -435,7 +439,10 @@ topics:
     #[test]
     fn request_schema_extracts_call_request() {
         let c = Contract::from_yaml_str(TASK).unwrap();
-        assert_eq!(c.request_schema("call/safety/estop").unwrap()["active"], "bool");
+        assert_eq!(
+            c.request_schema("call/safety/estop").unwrap()["active"],
+            "bool"
+        );
     }
 
     #[test]
@@ -448,8 +455,12 @@ topics:
     fn validate_flags_unknown_and_missing_required_but_not_optional() {
         let schema = json!({ "active": "bool", "mode": "str?" });
         let warns = validate_against_schema(&schema, &json!({ "foo": 1 }));
-        assert!(warns.iter().any(|w| w.contains("unknown") && w.contains("foo")));
-        assert!(warns.iter().any(|w| w.contains("missing") && w.contains("active")));
+        assert!(warns
+            .iter()
+            .any(|w| w.contains("unknown") && w.contains("foo")));
+        assert!(warns
+            .iter()
+            .any(|w| w.contains("missing") && w.contains("active")));
         // `mode` is optional (str?) so its absence is not flagged.
         assert!(!warns.iter().any(|w| w.contains("mode")));
     }
@@ -596,7 +607,10 @@ topics:
         let c = Contract::from_yaml_str(ENRICH).unwrap();
         let e = c.enrich("topic/navigation/robot_pose", "application/json");
         assert!(e.declared);
-        assert_eq!(e.matched_key.as_deref(), Some("topic/navigation/robot_pose"));
+        assert_eq!(
+            e.matched_key.as_deref(),
+            Some("topic/navigation/robot_pose")
+        );
         assert_eq!(e.description.as_deref(), Some("Robot 2D pose"));
         assert_eq!(e.encoding_expected.as_deref(), Some("application/json"));
         assert_eq!(e.encoding_matches, Some(true));
@@ -609,7 +623,10 @@ topics:
         // Point-cloud topic expects msgpack; observed says json.
         let e = c.enrich("topic/sensor/pcd/front", "application/json");
         assert!(e.declared);
-        assert_eq!(e.matched_key.as_deref(), Some("topic/sensor/pcd/{sensor_id}"));
+        assert_eq!(
+            e.matched_key.as_deref(),
+            Some("topic/sensor/pcd/{sensor_id}")
+        );
         assert_eq!(e.encoding_expected.as_deref(), Some("application/msgpack"));
         assert_eq!(e.encoding_matches, Some(false));
         assert_eq!(e.enveloped, Some(false));
@@ -618,7 +635,10 @@ topics:
     #[test]
     fn enrich_encoding_matches_ignores_mime_params() {
         let c = Contract::from_yaml_str(ENRICH).unwrap();
-        let e = c.enrich("topic/navigation/robot_pose", "application/json;charset=utf-8");
+        let e = c.enrich(
+            "topic/navigation/robot_pose",
+            "application/json;charset=utf-8",
+        );
         assert_eq!(e.encoding_matches, Some(true));
     }
 
@@ -635,7 +655,10 @@ topics:
     fn enrich_undeclared_serializes_to_declared_false_only() {
         let c = Contract::from_yaml_str(ENRICH).unwrap();
         let e = c.enrich("topic/foo/unknown", "application/json");
-        assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({ "declared": false }));
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            serde_json::json!({ "declared": false })
+        );
     }
 
     #[test]
@@ -650,19 +673,28 @@ topics:
     #[test]
     fn lint_warns_on_duplicate_key() {
         let r = Contract::from_yaml_str(LINT).unwrap().lint();
-        assert!(r.warnings.iter().any(|w| w.contains("duplicate") && w.contains("topic/a")));
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("duplicate") && w.contains("topic/a")));
     }
 
     #[test]
     fn lint_warns_on_unknown_pattern() {
         let r = Contract::from_yaml_str(LINT).unwrap().lint();
-        assert!(r.warnings.iter().any(|w| w.contains("pattern") && w.contains("bogus")));
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("pattern") && w.contains("bogus")));
     }
 
     #[test]
     fn lint_warns_on_not_implemented() {
         let r = Contract::from_yaml_str(LINT).unwrap().lint();
-        assert!(r.warnings.iter().any(|w| w.contains("not-implemented") && w.contains("topic/c")));
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.contains("not-implemented") && w.contains("topic/c")));
     }
 
     #[test]
@@ -676,7 +708,10 @@ topics:
         let c = Contract::from_yaml_str(REFS).unwrap();
         let input = serde_json::json!({ "pose": { "$ref": "Pose2D" } });
         let out = c.resolve_refs(&input);
-        assert_eq!(out, serde_json::json!({ "pose": { "x": "f64", "y": "f64" } }));
+        assert_eq!(
+            out,
+            serde_json::json!({ "pose": { "x": "f64", "y": "f64" } })
+        );
     }
 
     #[test]

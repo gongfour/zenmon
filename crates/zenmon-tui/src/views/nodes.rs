@@ -1,21 +1,19 @@
 use crate::app::App;
-use zenmon_core::types::{NodeInfo, NodeSources};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 use std::time::{Duration, SystemTime};
+use zenmon_core::types::{NodeInfo, NodeSources};
 
 const STALE_THRESHOLD: Duration = Duration::from_secs(30);
-const BOTH_SOURCES: NodeSources = NodeSources::from_bits_retain(
-    NodeSources::ADMIN.bits() | NodeSources::SCOUT.bits(),
-);
+const BOTH_SOURCES: NodeSources =
+    NodeSources::from_bits_retain(NodeSources::ADMIN.bits() | NodeSources::SCOUT.bits());
 
 pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let [list_area, detail_area] =
-        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .areas(area);
+        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(area);
 
     render_node_list(app, frame, list_area);
     render_node_detail(app, frame, detail_area);
@@ -115,10 +113,18 @@ fn render_node_detail(app: &App, frame: &mut Frame, area: ratatui::layout::Rect)
     // ZID
     let mut zid_spans = vec![
         Span::styled("ZID: ", Style::default().fg(Color::Gray)),
-        Span::styled(&node.zid, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            &node.zid,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
     ];
     if is_self {
-        zid_spans.push(Span::styled(" (self)", Style::default().fg(Color::DarkGray)));
+        zid_spans.push(Span::styled(
+            " (self)",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     lines.push(Line::from(zid_spans));
 
@@ -147,7 +153,10 @@ fn render_node_detail(app: &App, frame: &mut Frame, area: ratatui::layout::Rect)
             Span::styled("(none)", Style::default().fg(Color::DarkGray)),
         ]));
     } else {
-        lines.push(Line::from(Span::styled("Locators:", Style::default().fg(Color::Gray))));
+        lines.push(Line::from(Span::styled(
+            "Locators:",
+            Style::default().fg(Color::Gray),
+        )));
         for loc in &node.locators {
             lines.push(Line::from(Span::styled(
                 format!("  {}", loc),
@@ -206,10 +215,7 @@ fn render_node_detail(app: &App, frame: &mut Frame, area: ratatui::layout::Rect)
 
                     let mut spans = vec![
                         Span::styled("  ", Style::default()),
-                        Span::styled(
-                            zid_short,
-                            Style::default().fg(Color::Yellow),
-                        ),
+                        Span::styled(zid_short, Style::default().fg(Color::Yellow)),
                     ];
                     if is_session_self {
                         spans.push(Span::styled("(self)", Style::default().fg(Color::DarkGray)));
@@ -250,11 +256,7 @@ fn render_node_detail(app: &App, frame: &mut Frame, area: ratatui::layout::Rect)
         ]));
     }
 
-    let title = format!(
-        " {} - {} ",
-        &node.zid[..node.zid.len().min(16)],
-        node.kind,
-    );
+    let title = format!(" {} - {} ", &node.zid[..node.zid.len().min(16)], node.kind,);
     let detail = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(title))
         .wrap(Wrap { trim: false })
@@ -318,12 +320,7 @@ fn build_row<'a>(
         node.zid.clone()
     };
 
-    Row::new(vec![
-        Cell::from(zid_text),
-        kind_cell,
-        source_cell,
-    ])
-    .style(base_style)
+    Row::new(vec![Cell::from(zid_text), kind_cell, source_cell]).style(base_style)
 }
 
 fn source_badge(sources: NodeSources, stale: bool) -> (String, Color) {

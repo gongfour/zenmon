@@ -559,13 +559,15 @@ mod tests {
             ..Default::default()
         };
 
-        let resolved =
-            resolve_config_with_env(overrides, ConfigEnvironment::default()).unwrap();
+        let resolved = resolve_config_with_env(overrides, ConfigEnvironment::default()).unwrap();
 
         assert_eq!(resolved.effective.endpoint.value, "tcp/127.0.0.1:7000");
         assert_eq!(resolved.effective.endpoint.source, ConfigSource::File);
         assert_eq!(resolved.effective.mode.value, ConnectMode::Peer);
-        assert_eq!(resolved.effective.namespace.value.as_deref(), Some("factory"));
+        assert_eq!(
+            resolved.effective.namespace.value.as_deref(),
+            Some("factory")
+        );
         assert_eq!(resolved.effective.scout_port.value, 7500);
 
         let zenoh = resolved.config.to_zenoh_config().unwrap();
@@ -581,9 +583,7 @@ mod tests {
 
     #[test]
     fn cli_overrides_environment_and_environment_overrides_file() {
-        let path = config_file(
-            r#"{ mode: "peer", connect: { endpoints: ["tcp/file:7000"] } }"#,
-        );
+        let path = config_file(r#"{ mode: "peer", connect: { endpoints: ["tcp/file:7000"] } }"#);
         let env = ConfigEnvironment {
             endpoint: Some("tcp/env:7001".into()),
             mode: Some("client".into()),
@@ -617,8 +617,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolved =
-            resolve_config_with_env(ConfigOverrides::default(), env).unwrap();
+        let resolved = resolve_config_with_env(ConfigOverrides::default(), env).unwrap();
 
         assert_eq!(resolved.config.endpoint, "tcp/env:7447");
         assert_eq!(resolved.effective.endpoint.source, ConfigSource::Env);
@@ -648,18 +647,14 @@ mod tests {
             config_file: Some(path.clone()),
             ..Default::default()
         };
-        assert!(
-            resolve_config_with_env(file_overrides, ConfigEnvironment::default()).is_err()
-        );
+        assert!(resolve_config_with_env(file_overrides, ConfigEnvironment::default()).is_err());
         fs::remove_file(path).unwrap();
 
         let endpoint_overrides = ConfigOverrides {
             endpoint: Some("definitely-not-an-endpoint".into()),
             ..Default::default()
         };
-        assert!(
-            resolve_config_with_env(endpoint_overrides, ConfigEnvironment::default()).is_err()
-        );
+        assert!(resolve_config_with_env(endpoint_overrides, ConfigEnvironment::default()).is_err());
     }
 
     #[test]
@@ -718,8 +713,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolved =
-            resolve_config_with_env(overrides, ConfigEnvironment::default()).unwrap();
+        let resolved = resolve_config_with_env(overrides, ConfigEnvironment::default()).unwrap();
 
         assert_eq!(resolved.effective.mode.value, ConnectMode::Client);
         assert_eq!(resolved.effective.mode.source, ConfigSource::Cli);
@@ -749,7 +743,10 @@ mod tests {
             ..Default::default()
         };
         let resolved = resolve_config_with_env(ConfigOverrides::default(), env).unwrap();
-        assert_eq!(resolved.config.connect_timeout, Some(Duration::from_secs(2)));
+        assert_eq!(
+            resolved.config.connect_timeout,
+            Some(Duration::from_secs(2))
+        );
         assert_eq!(
             resolved.effective.connect_timeout.value.as_deref(),
             Some("2s")
@@ -766,7 +763,10 @@ mod tests {
             ..Default::default()
         };
         let resolved = resolve_config_with_env(overrides, env).unwrap();
-        assert_eq!(resolved.config.connect_timeout, Some(Duration::from_secs(5)));
+        assert_eq!(
+            resolved.config.connect_timeout,
+            Some(Duration::from_secs(5))
+        );
         assert_eq!(resolved.effective.connect_timeout.source, ConfigSource::Cli);
     }
 
@@ -839,6 +839,8 @@ mod tests {
         let too_big = Duration::from_millis((MAX_CONNECT_TIMEOUT_MS + 1) as u64);
         assert!(validate_connect_timeout(too_big).is_err());
         // The max itself is accepted.
-        assert!(validate_connect_timeout(Duration::from_millis(MAX_CONNECT_TIMEOUT_MS as u64)).is_ok());
+        assert!(
+            validate_connect_timeout(Duration::from_millis(MAX_CONNECT_TIMEOUT_MS as u64)).is_ok()
+        );
     }
 }

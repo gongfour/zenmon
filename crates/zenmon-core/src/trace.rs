@@ -35,14 +35,25 @@ pub fn parse_segment_stamp(s: &str) -> Option<SystemTime> {
     }
     let rfc = format!(
         "{}-{}-{}T{}:{}:{}Z",
-        &s[0..4], &s[4..6], &s[6..8], &s[9..11], &s[11..13], &s[13..15]
+        &s[0..4],
+        &s[4..6],
+        &s[6..8],
+        &s[9..11],
+        &s[11..13],
+        &s[13..15]
     );
     humantime::parse_rfc3339(&rfc).ok()
 }
 
 /// `zenmon-trace-<stamp>-<seq:05>.ndjson`.
 pub fn segment_file_name(first: SystemTime, seq: u32) -> String {
-    format!("{}{}-{:05}{}", SEG_PREFIX, format_segment_stamp(first), seq, SEG_EXT)
+    format!(
+        "{}{}-{:05}{}",
+        SEG_PREFIX,
+        format_segment_stamp(first),
+        seq,
+        SEG_EXT
+    )
 }
 
 /// Parse a segment filename into `(first_timestamp, seq)`. Non-segment files
@@ -76,7 +87,11 @@ pub fn discover_segments(dir: &Path) -> Result<Vec<Segment>, ZenmonError> {
         let entry = entry.map_err(|e| ZenmonError::internal(e.to_string()))?;
         let name = entry.file_name();
         if let Some((first, seq)) = parse_segment_file_name(&name.to_string_lossy()) {
-            segs.push(Segment { path: entry.path(), first, seq });
+            segs.push(Segment {
+                path: entry.path(),
+                first,
+                seq,
+            });
         }
     }
     segs.sort_by(|a, b| a.first.cmp(&b.first).then(a.seq.cmp(&b.seq)));
@@ -101,7 +116,11 @@ pub struct SegmentWriter {
 }
 
 impl SegmentWriter {
-    pub fn open(dir: PathBuf, rotate_size: u64, rotate_interval: Duration) -> Result<Self, ZenmonError> {
+    pub fn open(
+        dir: PathBuf,
+        rotate_size: u64,
+        rotate_interval: Duration,
+    ) -> Result<Self, ZenmonError> {
         std::fs::create_dir_all(&dir).map_err(|e| {
             ZenmonError::invalid_input(format!("cannot create {}: {}", dir.display(), e))
         })?;
@@ -137,13 +156,15 @@ impl SegmentWriter {
 
     fn rotate(&mut self, now: SystemTime) -> Result<(), ZenmonError> {
         if let Some(mut w) = self.writer.take() {
-            w.flush().map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+            w.flush()
+                .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
         }
         let name = segment_file_name(now, self.next_seq);
         self.next_seq += 1;
         let path = self.dir.join(name);
-        let file = File::create(&path)
-            .map_err(|e| ZenmonError::internal(format!("cannot create {}: {}", path.display(), e)))?;
+        let file = File::create(&path).map_err(|e| {
+            ZenmonError::internal(format!("cannot create {}: {}", path.display(), e))
+        })?;
         self.writer = Some(BufWriter::new(file));
         self.seg_first = now;
         self.seg_bytes = 0;
@@ -157,14 +178,16 @@ impl SegmentWriter {
             self.rotate(now)?;
         }
         let w = self.writer.as_mut().expect("writer present after rotate");
-        writeln!(w, "{}", line).map_err(|e| ZenmonError::internal(format!("write failed: {}", e)))?;
+        writeln!(w, "{}", line)
+            .map_err(|e| ZenmonError::internal(format!("write failed: {}", e)))?;
         self.seg_bytes += line.len() as u64 + 1;
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<(), ZenmonError> {
         if let Some(w) = self.writer.as_mut() {
-            w.flush().map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+            w.flush()
+                .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
         }
         Ok(())
     }
@@ -221,8 +244,9 @@ pub fn enforce_retention(
     let mut deleted = 0;
     for (i, seg) in closed.iter().enumerate() {
         if delete[i] {
-            std::fs::remove_file(&seg.path)
-                .map_err(|e| ZenmonError::internal(format!("cannot remove {}: {}", seg.path.display(), e)))?;
+            std::fs::remove_file(&seg.path).map_err(|e| {
+                ZenmonError::internal(format!("cannot remove {}: {}", seg.path.display(), e))
+            })?;
             deleted += 1;
         }
     }
@@ -278,7 +302,12 @@ pub fn load_segment(
         match CaptureRecord::parse_line(line, i + 1) {
             Ok(record) => {
                 let received = parse_received(&record);
-                out.push(PositionedRecord { segment: segment.clone(), index: i as u64, record, received });
+                out.push(PositionedRecord {
+                    segment: segment.clone(),
+                    index: i as u64,
+                    record,
+                    received,
+                });
             }
             Err(e) => {
                 if tolerate_partial_last_line && i == last {
@@ -303,8 +332,9 @@ pub struct ReadFilter {
 /// An invalid filter key expression is an `invalid_input` error.
 pub fn key_matches(filter_key: &str, record_key: &str) -> Result<bool, ZenmonError> {
     use zenoh::key_expr::KeyExpr;
-    let filter = KeyExpr::try_from(filter_key)
-        .map_err(|e| ZenmonError::invalid_input(format!("invalid key expression '{}': {}", filter_key, e)))?;
+    let filter = KeyExpr::try_from(filter_key).map_err(|e| {
+        ZenmonError::invalid_input(format!("invalid key expression '{}': {}", filter_key, e))
+    })?;
     // A stored key is always a concrete key; if it fails to parse, treat as no-match.
     match KeyExpr::try_from(record_key) {
         Ok(rk) => Ok(filter.intersects(&rk)),
@@ -317,12 +347,16 @@ pub fn key_matches(filter_key: &str, record_key: &str) -> Result<bool, ZenmonErr
 pub fn parse_time_bound(s: &str, now: SystemTime) -> Result<SystemTime, ZenmonError> {
     let t = s.trim();
     if let Ok(dur) = humantime::parse_duration(t) {
-        return now
-            .checked_sub(dur)
-            .ok_or_else(|| ZenmonError::invalid_input(format!("time '{}' is before the epoch", s)));
+        return now.checked_sub(dur).ok_or_else(|| {
+            ZenmonError::invalid_input(format!("time '{}' is before the epoch", s))
+        });
     }
-    humantime::parse_rfc3339(t)
-        .map_err(|e| ZenmonError::invalid_input(format!("invalid time '{}': {} (try 10m or an RFC3339 timestamp)", s, e)))
+    humantime::parse_rfc3339(t).map_err(|e| {
+        ZenmonError::invalid_input(format!(
+            "invalid time '{}': {} (try 10m or an RFC3339 timestamp)",
+            s, e
+        ))
+    })
 }
 
 /// True if a record satisfies the filter's key and time window. A record with
@@ -374,7 +408,11 @@ struct CursorInner {
 
 /// Opaque cursor pointing at the next record to read (segment name + index).
 pub fn encode_cursor(segment: &str, index: u64) -> String {
-    let json = serde_json::to_string(&CursorInner { segment: segment.to_string(), index }).unwrap_or_default();
+    let json = serde_json::to_string(&CursorInner {
+        segment: segment.to_string(),
+        index,
+    })
+    .unwrap_or_default();
     base64::engine::general_purpose::STANDARD.encode(json)
 }
 
@@ -469,7 +507,13 @@ pub fn read_page(dir: &Path, opts: &ReadOptions) -> Result<ReadPage, ZenmonError
     let returned = records.len() as u64;
     let truncated = matched > returned;
     let cursor = next_cursor.map(|(s, i)| encode_cursor(&s, i));
-    Ok(ReadPage { records, matched, returned, cursor, truncated })
+    Ok(ReadPage {
+        records,
+        matched,
+        returned,
+        cursor,
+        truncated,
+    })
 }
 
 fn read_last_per_key(segs: &[Segment], opts: &ReadOptions) -> Result<ReadPage, ZenmonError> {
@@ -507,7 +551,10 @@ fn read_every_n(segs: &[Segment], opts: &ReadOptions, n: u64) -> Result<ReadPage
     finalize_reduced(sampled, opts.limit)
 }
 
-fn finalize_reduced(all: Vec<PositionedRecord>, limit: Option<u64>) -> Result<ReadPage, ZenmonError> {
+fn finalize_reduced(
+    all: Vec<PositionedRecord>,
+    limit: Option<u64>,
+) -> Result<ReadPage, ZenmonError> {
     let matched = all.len() as u64;
     let records: Vec<_> = match limit {
         Some(l) => all.into_iter().take(l as usize).collect(),
@@ -569,15 +616,17 @@ pub fn topic_stats(
             if !record_in_window(&pr, filter)? {
                 continue;
             }
-            let e = acc.entry(pr.record.key_expr.clone()).or_insert_with(|| Acc {
-                count: 0,
-                first: None,
-                last: None,
-                first_ts: None,
-                last_ts: None,
-                last_payload_b64: String::new(),
-                last_encoding: String::new(),
-            });
+            let e = acc
+                .entry(pr.record.key_expr.clone())
+                .or_insert_with(|| Acc {
+                    count: 0,
+                    first: None,
+                    last: None,
+                    first_ts: None,
+                    last_ts: None,
+                    last_payload_b64: String::new(),
+                    last_encoding: String::new(),
+                });
             e.count += 1;
             if e.first.is_none() {
                 e.first = pr.received;
@@ -596,11 +645,16 @@ pub fn topic_stats(
             let rate_hz = match (a.first, a.last) {
                 (Some(f), Some(l)) if a.count > 1 => {
                     let secs = l.duration_since(f).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-                    if secs > 0.0 { a.count as f64 / secs } else { 0.0 }
+                    if secs > 0.0 {
+                        a.count as f64 / secs
+                    } else {
+                        0.0
+                    }
                 }
                 _ => 0.0,
             };
-            let payload = crate::capture::b64_decode_public(&a.last_payload_b64).unwrap_or_default();
+            let payload =
+                crate::capture::b64_decode_public(&a.last_payload_b64).unwrap_or_default();
             let mp = crate::types::MessagePayload::from_bytes(payload);
             let last_value_bytes = mp.len();
             let last_value_preview = match max_payload_bytes {
@@ -640,7 +694,12 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("zenmon-trace-test-{}-{}-{}", tag, std::process::id(), n));
+        let dir = std::env::temp_dir().join(format!(
+            "zenmon-trace-test-{}-{}-{}",
+            tag,
+            std::process::id(),
+            n
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -806,8 +865,9 @@ mod tests {
         write_segment(&dir, 1000, 0, &["x"]); // upper bound 2000
         write_segment(&dir, 2000, 0, &["x"]); // upper bound 3000
         write_segment(&dir, 3000, 0, &["x"]); // newest, protected
-        // now=3600, max_age=1000s -> cutoff=2600. seg0 upper(2000)<2600 delete; seg1 upper(3000)>=2600 keep.
-        let deleted = enforce_retention(&dir, None, Some(Duration::from_secs(1000)), t(3600)).unwrap();
+                                              // now=3600, max_age=1000s -> cutoff=2600. seg0 upper(2000)<2600 delete; seg1 upper(3000)>=2600 keep.
+        let deleted =
+            enforce_retention(&dir, None, Some(Duration::from_secs(1000)), t(3600)).unwrap();
         assert_eq!(deleted, 1);
         let segs = discover_segments(&dir).unwrap();
         assert_eq!(segs[0].first, t(2000));
@@ -818,7 +878,8 @@ mod tests {
     fn retention_never_deletes_the_only_segment() {
         let dir = tempdir_unique("retone");
         write_segment(&dir, 1000, 0, &["0123456789"]);
-        let deleted = enforce_retention(&dir, Some(1), Some(Duration::from_secs(0)), t(9_999_999)).unwrap();
+        let deleted =
+            enforce_retention(&dir, Some(1), Some(Duration::from_secs(0)), t(9_999_999)).unwrap();
         assert_eq!(deleted, 0); // newest/active is protected
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -834,13 +895,23 @@ mod tests {
             attachment: None,
             attachment_bytes: None,
         };
-        serde_json::to_string(&CaptureRecord::from_message(&m, Duration::ZERO, t(received_secs))).unwrap()
+        serde_json::to_string(&CaptureRecord::from_message(
+            &m,
+            Duration::ZERO,
+            t(received_secs),
+        ))
+        .unwrap()
     }
 
     #[test]
     fn load_segment_positions_and_parses_received_at() {
         let dir = tempdir_unique("load");
-        let path = write_segment(&dir, 1000, 0, &[&rec_line("a/b", 1000), &rec_line("c/d", 1001)]);
+        let path = write_segment(
+            &dir,
+            1000,
+            0,
+            &[&rec_line("a/b", 1000), &rec_line("c/d", 1001)],
+        );
         let recs = load_segment(&path, true).unwrap();
         assert_eq!(recs.len(), 2);
         assert_eq!(recs[0].index, 0);
@@ -858,7 +929,7 @@ mod tests {
         std::fs::write(&path, format!("{}\n{{\"schema_v", rec_line("a/b", 1000))).unwrap();
         let recs = load_segment(&path, true).unwrap();
         assert_eq!(recs.len(), 1); // partial dropped, no error
-        // But when NOT tolerated, the corrupt line is an error.
+                                   // But when NOT tolerated, the corrupt line is an error.
         assert!(load_segment(&path, false).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -871,7 +942,10 @@ mod tests {
         // "a//b" (empty chunk) is not a valid key expression, unlike keyexpr.rs's
         // char-set restrictions this repo's brief assumed; mirror the invalid
         // example already verified in crates/zenmon-core/src/keyexpr.rs.
-        assert_eq!(key_matches("a//b", "a/b").unwrap_err().kind, crate::error::ErrorKind::InvalidInput);
+        assert_eq!(
+            key_matches("a//b", "a/b").unwrap_err().kind,
+            crate::error::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
@@ -887,11 +961,23 @@ mod tests {
         let dir = tempdir_unique("win");
         let path = write_segment(&dir, 1000, 0, &[&rec_line("a/b", 1000)]);
         let pr = load_segment(&path, true).unwrap().remove(0);
-        let f = ReadFilter { key: "a/*".into(), since: Some(t(500)), until: Some(t(2000)) };
+        let f = ReadFilter {
+            key: "a/*".into(),
+            since: Some(t(500)),
+            until: Some(t(2000)),
+        };
         assert!(record_in_window(&pr, &f).unwrap());
-        let f2 = ReadFilter { key: "a/*".into(), since: Some(t(1500)), until: None };
+        let f2 = ReadFilter {
+            key: "a/*".into(),
+            since: Some(t(1500)),
+            until: None,
+        };
         assert!(!record_in_window(&pr, &f2).unwrap()); // before since
-        let f3 = ReadFilter { key: "z/*".into(), since: None, until: None };
+        let f3 = ReadFilter {
+            key: "z/*".into(),
+            since: None,
+            until: None,
+        };
         assert!(!record_in_window(&pr, &f3).unwrap()); // key mismatch
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -902,13 +988,25 @@ mod tests {
         let path = write_segment(&dir, 1000, 0, &[&rec_line("a/b", 1000)]); // received == t(1000)
         let pr = load_segment(&path, true).unwrap().remove(0);
         // received == since  -> INCLUDED (since is inclusive)
-        let f_in = ReadFilter { key: "**".into(), since: Some(t(1000)), until: None };
+        let f_in = ReadFilter {
+            key: "**".into(),
+            since: Some(t(1000)),
+            until: None,
+        };
         assert!(record_in_window(&pr, &f_in).unwrap());
         // received == until  -> EXCLUDED (until is exclusive)
-        let f_ex = ReadFilter { key: "**".into(), since: None, until: Some(t(1000)) };
+        let f_ex = ReadFilter {
+            key: "**".into(),
+            since: None,
+            until: Some(t(1000)),
+        };
         assert!(!record_in_window(&pr, &f_ex).unwrap());
         // received in [since, until) -> INCLUDED
-        let f_within = ReadFilter { key: "**".into(), since: Some(t(1000)), until: Some(t(1001)) };
+        let f_within = ReadFilter {
+            key: "**".into(),
+            since: Some(t(1000)),
+            until: Some(t(1001)),
+        };
         assert!(record_in_window(&pr, &f_within).unwrap());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -921,9 +1019,16 @@ mod tests {
         let path = dir.join(segment_file_name(t(1000), 0));
         std::fs::write(&path, format!("{}\n", v1)).unwrap();
         let pr = load_segment(&path, true).unwrap().remove(0);
-        assert!(pr.received.is_none(), "v1 record must have no received time");
+        assert!(
+            pr.received.is_none(),
+            "v1 record must have no received time"
+        );
         // A time window that would exclude any dated record still passes (unbounded).
-        let f = ReadFilter { key: "a/*".into(), since: Some(t(5000)), until: Some(t(6000)) };
+        let f = ReadFilter {
+            key: "a/*".into(),
+            since: Some(t(5000)),
+            until: Some(t(6000)),
+        };
         assert!(record_in_window(&pr, &f).unwrap());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -938,15 +1043,34 @@ mod tests {
     fn seed_store(tag: &str) -> PathBuf {
         // 3 segments, 2 records each, keys alternate a/x and b/y, times 1000..1005
         let dir = tempdir_unique(tag);
-        write_segment(&dir, 1000, 0, &[&rec_line("a/x", 1000), &rec_line("b/y", 1001)]);
-        write_segment(&dir, 1002, 0, &[&rec_line("a/x", 1002), &rec_line("b/y", 1003)]);
-        write_segment(&dir, 1004, 0, &[&rec_line("a/x", 1004), &rec_line("b/y", 1005)]);
+        write_segment(
+            &dir,
+            1000,
+            0,
+            &[&rec_line("a/x", 1000), &rec_line("b/y", 1001)],
+        );
+        write_segment(
+            &dir,
+            1002,
+            0,
+            &[&rec_line("a/x", 1002), &rec_line("b/y", 1003)],
+        );
+        write_segment(
+            &dir,
+            1004,
+            0,
+            &[&rec_line("a/x", 1004), &rec_line("b/y", 1005)],
+        );
         dir
     }
 
     fn plain_opts(key: &str, limit: Option<u64>, cursor: Option<String>) -> ReadOptions {
         ReadOptions {
-            filter: ReadFilter { key: key.into(), since: None, until: None },
+            filter: ReadFilter {
+                key: key.into(),
+                since: None,
+                until: None,
+            },
             limit,
             last_per_key: false,
             every: None,
@@ -986,7 +1110,7 @@ mod tests {
         opts.last_per_key = true;
         let page = read_page(&dir, &opts).unwrap();
         assert_eq!(page.returned, 2); // one per key: a/x, b/y
-        // latest a/x is t(1004), latest b/y is t(1005)
+                                      // latest a/x is t(1004), latest b/y is t(1005)
         let times: Vec<_> = page.records.iter().map(|r| r.received).collect();
         assert!(times.contains(&Some(t(1004))) && times.contains(&Some(t(1005))));
         std::fs::remove_dir_all(&dir).ok();
@@ -1007,14 +1131,24 @@ mod tests {
     fn cursor_roundtrips() {
         let c = encode_cursor("zenmon-trace-20260716T000000Z-00000.ndjson", 4);
         let (seg, idx) = decode_cursor(&c).unwrap();
-        assert_eq!((seg.as_str(), idx), ("zenmon-trace-20260716T000000Z-00000.ndjson", 4));
-        assert_eq!(decode_cursor("!notbase64!").unwrap_err().kind, crate::error::ErrorKind::InvalidInput);
+        assert_eq!(
+            (seg.as_str(), idx),
+            ("zenmon-trace-20260716T000000Z-00000.ndjson", 4)
+        );
+        assert_eq!(
+            decode_cursor("!notbase64!").unwrap_err().kind,
+            crate::error::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
     fn topic_stats_rolls_up_per_key() {
         let dir = seed_store("stats1");
-        let f = ReadFilter { key: "**".into(), since: None, until: None };
+        let f = ReadFilter {
+            key: "**".into(),
+            since: None,
+            until: None,
+        };
         let stats = topic_stats(&dir, &f, None, Some(64)).unwrap();
         assert_eq!(stats.len(), 2);
         let ax = stats.iter().find(|s| s.key == "a/x").unwrap();
@@ -1027,7 +1161,11 @@ mod tests {
     #[test]
     fn topic_stats_top_n_by_volume_and_key_filter() {
         let dir = seed_store("stats2");
-        let f = ReadFilter { key: "a/*".into(), since: None, until: None };
+        let f = ReadFilter {
+            key: "a/*".into(),
+            since: None,
+            until: None,
+        };
         let stats = topic_stats(&dir, &f, Some(1), None).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].key, "a/x"); // only a/* matched

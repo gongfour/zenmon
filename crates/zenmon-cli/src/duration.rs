@@ -157,7 +157,10 @@ mod tests {
 
     #[test]
     fn parses_millis() {
-        assert_eq!(parse_duration_arg("100ms").unwrap(), Duration::from_millis(100));
+        assert_eq!(
+            parse_duration_arg("100ms").unwrap(),
+            Duration::from_millis(100)
+        );
     }
 
     #[test]

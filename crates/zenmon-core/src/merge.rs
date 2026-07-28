@@ -109,10 +109,7 @@ mod tests {
     #[test]
     fn merge_disjoint_zids_produces_sorted_union() {
         let admin = vec![admin_node("z3", "router", &[])];
-        let scout = vec![
-            scout_node("z1", "peer", &[]),
-            scout_node("z2", "peer", &[]),
-        ];
+        let scout = vec![scout_node("z1", "peer", &[]), scout_node("z2", "peer", &[])];
         let out = merge_nodes(&admin, &scout);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].zid, "z1");

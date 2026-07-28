@@ -123,10 +123,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
         ])
     } else {
         Line::from(vec![
-            Span::styled(
-                " LIVE ",
-                Style::default().fg(Color::Black).bg(Color::Green),
-            ),
+            Span::styled(" LIVE ", Style::default().fg(Color::Black).bg(Color::Green)),
             mode_badge,
             Span::raw(format!(
                 "  showing {} / {} messages  ",
@@ -139,8 +136,8 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             ),
         ])
     };
-    let status = Paragraph::new(status_text)
-        .block(Block::default().borders(Borders::ALL).title(" Stream "));
+    let status =
+        Paragraph::new(status_text).block(Block::default().borders(Borders::ALL).title(" Stream "));
     frame.render_widget(status, status_area);
 
     let items: Vec<ListItem> = filtered_messages
@@ -227,7 +224,10 @@ mod tests {
 
     #[test]
     fn keeps_raw_timestamp_when_parsing_fails() {
-        assert_eq!(format_stream_timestamp("not-a-timestamp"), "not-a-timestamp");
+        assert_eq!(
+            format_stream_timestamp("not-a-timestamp"),
+            "not-a-timestamp"
+        );
     }
 
     #[test]

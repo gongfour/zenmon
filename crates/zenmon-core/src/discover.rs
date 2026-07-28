@@ -7,10 +7,7 @@ use zenoh::Session;
 /// Discover active keys matching the given key expression.
 /// Uses Zenoh admin space to list subscribers and publishers.
 /// Falls back to a plain GET if admin space returns nothing.
-pub async fn discover(
-    session: &Session,
-    key_expr: &str,
-) -> Result<Vec<TopicInfo>, ZenmonError> {
+pub async fn discover(session: &Session, key_expr: &str) -> Result<Vec<TopicInfo>, ZenmonError> {
     let mut topics = Vec::new();
 
     // Query admin space for subscriber/publisher info

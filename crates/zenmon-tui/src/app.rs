@@ -1,9 +1,6 @@
 use crate::event::AppEvent;
 use crate::views;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use zenmon_core::config::ConnectMode;
-use zenmon_core::merge::merge_nodes;
-use zenmon_core::types::{LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -11,6 +8,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
+use zenmon_core::config::ConnectMode;
+use zenmon_core::merge::merge_nodes;
+use zenmon_core::types::{
+    LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage,
+};
 
 /// Return the tab index hit by a click at `(col, row)`, or `None`.
 pub(crate) fn tab_hit(rects: &[Option<Rect>; 7], col: u16, row: u16) -> Option<usize> {
@@ -90,8 +92,15 @@ pub(crate) fn domain_port_label(port: u16) -> String {
     }
 }
 
-const TAB_TITLES: [&str; 7] =
-    ["Dashboard", "Topics", "Stream", "Query", "Nodes", "Liveliness", "Network"];
+const TAB_TITLES: [&str; 7] = [
+    "Dashboard",
+    "Topics",
+    "Stream",
+    "Query",
+    "Nodes",
+    "Liveliness",
+    "Network",
+];
 
 /// One key binding, used as the single source of truth for both the compact
 /// status-bar hint and the `?` help overlay so they can't drift apart.
@@ -259,7 +268,11 @@ pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static s
 pub(crate) fn compact_hint(view: ActiveView) -> String {
     let mut parts: Vec<String> = vec!["q:quit".into(), "1-7:view".into()];
     for h in view_hints(view).iter().take(3) {
-        parts.push(format!("{}:{}", h.keys, h.desc.split(['/', ' ']).next().unwrap_or(h.desc)));
+        parts.push(format!(
+            "{}:{}",
+            h.keys,
+            h.desc.split(['/', ' ']).next().unwrap_or(h.desc)
+        ));
     }
     parts.push("?:help".into());
     parts.join("  ")
@@ -809,9 +822,7 @@ impl App {
     /// target view and the item index; `None` for borders / empty rows / clicks
     /// outside both panels.
     pub(crate) fn dashboard_click_target(&self, col: u16, row: u16) -> Option<(ActiveView, usize)> {
-        let in_rect = |rect: ratatui::layout::Rect| {
-            col >= rect.x && col < rect.x + rect.width
-        };
+        let in_rect = |rect: ratatui::layout::Rect| col >= rect.x && col < rect.x + rect.width;
         if let Some(rect) = self.dash_node_rect {
             if in_rect(rect) {
                 if let Some(idx) = list_hit(rect, row, 0, self.nodes.len(), rect.y + 1) {
@@ -1171,7 +1182,11 @@ impl App {
             },
             ActiveView::Liveliness => match key.code {
                 KeyCode::Char('y') => {
-                    if let Some(token) = self.liveliness_tokens.get(self.liveliness_selected).cloned() {
+                    if let Some(token) = self
+                        .liveliness_tokens
+                        .get(self.liveliness_selected)
+                        .cloned()
+                    {
                         self.copy_to_clipboard(token.key_expr, "key_expr");
                     } else {
                         self.set_error_toast("No token selected");
@@ -1203,13 +1218,19 @@ impl App {
         self.topic_latest
             .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
 
-        *self.topic_msg_counts.entry(msg.key_expr.clone()).or_insert(0) += 1;
+        *self
+            .topic_msg_counts
+            .entry(msg.key_expr.clone())
+            .or_insert(0) += 1;
         self.total_msg_count += 1;
 
         // Application payload bytes (not protocol overhead), from the lossless
         // wire byte counts captured at receive time.
         let bytes = (msg.payload_bytes + msg.attachment_bytes.unwrap_or(0)) as u64;
-        *self.topic_byte_counts.entry(msg.key_expr.clone()).or_insert(0) += bytes;
+        *self
+            .topic_byte_counts
+            .entry(msg.key_expr.clone())
+            .or_insert(0) += bytes;
         self.total_byte_count += bytes;
 
         self.recent_messages.push_front(msg.clone());
@@ -1515,10 +1536,7 @@ impl App {
                 port_text,
                 Style::default().fg(Color::Black).bg(Color::Magenta),
             ),
-            Span::styled(
-                mode_text,
-                Style::default().fg(Color::Black).bg(Color::Blue),
-            ),
+            Span::styled(mode_text, Style::default().fg(Color::Black).bg(Color::Blue)),
             middle_span,
             Span::styled(
                 format!(" {} ", compact_hint(self.active_view)),
@@ -1566,7 +1584,11 @@ impl App {
             }
             lines.push(Line::from(""));
         };
-        section(&mut lines, &format!("{} view", view_name), view_hints(self.active_view));
+        section(
+            &mut lines,
+            &format!("{} view", view_name),
+            view_hints(self.active_view),
+        );
         section(&mut lines, "Global", global_hints());
         lines.push(Line::from(Span::styled(
             "j/k or ↑↓ to scroll · Esc/q/? to close",
@@ -1783,8 +1805,14 @@ mod tests {
     #[test]
     fn uppercase_j_k_map_to_detail_scroll_without_shift() {
         // Uppercase J/K scroll regardless of whether Shift is reported.
-        assert_eq!(detail_scroll_action(key(KeyCode::Char('J'))), Some(DetailScroll::Down));
-        assert_eq!(detail_scroll_action(key(KeyCode::Char('K'))), Some(DetailScroll::Up));
+        assert_eq!(
+            detail_scroll_action(key(KeyCode::Char('J'))),
+            Some(DetailScroll::Down)
+        );
+        assert_eq!(
+            detail_scroll_action(key(KeyCode::Char('K'))),
+            Some(DetailScroll::Up)
+        );
         assert_eq!(
             detail_scroll_action(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT)),
             Some(DetailScroll::Down)
@@ -1847,16 +1875,29 @@ mod tests {
         let mut app = App::new("t".into());
         app.nodes = vec![node("a"), node("b")];
         app.topics = vec![
-            TopicInfo { key_expr: "x".into() },
-            TopicInfo { key_expr: "y".into() },
+            TopicInfo {
+                key_expr: "x".into(),
+            },
+            TopicInfo {
+                key_expr: "y".into(),
+            },
         ];
         app.dash_node_rect = Some(Rect::new(0, 5, 40, 10));
         app.dash_topic_rect = Some(Rect::new(40, 5, 40, 10));
 
         // First item row is rect.y + 1 = 6.
-        assert_eq!(app.dashboard_click_target(5, 6), Some((ActiveView::Nodes, 0)));
-        assert_eq!(app.dashboard_click_target(5, 7), Some((ActiveView::Nodes, 1)));
-        assert_eq!(app.dashboard_click_target(45, 6), Some((ActiveView::Topics, 0)));
+        assert_eq!(
+            app.dashboard_click_target(5, 6),
+            Some((ActiveView::Nodes, 0))
+        );
+        assert_eq!(
+            app.dashboard_click_target(5, 7),
+            Some((ActiveView::Nodes, 1))
+        );
+        assert_eq!(
+            app.dashboard_click_target(45, 6),
+            Some((ActiveView::Topics, 0))
+        );
         // Border row → no-op.
         assert_eq!(app.dashboard_click_target(5, 5), None);
         // Past the last item → no-op.
@@ -1879,7 +1920,9 @@ mod tests {
         // No data at all → NoDataYet.
         assert_eq!(app.topics_empty_reason(), EmptyReason::NoDataYet);
         // Data exists but the filter hides it → FilteredOut.
-        app.topics.push(TopicInfo { key_expr: "a/b".into() });
+        app.topics.push(TopicInfo {
+            key_expr: "a/b".into(),
+        });
         app.topic_filter = "zzz".into();
         assert_eq!(app.topics_empty_reason(), EmptyReason::FilteredOut);
     }
@@ -2061,7 +2104,15 @@ mod tests {
 
     #[test]
     fn tab_hit_outside_returns_none() {
-        let rects = [Some(Rect::new(1, 0, 14, 3)), None, None, None, None, None, None];
+        let rects = [
+            Some(Rect::new(1, 0, 14, 3)),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ];
         assert_eq!(tab_hit(&rects, 50, 1), None);
         assert_eq!(tab_hit(&rects, 2, 5), None);
     }

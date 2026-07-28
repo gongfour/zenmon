@@ -21,10 +21,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     } else if app.query_input.is_empty() {
         "Press / or i to enter key expression".to_string()
     } else {
-        format!(
-            "GET > {}  (Enter to execute, / to edit)",
-            app.query_input
-        )
+        format!("GET > {}  (Enter to execute, / to edit)", app.query_input)
     };
     let input_style = if app.query_editing {
         Style::default().fg(Color::Yellow)
@@ -82,7 +79,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 Span::styled(payload_str, Style::default().fg(Color::White)),
             ];
             if let Some(att) = &msg.attachment {
-                spans.push(Span::styled(format!(" att:{}", att), Style::default().fg(Color::Magenta)));
+                spans.push(Span::styled(
+                    format!(" att:{}", att),
+                    Style::default().fg(Color::Magenta),
+                ));
             }
             ListItem::new(Line::from(spans))
         })
@@ -114,11 +114,8 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             )))
         })
         .collect();
-    let history = List::new(history_items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(HISTORY_TITLE),
-    );
+    let history =
+        List::new(history_items).block(Block::default().borders(Borders::ALL).title(HISTORY_TITLE));
     frame.render_widget(history, history_area);
 }
 

@@ -10,8 +10,9 @@ use zenoh::key_expr::keyexpr;
 /// queryable the caller must supply `--reply-key <concrete-key>` (a wildcard
 /// queryable's own key is not a valid reply key).
 pub fn resolve_reply_key(key_expr: &str, reply_key: Option<&str>) -> Result<String, ZenmonError> {
-    let ke = keyexpr::new(key_expr)
-        .map_err(|e| ZenmonError::invalid_input(format!("invalid key expression '{}': {}", key_expr, e)))?;
+    let ke = keyexpr::new(key_expr).map_err(|e| {
+        ZenmonError::invalid_input(format!("invalid key expression '{}': {}", key_expr, e))
+    })?;
 
     match reply_key {
         Some(rk) => {
@@ -46,7 +47,10 @@ mod tests {
 
     #[test]
     fn non_wild_key_reuses_itself() {
-        assert_eq!(resolve_reply_key("robot/status", None).unwrap(), "robot/status");
+        assert_eq!(
+            resolve_reply_key("robot/status", None).unwrap(),
+            "robot/status"
+        );
     }
 
     #[test]

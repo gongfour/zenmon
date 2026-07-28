@@ -9,8 +9,6 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use zenmon_core::config::ZenmonConfig;
-use zenmon_core::types::ZenohMessage;
 use event::{AppEvent, EventHandler};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -18,6 +16,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use zenmon_core::config::ZenmonConfig;
+use zenmon_core::types::ZenohMessage;
 use zenoh::Session;
 
 pub async fn run(mut config: ZenmonConfig, refresh: Duration) -> Result<()> {
@@ -44,11 +44,7 @@ pub async fn run(mut config: ZenmonConfig, refresh: Duration) -> Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            std::io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         original_hook(info);
     }));
 
@@ -69,11 +65,7 @@ pub async fn run(mut config: ZenmonConfig, refresh: Duration) -> Result<()> {
     .await;
 
     disable_raw_mode()?;
-    execute!(
-        std::io::stdout(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
     if let Some(s) = session.lock().await.take() {
         let _ = s.close().await;
@@ -109,11 +101,7 @@ fn spawn_connect(config: ZenmonConfig, tx: mpsc::UnboundedSender<ConnectResult>)
     });
 }
 
-fn spawn_scout_task(
-    config: ZenmonConfig,
-    tx: mpsc::UnboundedSender<AppEvent>,
-    timeout: Duration,
-) {
+fn spawn_scout_task(config: ZenmonConfig, tx: mpsc::UnboundedSender<AppEvent>, timeout: Duration) {
     tokio::spawn(async move {
         let _ = tx.send(AppEvent::ScoutStarted);
         let now = SystemTime::now();
@@ -133,13 +121,8 @@ fn spawn_scout_task(
 fn spawn_port_scan_task(config: ZenmonConfig, tx: mpsc::UnboundedSender<AppEvent>) {
     tokio::spawn(async move {
         let _ = tx.send(AppEvent::PortScanStarted);
-        match zenmon_core::scout::scout_port_range(
-            &config,
-            7446,
-            7546,
-            Duration::from_secs(1),
-        )
-        .await
+        match zenmon_core::scout::scout_port_range(&config, 7446, 7546, Duration::from_secs(1))
+            .await
         {
             Ok(results) => {
                 let _ = tx.send(AppEvent::PortScanResults(results));
@@ -182,10 +165,7 @@ fn spawn_admin_polling_task(
     });
 }
 
-fn spawn_liveliness_subscriber(
-    session: &Session,
-    tx: mpsc::UnboundedSender<AppEvent>,
-) {
+fn spawn_liveliness_subscriber(session: &Session, tx: mpsc::UnboundedSender<AppEvent>) {
     let (liveliness_tx, mut liveliness_rx) =
         mpsc::unbounded_channel::<zenmon_core::types::LivelinessEvent>();
 

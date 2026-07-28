@@ -35,8 +35,7 @@ fn json_mode_emits_single_structured_error_on_bad_input() {
     );
 
     // Parses as the error envelope with a stable kind.
-    let v: serde_json::Value =
-        serde_json::from_str(trimmed).expect("stderr must be valid JSON");
+    let v: serde_json::Value = serde_json::from_str(trimmed).expect("stderr must be valid JSON");
     assert_eq!(v["error"]["kind"], "invalid_input");
     assert!(
         v["error"]["message"].is_string(),

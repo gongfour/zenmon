@@ -4,13 +4,13 @@ mod watch;
 
 use clap::Parser;
 use cli::{Cli, Command, ConfigCommand, ContractCommand, QueryableCommand, TraceCommand};
+use std::path::PathBuf;
+use std::time::Duration;
 use zenmon_core::config::{
     resolve_config, ConfigOverrides, EffectiveConfig, ResolvedConfig, ResolvedValue,
 };
 use zenmon_core::contract::{Contract, Enrichment};
 use zenmon_core::error::ZenmonError;
-use std::path::PathBuf;
-use std::time::Duration;
 
 /// Flatten an untyped failure (Zenoh's `Box<dyn Error>`, the TUI's
 /// `eyre::Report`, ...) into the CLI's error type.
@@ -93,8 +93,7 @@ fn pick_best_locator(locators: &[String]) -> Option<&str> {
         let is_ipv6 = addr.starts_with('[');
         let is_link_local = addr.starts_with("[fe80") || addr.starts_with("fe80");
         let is_loopback = addr.starts_with("127.") || addr.starts_with("[::1]");
-        let is_tailscale =
-            addr.starts_with("100.") || addr.starts_with("[fd7a:115c:a1e0");
+        let is_tailscale = addr.starts_with("100.") || addr.starts_with("[fd7a:115c:a1e0");
         if is_link_local || is_loopback {
             return 1;
         }
@@ -107,10 +106,7 @@ fn pick_best_locator(locators: &[String]) -> Option<&str> {
         }
         s
     };
-    locators
-        .iter()
-        .max_by_key(|l| score(l))
-        .map(|s| s.as_str())
+    locators.iter().max_by_key(|l| score(l)).map(|s| s.as_str())
 }
 
 fn print_scout_results(
@@ -191,13 +187,12 @@ fn print_nodes_table(nodes: &[zenmon_core::types::NodeInfo], note: Option<&str>)
 }
 
 fn parse_port_range(s: &str) -> Result<(u16, u16), ZenmonError> {
-    let (start_s, end_s) = s
-        .split_once('-')
-        .ok_or_else(|| ZenmonError::invalid_input(format!("port range must be START-END, got '{}'", s)))?;
-    let start: u16 = start_s
-        .trim()
-        .parse()
-        .map_err(|e| ZenmonError::invalid_input(format!("invalid start port '{}': {}", start_s, e)))?;
+    let (start_s, end_s) = s.split_once('-').ok_or_else(|| {
+        ZenmonError::invalid_input(format!("port range must be START-END, got '{}'", s))
+    })?;
+    let start: u16 = start_s.trim().parse().map_err(|e| {
+        ZenmonError::invalid_input(format!("invalid start port '{}': {}", start_s, e))
+    })?;
     let end: u16 = end_s
         .trim()
         .parse()
@@ -237,7 +232,12 @@ fn print_resolved<T: std::fmt::Display>(label: &str, value: &ResolvedValue<T>) {
 
 fn print_optional_resolved(label: &str, value: &ResolvedValue<Option<String>>) {
     let rendered = value.value.as_deref().unwrap_or("(none)");
-    println!("{:<16} {} ({})", format!("{}:", label), rendered, value.source);
+    println!(
+        "{:<16} {} ({})",
+        format!("{}:", label),
+        rendered,
+        value.source
+    );
 }
 
 fn print_effective_config(effective: &EffectiveConfig, json: bool) -> Result<(), ZenmonError> {
@@ -333,7 +333,10 @@ async fn main() {
                 "valid": false,
                 "error": { "code": "invalid_config", "message": e.to_string() },
             });
-            println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&output).unwrap_or_default()
+            );
             std::process::exit(2);
         }
         Err(e) => emit_error(e),
@@ -545,7 +548,9 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 println!("No replies for '{}'", key_expr);
             } else {
                 for msg in &outcome.replies {
-                    let att_str = msg.attachment.as_ref()
+                    let att_str = msg
+                        .attachment
+                        .as_ref()
                         .map(|a| format!(" [att: {}]", a))
                         .unwrap_or_default();
                     println!("{} | {}{}", msg.key_expr, msg.payload, att_str);
@@ -850,13 +855,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             per_port_timeout,
         } => {
             let (start, end) = parse_port_range(&port_range)?;
-            let results = zenmon_core::scout::scout_port_range(
-                &config,
-                start,
-                end,
-                per_port_timeout,
-            )
-            .await?;
+            let results =
+                zenmon_core::scout::scout_port_range(&config, start, end, per_port_timeout).await?;
 
             if cli.json {
                 let hits: Vec<_> = results.iter().filter(|r| !r.nodes.is_empty()).collect();
@@ -967,12 +967,24 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let now = std::time::SystemTime::now();
             let parse_bound =
                 |o: &Option<String>| -> Result<Option<std::time::SystemTime>, ZenmonError> {
-                    o.as_deref().map(|s| trace::parse_time_bound(s, now)).transpose()
+                    o.as_deref()
+                        .map(|s| trace::parse_time_bound(s, now))
+                        .transpose()
                 };
             match command {
-                TraceCommand::Stats { dir, key, since, until, top, max_payload_bytes } => {
-                    let filter =
-                        ReadFilter { key, since: parse_bound(&since)?, until: parse_bound(&until)? };
+                TraceCommand::Stats {
+                    dir,
+                    key,
+                    since,
+                    until,
+                    top,
+                    max_payload_bytes,
+                } => {
+                    let filter = ReadFilter {
+                        key,
+                        since: parse_bound(&since)?,
+                        until: parse_bound(&until)?,
+                    };
                     let stats = trace::topic_stats(
                         &dir,
                         &filter,
@@ -1006,8 +1018,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     max_payload_bytes,
                     cursor,
                 } => {
-                    let filter =
-                        ReadFilter { key, since: parse_bound(&since)?, until: parse_bound(&until)? };
+                    let filter = ReadFilter {
+                        key,
+                        since: parse_bound(&since)?,
+                        until: parse_bound(&until)?,
+                    };
                     let opts = ReadOptions {
                         filter,
                         limit: if limit == 0 { None } else { Some(limit) },
@@ -1055,7 +1070,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                             "returned {} of {} matched{}",
                             page.returned,
                             page.matched,
-                            if page.truncated { " (more — pass --cursor to continue)" } else { "" }
+                            if page.truncated {
+                                " (more — pass --cursor to continue)"
+                            } else {
+                                ""
+                            }
                         );
                     }
                 }
@@ -1105,14 +1124,23 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         dir.display()
                     );
                 }
-                Sink::Dir { writer, dir, max_total_size, max_age }
+                Sink::Dir {
+                    writer,
+                    dir,
+                    max_total_size,
+                    max_age,
+                }
             } else {
                 let out = output.clone().expect("clap guarantees output or dir");
                 let file = std::fs::File::create(&out).map_err(|e| {
                     ZenmonError::invalid_input(format!("cannot create {}: {}", out.display(), e))
                 })?;
                 if !cli.json {
-                    eprintln!("Capturing '{}' to {} ... (Ctrl+C to stop)", key_expr, out.display());
+                    eprintln!(
+                        "Capturing '{}' to {} ... (Ctrl+C to stop)",
+                        key_expr,
+                        out.display()
+                    );
                 }
                 Sink::File(std::io::BufWriter::new(file))
             };
@@ -1318,7 +1346,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // Resolve the fixed reply payload (@<path> / - / literal). Bytes,
             // not String, so a binary reply file survives as-is.
             let reply_bytes: Vec<u8> = resolve_payload_arg_bytes(&reply)?;
-            let reply_key = zenmon_core::queryable::resolve_reply_key(&key_expr, reply_key.as_deref())?;
+            let reply_key =
+                zenmon_core::queryable::resolve_reply_key(&key_expr, reply_key.as_deref())?;
             let max_request = max_request_bytes.map(|n| n as usize).unwrap_or(1024);
 
             let session = zenmon_core::session::open_session(&config).await?;
@@ -1462,7 +1491,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 let topic = contract.lookup(&key).ok_or_else(|| {
                     ZenmonError::not_found(format!("'{}' is not declared in the contract", key))
                 })?;
-                let resolve = |v: &Option<serde_json::Value>| v.as_ref().map(|s| contract.resolve_refs(s));
+                let resolve =
+                    |v: &Option<serde_json::Value>| v.as_ref().map(|s| contract.resolve_refs(s));
                 let payload = resolve(&topic.payload);
                 let phases = resolve(&topic.phases);
                 let request = resolve(&topic.request);
@@ -1554,8 +1584,22 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // A resolved contract lets --task surface & validate its request schema.
             let contract = load_contract_opt(&cli.contract)?;
             run_scenario(
-                cli.json, &config, observe, preset, prefix, pub_, task, pub_rate, pub_for,
-                pub_count, for_, settle, track, no_timeline, explain, contract,
+                cli.json,
+                &config,
+                observe,
+                preset,
+                prefix,
+                pub_,
+                task,
+                pub_rate,
+                pub_for,
+                pub_count,
+                for_,
+                settle,
+                track,
+                no_timeline,
+                explain,
+                contract,
             )
             .await?;
         }
@@ -1813,7 +1857,10 @@ async fn run_scenario(
     } else {
         "none".to_string()
     };
-    let track_specs: Vec<String> = specs.iter().map(|s| format!("{}:{}", s.key, s.field)).collect();
+    let track_specs: Vec<String> = specs
+        .iter()
+        .map(|s| format!("{}:{}", s.key, s.field))
+        .collect();
 
     // --explain: print the resolved plan and stop before any network side effect.
     if explain {
@@ -2022,9 +2069,10 @@ async fn run_scenario(
                     .find(|e| &e.key_expr == key && !e.trigger)
                     .map(|e| e.encoding.as_str())
                     .unwrap_or("");
-                if let (Some(obj), Ok(v)) =
-                    (entry.as_object_mut(), serde_json::to_value(c.enrich(key, enc)))
-                {
+                if let (Some(obj), Ok(v)) = (
+                    entry.as_object_mut(),
+                    serde_json::to_value(c.enrich(key, enc)),
+                ) {
                     obj.insert("contract".to_string(), v);
                 }
             }

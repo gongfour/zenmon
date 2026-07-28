@@ -120,7 +120,8 @@ mod tests {
     #[test]
     fn roundtrips_text_payload() {
         let m = msg("a/b", b"{\"x\":1}".to_vec(), None);
-        let rec = CaptureRecord::from_message(&m, Duration::from_millis(1500), std::time::UNIX_EPOCH);
+        let rec =
+            CaptureRecord::from_message(&m, Duration::from_millis(1500), std::time::UNIX_EPOCH);
         let line = serde_json::to_string(&rec).unwrap();
         let parsed = CaptureRecord::parse_line(&line, 1).unwrap();
         assert_eq!(parsed, rec);
@@ -184,9 +185,13 @@ mod tests {
     fn parse_accepts_v2_and_rejects_v3() {
         let m = msg("a/b", b"x".to_vec(), None);
         let t = std::time::UNIX_EPOCH + Duration::from_secs(1_752_668_096);
-        let line = serde_json::to_string(&CaptureRecord::from_message(&m, Duration::ZERO, t)).unwrap();
+        let line =
+            serde_json::to_string(&CaptureRecord::from_message(&m, Duration::ZERO, t)).unwrap();
         assert!(CaptureRecord::parse_line(&line, 1).is_ok());
         let v3 = line.replace("\"schema_version\":2", "\"schema_version\":3");
-        assert!(CaptureRecord::parse_line(&v3, 5).unwrap_err().message.contains("schema_version"));
+        assert!(CaptureRecord::parse_line(&v3, 5)
+            .unwrap_err()
+            .message
+            .contains("schema_version"));
     }
 }

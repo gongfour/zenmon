@@ -25,7 +25,9 @@ fn lint_reports_counts_and_warnings() {
     assert_eq!(v["services"], 2);
     let warnings = v["warnings"].as_array().unwrap();
     assert!(
-        warnings.iter().any(|w| w.as_str().unwrap().contains("not-implemented")),
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("not-implemented")),
         "should warn about the not-implemented topic: {warnings:?}"
     );
 }
@@ -53,7 +55,13 @@ fn list_emits_every_topic() {
 fn show_matches_placeholder_and_reports_encoding_override() {
     // A concrete sensor key resolves to the {sensor_id} entry.
     let out = zenmon()
-        .args(["--json", "contract", "show", "topic/sensor/pcd/front", FIXTURE])
+        .args([
+            "--json",
+            "contract",
+            "show",
+            "topic/sensor/pcd/front",
+            FIXTURE,
+        ])
         .output()
         .expect("run zenmon");
     assert!(out.status.success());
@@ -66,7 +74,13 @@ fn show_matches_placeholder_and_reports_encoding_override() {
 #[test]
 fn show_expands_ref_in_payload() {
     let out = zenmon()
-        .args(["--json", "contract", "show", "topic/navigation/robot_pose", FIXTURE])
+        .args([
+            "--json",
+            "contract",
+            "show",
+            "topic/navigation/robot_pose",
+            FIXTURE,
+        ])
         .output()
         .expect("run zenmon");
     assert!(out.status.success());

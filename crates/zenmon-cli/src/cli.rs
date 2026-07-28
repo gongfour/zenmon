@@ -561,7 +561,15 @@ mod tests {
         ])
         .is_ok());
         assert!(Cli::try_parse_from([
-            "zenmon", "trace", "read", "d", "--key", "a/*", "--limit", "50", "--last-per-key"
+            "zenmon",
+            "trace",
+            "read",
+            "d",
+            "--key",
+            "a/*",
+            "--limit",
+            "50",
+            "--last-per-key"
         ])
         .is_ok());
         assert!(Cli::try_parse_from([
@@ -582,10 +590,10 @@ mod tests {
 
     #[test]
     fn capture_output_and_dir_are_exclusive() {
-        assert!(Cli::try_parse_from([
-            "zenmon", "capture", "k/**", "-o", "f.ndjson", "--dir", "d"
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from(["zenmon", "capture", "k/**", "-o", "f.ndjson", "--dir", "d"])
+                .is_err()
+        );
     }
 
     #[test]
@@ -696,12 +704,19 @@ mod tests {
 
     #[test]
     fn pub_rate_allowed_with_count_or_duration() {
-        assert!(
-            Cli::try_parse_from(["zenmon", "pub", "test/k", "{}", "--rate", "10", "--count", "5"])
-                .is_ok()
-        );
         assert!(Cli::try_parse_from([
-            "zenmon", "pub", "test/k", "{}", "--rate", "10Hz", "--duration", "5s"
+            "zenmon", "pub", "test/k", "{}", "--rate", "10", "--count", "5"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon",
+            "pub",
+            "test/k",
+            "{}",
+            "--rate",
+            "10Hz",
+            "--duration",
+            "5s"
         ])
         .is_ok());
     }
@@ -782,8 +797,18 @@ mod tests {
     #[test]
     fn scenario_pub_and_task_conflict() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v", "--task",
-            "p", "{}",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub",
+            "k",
+            "v",
+            "--task",
+            "p",
+            "{}",
         ])
         .is_err());
     }
@@ -792,7 +817,14 @@ mod tests {
     #[test]
     fn scenario_pub_and_task_take_two_values() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "cmd/go",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub",
+            "cmd/go",
             "{\"go\":true}",
         ])
         .is_ok());
@@ -814,7 +846,14 @@ mod tests {
         .is_ok());
         // --pub with only one value is rejected (num_args = 2).
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "onlykey",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub",
+            "onlykey",
         ])
         .is_err());
     }
@@ -824,7 +863,13 @@ mod tests {
     #[test]
     fn scenario_no_timeline_flag_parses() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--no-timeline",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--no-timeline",
         ])
         .is_ok());
     }
@@ -832,7 +877,13 @@ mod tests {
     #[test]
     fn scenario_explain_flag_parses() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--preset", "stall", "--for", "8s", "--explain",
+            "zenmon",
+            "scenario",
+            "--preset",
+            "stall",
+            "--for",
+            "8s",
+            "--explain",
         ])
         .is_ok());
     }
@@ -840,8 +891,16 @@ mod tests {
     #[test]
     fn scenario_pub_rate_requires_pub() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub-rate", "10",
-            "--pub-for", "5s",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub-rate",
+            "10",
+            "--pub-for",
+            "5s",
         ])
         .is_err());
     }
@@ -851,8 +910,17 @@ mod tests {
     #[test]
     fn scenario_pub_rate_requires_bound() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
-            "--pub-rate", "10",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub",
+            "k",
+            "v",
+            "--pub-rate",
+            "10",
         ])
         .is_err());
     }
@@ -860,13 +928,35 @@ mod tests {
     #[test]
     fn scenario_pub_rate_allowed_with_pub_and_bound() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "11s", "--pub", "cmd/go",
-            "{\"go\":true}", "--pub-rate", "10", "--pub-for", "10s",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "11s",
+            "--pub",
+            "cmd/go",
+            "{\"go\":true}",
+            "--pub-rate",
+            "10",
+            "--pub-for",
+            "10s",
         ])
         .is_ok());
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
-            "--pub-rate", "10", "--pub-count", "50",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub",
+            "k",
+            "v",
+            "--pub-rate",
+            "10",
+            "--pub-count",
+            "50",
         ])
         .is_ok());
     }
@@ -876,12 +966,29 @@ mod tests {
     #[test]
     fn scenario_pub_one_shot_still_ok_and_bounds_require_rate() {
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub",
+            "k",
+            "v",
         ])
         .is_ok());
         assert!(Cli::try_parse_from([
-            "zenmon", "scenario", "--observe", "a/**", "--for", "8s", "--pub", "k", "v",
-            "--pub-for", "5s",
+            "zenmon",
+            "scenario",
+            "--observe",
+            "a/**",
+            "--for",
+            "8s",
+            "--pub",
+            "k",
+            "v",
+            "--pub-for",
+            "5s",
         ])
         .is_err());
     }

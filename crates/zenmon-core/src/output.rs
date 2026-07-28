@@ -146,7 +146,10 @@ mod tests {
     #[test]
     fn empty_is_canonical() {
         let empty: &[u32] = &[];
-        assert_eq!(to_collection_json(empty).unwrap(), r#"{"count":0,"items":[]}"#);
+        assert_eq!(
+            to_collection_json(empty).unwrap(),
+            r#"{"count":0,"items":[]}"#
+        );
     }
 
     #[test]
@@ -160,7 +163,10 @@ mod tests {
         let items = vec!["a", "b"];
         let json = to_collection_json(&items).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["count"].as_u64().unwrap() as usize, v["items"].as_array().unwrap().len());
+        assert_eq!(
+            v["count"].as_u64().unwrap() as usize,
+            v["items"].as_array().unwrap().len()
+        );
     }
 
     #[test]
@@ -197,10 +203,7 @@ mod tests {
         // even when there are zero successful replies.
         let items: &[i32] = &[];
         let json = to_query_json(items, &["parse failed"], false).unwrap();
-        assert_eq!(
-            json,
-            r#"{"count":0,"items":[],"errors":["parse failed"]}"#
-        );
+        assert_eq!(json, r#"{"count":0,"items":[],"errors":["parse failed"]}"#);
     }
 
     #[test]

@@ -1,9 +1,9 @@
 use color_eyre::Result;
 use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
-use zenmon_core::types::{LivelinessEvent, NodeInfo, PortScoutResult, ZenohMessage};
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
+use zenmon_core::types::{LivelinessEvent, NodeInfo, PortScoutResult, ZenohMessage};
 
 #[derive(Clone, Debug)]
 pub enum AppEvent {
@@ -95,7 +95,11 @@ impl EventHandler {
             }
         });
 
-        Self { tx, rx, _task: task }
+        Self {
+            tx,
+            rx,
+            _task: task,
+        }
     }
 
     pub fn sender(&self) -> mpsc::UnboundedSender<AppEvent> {
@@ -113,9 +117,7 @@ impl EventHandler {
         match self.rx.try_recv() {
             Ok(event) => Ok(Some(event)),
             Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => {
-                Err(color_eyre::eyre::eyre!("Event channel closed"))
-            }
+            Err(TryRecvError::Disconnected) => Err(color_eyre::eyre::eyre!("Event channel closed")),
         }
     }
 }

@@ -7,8 +7,8 @@ use ratatui::Frame;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     app.list_rect = None;
-    let [info_area, body_area] = Layout::vertical([Constraint::Length(5), Constraint::Fill(1)])
-        .areas(area);
+    let [info_area, body_area] =
+        Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).areas(area);
 
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -19,7 +19,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
     app.dash_topic_rect = Some(right_area);
 
     let (conn_str, conn_color) = match &app.connection_state {
-        ConnectionState::Connected(zid) => (format!("Connected ({})", &zid[..zid.len().min(16)]), Color::Green),
+        ConnectionState::Connected(zid) => (
+            format!("Connected ({})", &zid[..zid.len().min(16)]),
+            Color::Green,
+        ),
         ConnectionState::Connecting => ("Connecting...".to_string(), Color::Yellow),
         ConnectionState::Disconnected(reason) => (format!("Disconnected — {}", reason), Color::Red),
     };
@@ -72,8 +75,8 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             ),
         ]),
     ];
-    let info = Paragraph::new(info_text)
-        .block(Block::default().borders(Borders::ALL).title(" Overview "));
+    let info =
+        Paragraph::new(info_text).block(Block::default().borders(Borders::ALL).title(" Overview "));
     frame.render_widget(info, info_area);
 
     let node_items: Vec<ListItem> = app
@@ -93,16 +96,17 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             };
             let is_self = app.self_zid.as_deref().is_some_and(|z| z == node.zid);
             let zid_short = &node.zid[..node.zid.len().min(16)];
-            let mut spans = vec![
-                Span::styled(
-                    zid_short,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                zid_short,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )];
             if is_self {
-                spans.push(Span::styled(" (self)", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    " (self)",
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
             spans.extend([
                 Span::raw("  "),
@@ -137,10 +141,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 "-".to_string()
             };
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    &topic.key_expr,
-                    topic_style.add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(&topic.key_expr, topic_style.add_modifier(Modifier::BOLD)),
                 Span::raw("  "),
                 Span::styled(hz_str, Style::default().fg(Color::Green)),
             ]))

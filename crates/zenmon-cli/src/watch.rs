@@ -148,7 +148,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn both_set_duration_wins() {
         let (_tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
-        let out = drive(Bounds::new(Some(100), Some(Duration::from_secs(1))), &mut rx).await;
+        let out = drive(
+            Bounds::new(Some(100), Some(Duration::from_secs(1))),
+            &mut rx,
+        )
+        .await;
         assert!(out.is_empty());
     }
 

@@ -69,10 +69,9 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .collect();
 
     let list = List::new(items).block(
-        Block::default().borders(Borders::ALL).title(format!(
-            " Topics ({}) j/k:nav ",
-            filtered.len()
-        )),
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Topics ({}) j/k:nav ", filtered.len())),
     );
     frame.render_widget(list, list_area);
 
@@ -103,7 +102,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             let mut lines = vec![
                 Line::from(vec![
                     Span::styled("Topic: ", Style::default().fg(Color::Gray)),
-                    Span::styled(key, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        key,
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled("Updated: ", Style::default().fg(Color::Gray)),
@@ -125,7 +129,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 Line::from(vec![
                     Span::styled("Rate: ", Style::default().fg(Color::Gray)),
                     Span::styled(
-                        format!("{:.1} Hz", app.topic_hz.get(key.as_str()).copied().unwrap_or(0.0)),
+                        format!(
+                            "{:.1} Hz",
+                            app.topic_hz.get(key.as_str()).copied().unwrap_or(0.0)
+                        ),
                         Style::default().fg(Color::Green),
                     ),
                     Span::raw("  "),
@@ -162,7 +169,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             }
 
             let scroll_hint = if app.topic_detail_scroll > 0 {
-                format!(" Latest Value (J/K:scroll, line {}) ", app.topic_detail_scroll)
+                format!(
+                    " Latest Value (J/K:scroll, line {}) ",
+                    app.topic_detail_scroll
+                )
             } else {
                 " Latest Value (J/K:scroll) ".to_string()
             };
@@ -171,9 +181,8 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             let spark = app.topic_rate_series(key.as_str());
             let show_spark = detail_area.height >= 8 && spark.iter().any(|&b| b > 0);
             let main_area = if show_spark {
-                let [top, bottom] =
-                    Layout::vertical([Constraint::Fill(1), Constraint::Length(3)])
-                        .areas(detail_area);
+                let [top, bottom] = Layout::vertical([Constraint::Fill(1), Constraint::Length(3)])
+                    .areas(detail_area);
                 let sparkline = Sparkline::default()
                     .block(
                         Block::default()
@@ -198,7 +207,11 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 "No data received yet",
                 Style::default().fg(Color::DarkGray),
             )))
-            .block(Block::default().borders(Borders::ALL).title(" Latest Value "));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Latest Value "),
+            );
             frame.render_widget(detail, detail_area);
         }
     } else {
@@ -206,7 +219,11 @@ pub fn render(app: &mut App, frame: &mut Frame, area: ratatui::layout::Rect) {
             "No topic selected",
             Style::default().fg(Color::DarkGray),
         )))
-        .block(Block::default().borders(Borders::ALL).title(" Latest Value "));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Latest Value "),
+        );
         frame.render_widget(detail, detail_area);
     }
 }
