@@ -17,6 +17,8 @@ pub enum AppEvent {
     PortScanStarted,
     PortScanResults(Vec<PortScoutResult>),
     Liveliness(LivelinessEvent),
+    DoctorStarted,
+    DoctorReport(zenmon_core::doctor::DoctorReport),
 }
 
 /// Build the event-loop tick interval from the user's refresh `Duration`.

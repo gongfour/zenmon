@@ -1,6 +1,12 @@
+// Active spaces (phase 1 redesign).
+pub mod network;
+pub mod traffic;
+
+// Legacy per-tab views, kept in-tree for phases 3–5 to cannibalize. They are no
+// longer dispatched to; `#![allow(dead_code)]` in each keeps the build clean.
 pub mod dashboard;
 pub mod liveliness;
-pub mod network;
+pub mod network_legacy;
 pub mod nodes;
 pub mod query;
 pub mod stream;
@@ -15,6 +21,7 @@ use ratatui::Frame;
 
 /// Render a contextual empty state (why it's empty + the next action) in `area`,
 /// instead of leaving an ambiguous blank panel.
+#[allow(dead_code)]
 pub(crate) fn render_empty_state(frame: &mut Frame, area: Rect, reason: EmptyReason) {
     let (why, action) = empty_state_text(reason);
     let lines = vec![

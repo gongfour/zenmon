@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::app::{App, ConnectionState};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};

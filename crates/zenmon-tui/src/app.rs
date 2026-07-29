@@ -9,13 +9,14 @@ use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
 use zenmon_core::config::ConnectMode;
+use zenmon_core::doctor::{CheckStatus, DoctorReport};
 use zenmon_core::merge::merge_nodes;
 use zenmon_core::types::{
     LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage,
 };
 
-/// Return the tab index hit by a click at `(col, row)`, or `None`.
-pub(crate) fn tab_hit(rects: &[Option<Rect>; 7], col: u16, row: u16) -> Option<usize> {
+/// Return the space-tab index hit by a click at `(col, row)`, or `None`.
+pub(crate) fn space_tab_hit(rects: &[Option<Rect>; 2], col: u16, row: u16) -> Option<usize> {
     for (i, maybe) in rects.iter().enumerate() {
         if let Some(r) = maybe {
             if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
@@ -92,90 +93,153 @@ pub(crate) fn domain_port_label(port: u16) -> String {
     }
 }
 
-const TAB_TITLES: [&str; 7] = [
-    "Dashboard",
-    "Topics",
-    "Stream",
-    "Query",
-    "Nodes",
-    "Liveliness",
-    "Network",
-];
-
-/// One key binding, used as the single source of truth for both the compact
-/// status-bar hint and the `?` help overlay so they can't drift apart.
+/// A top-level navigation space. The redesign folds the old seven tabs into two
+/// drill-down spaces (see the TUI redesign spec).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct KeyHint {
-    pub keys: &'static str,
-    pub desc: &'static str,
+pub enum Space {
+    Traffic,
+    Network,
 }
 
-impl KeyHint {
-    const fn new(keys: &'static str, desc: &'static str) -> Self {
-        Self { keys, desc }
+impl Space {
+    pub fn index(self) -> usize {
+        match self {
+            Space::Traffic => 0,
+            Space::Network => 1,
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Space::Traffic => Space::Network,
+            Space::Network => Space::Traffic,
+        }
     }
 }
 
-/// Bindings available in every view.
-pub(crate) fn global_hints() -> &'static [KeyHint] {
-    const HINTS: &[KeyHint] = &[
-        KeyHint::new("1-6", "switch view"),
-        KeyHint::new("?", "toggle this help"),
-        KeyHint::new("m", "connection mode"),
-        KeyHint::new("P", "domain scan & switch"),
-        KeyHint::new("Esc", "back to Dashboard"),
-        KeyHint::new("q", "quit"),
-    ];
-    HINTS
+pub const SPACE_TITLES: [&str; 2] = ["Traffic", "Network"];
+
+/// A modal overlay drawn on top of the active space. `Palette` opens the `:`
+/// command list; `ScoutPort` is the numeric scout-port/domain switcher reached
+/// through the palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    None,
+    Help,
+    Doctor,
+    Palette,
+    ScoutPort,
 }
 
-/// Bindings specific to the given view.
-pub(crate) fn view_hints(view: ActiveView) -> &'static [KeyHint] {
-    const DASHBOARD: &[KeyHint] = &[KeyHint::new("click", "open item in its view")];
-    const TOPICS: &[KeyHint] = &[
-        KeyHint::new("j/k", "select topic"),
-        KeyHint::new("J/K", "scroll detail"),
-        KeyHint::new("Enter", "open in Stream"),
-        KeyHint::new("/", "filter"),
-        KeyHint::new("y/Y", "copy payload / key"),
-    ];
-    const STREAM: &[KeyHint] = &[
-        KeyHint::new("j/k", "scroll messages"),
-        KeyHint::new("Space", "pause / resume"),
-        KeyHint::new("f", "follow latest"),
-        KeyHint::new("/", "filter"),
-        KeyHint::new("y/Y", "copy payload / key"),
-    ];
-    const QUERY: &[KeyHint] = &[
-        KeyHint::new("i or /", "edit query"),
-        KeyHint::new("Enter", "run query"),
-        KeyHint::new("j/k", "select result"),
-        KeyHint::new("y", "copy payload"),
-    ];
-    const NODES: &[KeyHint] = &[
-        KeyHint::new("j/k", "select node"),
-        KeyHint::new("J/K", "scroll detail"),
-        KeyHint::new("s", "discover / refresh nodes"),
-        KeyHint::new("y", "copy ZID"),
-    ];
-    const LIVELINESS: &[KeyHint] = &[
-        KeyHint::new("j/k", "select token"),
-        KeyHint::new("J/K", "scroll event log"),
-        KeyHint::new("y", "copy key"),
-    ];
-    const NETWORK: &[KeyHint] = &[
-        KeyHint::new("J/K", "scroll graph"),
-        KeyHint::new("5", "node details"),
-    ];
-    match view {
-        ActiveView::Dashboard => DASHBOARD,
-        ActiveView::Topics => TOPICS,
-        ActiveView::Stream => STREAM,
-        ActiveView::Query => QUERY,
-        ActiveView::Nodes => NODES,
-        ActiveView::Liveliness => LIVELINESS,
-        ActiveView::Network => NETWORK,
-    }
+/// An effect the command palette can trigger. Each entry in [`palette_commands`]
+/// maps a human label to one of these; [`App::run_palette_action`] performs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteAction {
+    SwitchSpace(Space),
+    RunDoctor,
+    ScoutRefresh,
+    SetMode(ConnectMode),
+    OpenScoutPort,
+    OpenHelp,
+    Quit,
+}
+
+/// One row in the command palette / help overlay: a `label`, a short `key_hint`
+/// (the direct keybinding, if any), and the [`PaletteAction`] it runs.
+pub struct PaletteCommand {
+    pub label: &'static str,
+    pub key_hint: &'static str,
+    pub action: PaletteAction,
+}
+
+/// The static command table. The palette and help overlay both render from this
+/// list so the two can never drift out of sync.
+pub fn palette_commands() -> &'static [PaletteCommand] {
+    &[
+        PaletteCommand {
+            label: "Go to Traffic",
+            key_hint: "1",
+            action: PaletteAction::SwitchSpace(Space::Traffic),
+        },
+        PaletteCommand {
+            label: "Go to Network",
+            key_hint: "2",
+            action: PaletteAction::SwitchSpace(Space::Network),
+        },
+        PaletteCommand {
+            label: "Run doctor",
+            key_hint: "d",
+            action: PaletteAction::RunDoctor,
+        },
+        PaletteCommand {
+            label: "Refresh nodes (scout)",
+            key_hint: "s",
+            action: PaletteAction::ScoutRefresh,
+        },
+        PaletteCommand {
+            label: "Switch to peer mode",
+            key_hint: "",
+            action: PaletteAction::SetMode(ConnectMode::Peer),
+        },
+        PaletteCommand {
+            label: "Switch to client mode",
+            key_hint: "",
+            action: PaletteAction::SetMode(ConnectMode::Client),
+        },
+        PaletteCommand {
+            label: "Set scout domain / port…",
+            key_hint: "",
+            action: PaletteAction::OpenScoutPort,
+        },
+        PaletteCommand {
+            label: "Help",
+            key_hint: "?",
+            action: PaletteAction::OpenHelp,
+        },
+        PaletteCommand {
+            label: "Quit",
+            key_hint: "q",
+            action: PaletteAction::Quit,
+        },
+    ]
+}
+
+/// Which pane holds focus when the terminal is too narrow to show both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneFocus {
+    Master,
+    Detail,
+}
+
+/// Which mode the Traffic detail pane shows for the selected key: `Live` (latest
+/// payload + scrolling history) or `Query` (results of a `get` on the key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailMode {
+    Live,
+    Query,
+}
+
+/// A selectable row in the unified Network participant list: either a transport
+/// **Session** (index into `nodes`) or a liveliness **Service** (index into
+/// `liveliness_tokens`). Section/group headers are drawn by the view and are not
+/// part of this list — `network_selected` is a cursor over these rows only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkRow {
+    Session(usize),
+    Service(usize),
+}
+
+/// Minimum body width (columns) at which master and detail render side by side.
+/// Below this the space shows one pane at a time (Termux/tablet target).
+pub(crate) const TWO_PANE_MIN_WIDTH: u16 = 90;
+
+pub(crate) fn is_narrow(width: u16) -> bool {
+    width < TWO_PANE_MIN_WIDTH
+}
+
+/// How the active space splits its body area, given terminal width and focus.
+pub(crate) enum BodyLayout {
+    Split { master: Rect, detail: Rect },
+    Single { pane: Rect, focus: PaneFocus },
 }
 
 /// How many 1-second buckets of rate history to keep for sparklines.
@@ -263,46 +327,6 @@ pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static s
     }
 }
 
-/// Compact status-bar hint: quit + view switch + the top few view bindings,
-/// always ending with `?:help`. Wide terminals show more; the rest live in `?`.
-pub(crate) fn compact_hint(view: ActiveView) -> String {
-    let mut parts: Vec<String> = vec!["q:quit".into(), "1-7:view".into()];
-    for h in view_hints(view).iter().take(3) {
-        parts.push(format!(
-            "{}:{}",
-            h.keys,
-            h.desc.split(['/', ' ']).next().unwrap_or(h.desc)
-        ));
-    }
-    parts.push("?:help".into());
-    parts.join("  ")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActiveView {
-    Dashboard,
-    Topics,
-    Stream,
-    Query,
-    Nodes,
-    Liveliness,
-    Network,
-}
-
-impl ActiveView {
-    pub fn index(&self) -> usize {
-        match self {
-            ActiveView::Dashboard => 0,
-            ActiveView::Topics => 1,
-            ActiveView::Stream => 2,
-            ActiveView::Query => 3,
-            ActiveView::Nodes => 4,
-            ActiveView::Liveliness => 5,
-            ActiveView::Network => 6,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionState {
     Disconnected(String),
@@ -330,11 +354,14 @@ pub struct LivelinessEventRecord {
 const LIVELINESS_EVENT_CAP: usize = 200;
 
 pub struct App {
-    pub active_view: ActiveView,
+    pub space: Space,
+    pub overlay: Overlay,
+    pub pane_focus: PaneFocus,
+    pub detail_mode: DetailMode,
     pub should_quit: bool,
     pub connection_state: ConnectionState,
     pub endpoint: String,
-    pub tab_rects: [Option<ratatui::layout::Rect>; 7],
+    pub space_tab_rects: [Option<ratatui::layout::Rect>; 2],
 
     pub topics: Vec<TopicInfo>,
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
@@ -385,13 +412,14 @@ pub struct App {
     pub last_scout_at: Option<SystemTime>,
     pub pending_scout_request: bool,
 
-    pub scout_port_modal_open: bool,
     pub scout_port_input: String,
     pub scout_port_current: Option<u16>,
     pub current_mode: ConnectMode,
-    pub mode_modal_open: bool,
-    pub mode_modal_selection: ConnectMode,
     pub pending_reconnect_mode: Option<ConnectMode>,
+
+    /// Command-palette filter text and selected filtered-row index.
+    pub palette_input: String,
+    pub palette_selected: usize,
     pub port_scan_results: Vec<PortScoutResult>,
     pub port_scan_selected: usize,
     pub port_scan_in_progress: bool,
@@ -401,6 +429,12 @@ pub struct App {
     pub list_rect: Option<ratatui::layout::Rect>,
     pub list_first_item_row: u16,
     pub list_scroll_offset: usize,
+
+    /// One entry per rendered Network-master display row: `Some(selectable_index)`
+    /// (an index into [`App::network_rows`] / the `network_selected` space) for a
+    /// Session/Service row, or `None` for a non-selectable section/group header.
+    /// Rebuilt every Network render so clicks map back to the right participant.
+    pub network_click_map: Vec<Option<usize>>,
 
     pub toast: Option<(String, std::time::Instant)>,
     pub toast_is_error: bool,
@@ -412,7 +446,6 @@ pub struct App {
     pub liveliness_events: VecDeque<LivelinessEventRecord>,
     pub liveliness_log_scroll: u16,
 
-    pub help_open: bool,
     pub help_scroll: u16,
 
     /// Dashboard summary-panel rects, for click-to-navigate.
@@ -420,16 +453,32 @@ pub struct App {
     pub dash_topic_rect: Option<ratatui::layout::Rect>,
 
     pub network_scroll: u16,
+
+    /// Cursor over the unified Network participant list (see [`NetworkRow`]).
+    pub network_selected: usize,
+
+    /// Latest one-shot diagnostics report (drives the header health dot and the
+    /// Doctor overlay). `None` until the first `doctor` run completes.
+    pub doctor_report: Option<DoctorReport>,
+    /// A doctor run is in flight (set on `DoctorStarted`, cleared on report).
+    pub doctor_running: bool,
+    /// Scroll offset for the Doctor overlay check list.
+    pub doctor_scroll: u16,
+    /// Set to request a doctor run; consumed by the run-loop in `lib.rs`.
+    pub pending_doctor_request: bool,
 }
 
 impl App {
     pub fn new(endpoint: String) -> Self {
         Self {
-            active_view: ActiveView::Dashboard,
+            space: Space::Traffic,
+            overlay: Overlay::None,
+            pane_focus: PaneFocus::Master,
+            detail_mode: DetailMode::Live,
             should_quit: false,
             connection_state: ConnectionState::Connecting,
             endpoint,
-            tab_rects: [None; 7],
+            space_tab_rects: [None; 2],
             topics: Vec::new(),
             topic_latest: HashMap::new(),
             admin_nodes: Vec::new(),
@@ -468,13 +517,12 @@ impl App {
             scout_in_progress: false,
             last_scout_at: None,
             pending_scout_request: false,
-            scout_port_modal_open: false,
             scout_port_input: String::new(),
             scout_port_current: None,
             current_mode: ConnectMode::Client,
-            mode_modal_open: false,
-            mode_modal_selection: ConnectMode::Client,
             pending_reconnect_mode: None,
+            palette_input: String::new(),
+            palette_selected: 0,
             port_scan_results: Vec::new(),
             port_scan_selected: 0,
             port_scan_in_progress: false,
@@ -483,6 +531,7 @@ impl App {
             list_rect: None,
             list_first_item_row: 0,
             list_scroll_offset: 0,
+            network_click_map: Vec::new(),
             toast: None,
             toast_is_error: false,
             self_zid: None,
@@ -490,11 +539,15 @@ impl App {
             liveliness_selected: 0,
             liveliness_events: VecDeque::with_capacity(LIVELINESS_EVENT_CAP),
             liveliness_log_scroll: 0,
-            help_open: false,
             help_scroll: 0,
             dash_node_rect: None,
             dash_topic_rect: None,
             network_scroll: 0,
+            network_selected: 0,
+            doctor_report: None,
+            doctor_running: false,
+            doctor_scroll: 0,
+            pending_doctor_request: false,
         }
     }
 
@@ -581,6 +634,13 @@ impl App {
                 self.port_scan_in_progress = false;
             }
             AppEvent::Liveliness(event) => self.handle_liveliness(event),
+            AppEvent::DoctorStarted => {
+                self.doctor_running = true;
+            }
+            AppEvent::DoctorReport(report) => {
+                self.doctor_report = Some(report);
+                self.doctor_running = false;
+            }
         }
     }
 
@@ -648,86 +708,347 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        if self.help_open {
-            self.handle_help_key(key);
+        if self.overlay == Overlay::Palette {
+            self.handle_palette_key(key);
             return;
         }
-        if self.scout_port_modal_open {
+        if self.overlay == Overlay::ScoutPort {
             self.handle_scout_modal_key(key);
             return;
         }
-        if self.mode_modal_open {
-            self.handle_mode_modal_key(key);
+        if self.overlay == Overlay::Doctor {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
+                    self.overlay = Overlay::None;
+                }
+                KeyCode::Char('r') => self.pending_doctor_request = true,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.doctor_scroll = self.doctor_scroll.saturating_add(1)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.doctor_scroll = self.doctor_scroll.saturating_sub(1)
+                }
+                _ => {}
+            }
             return;
         }
-        if !self.is_text_input_active() {
+        if self.overlay != Overlay::None {
             match key.code {
-                KeyCode::Char('?') => {
-                    self.help_open = true;
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    self.overlay = Overlay::None;
                     self.help_scroll = 0;
                 }
-                KeyCode::Char('q') => {
-                    self.should_quit = true;
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.help_scroll = self.help_scroll.saturating_add(1)
                 }
-                KeyCode::Char('P') => {
-                    self.scout_port_modal_open = true;
-                    self.scout_port_input.clear();
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1)
                 }
-                KeyCode::Char('m') => {
-                    self.mode_modal_open = true;
-                    self.mode_modal_selection = self.current_mode;
-                }
-                KeyCode::Char('1') => self.active_view = ActiveView::Dashboard,
-                KeyCode::Char('2') => self.active_view = ActiveView::Topics,
-                KeyCode::Char('3') => self.active_view = ActiveView::Stream,
-                KeyCode::Char('4') => self.active_view = ActiveView::Query,
-                KeyCode::Char('5') => self.active_view = ActiveView::Nodes,
-                KeyCode::Char('6') => self.active_view = ActiveView::Liveliness,
-                KeyCode::Char('7') => self.active_view = ActiveView::Network,
-                KeyCode::Esc => {
-                    self.active_view = ActiveView::Dashboard;
-                }
-                _ => self.handle_view_key(key),
+                _ => {}
             }
-        } else {
+            return;
+        }
+        // Text input (filters, query editor, modals) swallows every key so that
+        // typing `q`/`1`/`2`/`?` edits text instead of triggering global actions.
+        if self.is_text_input_active() {
             self.handle_text_input_key(key);
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('?') => {
+                self.overlay = Overlay::Help;
+                self.help_scroll = 0;
+            }
+            KeyCode::Char('d') => {
+                self.overlay = Overlay::Doctor;
+                self.doctor_scroll = 0;
+                self.pending_doctor_request = true;
+            }
+            KeyCode::Char(':') => {
+                self.overlay = Overlay::Palette;
+                self.palette_input.clear();
+                self.palette_selected = 0;
+            }
+            KeyCode::Tab => self.switch_space(self.space.next()),
+            KeyCode::Char('1') => self.switch_space(Space::Traffic),
+            KeyCode::Char('2') => self.switch_space(Space::Network),
+            KeyCode::Enter | KeyCode::Right => self.pane_focus = PaneFocus::Detail,
+            KeyCode::Esc | KeyCode::Left => self.pane_focus = PaneFocus::Master,
+            _ => self.handle_space_key(key),
         }
     }
 
-    fn handle_help_key(&mut self, key: KeyEvent) {
+    /// Dispatch a key not claimed by the global chrome to the active space.
+    fn handle_space_key(&mut self, key: KeyEvent) {
+        match self.space {
+            Space::Traffic => self.handle_traffic_key(key),
+            Space::Network => self.handle_network_key(key),
+        }
+    }
+
+    /// Traffic-space normal-mode keys (master navigation + detail actions).
+    /// Global keys (`q`, `?`, `Tab`, `1`/`2`, `Enter`/`Esc`) are consumed by
+    /// `handle_key` before this runs.
+    fn handle_traffic_key(&mut self, key: KeyEvent) {
+        if let Some(action) = detail_scroll_action(key) {
+            self.topic_detail_scroll = apply_detail_scroll(self.topic_detail_scroll, action);
+            return;
+        }
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
-                self.help_open = false;
-                self.help_scroll = 0;
+            KeyCode::Char('j') | KeyCode::Down => self.move_topic_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_topic_selection(-1),
+            KeyCode::Char('/') => self.topics_filtering = true,
+            KeyCode::Char('L') => self.detail_mode = DetailMode::Live,
+            KeyCode::Char('Q') => {
+                self.detail_mode = DetailMode::Query;
+                if let Some(key_expr) = self.selected_topic_key() {
+                    self.query_history.push(key_expr.clone());
+                    self.pending_query = Some(key_expr);
+                }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.help_scroll = self.help_scroll.saturating_add(1);
+            KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
+            KeyCode::Char('f') => {
+                self.follow_stream();
+                self.topic_detail_scroll = 0;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.help_scroll = self.help_scroll.saturating_sub(1);
-            }
+            KeyCode::Char('y') => self.copy_selected_payload(),
+            KeyCode::Char('Y') => self.copy_selected_key(),
             _ => {}
         }
+    }
+
+    /// Move the master cursor within `filtered_topics()`, clamped to bounds, and
+    /// reset the detail scroll so the new selection starts at the top.
+    fn move_topic_selection(&mut self, delta: isize) {
+        let len = self.filtered_topics().len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.topic_selected.min(len - 1) as isize;
+        self.topic_selected = (cur + delta).clamp(0, len as isize - 1) as usize;
+        self.topic_detail_scroll = 0;
+    }
+
+    /// The key expression currently selected in the Traffic master, if any.
+    fn selected_topic_key(&self) -> Option<String> {
+        self.filtered_topics()
+            .get(self.topic_selected)
+            .map(|t| t.key_expr.clone())
+    }
+
+    fn copy_selected_payload(&mut self) {
+        let Some(key) = self.selected_topic_key() else {
+            self.set_error_toast("No key selected to copy");
+            return;
+        };
+        match self.topic_latest.get(&key).map(|(m, _)| m.payload.pretty()) {
+            Some(text) => self.copy_to_clipboard(text, "payload"),
+            None => self.set_error_toast("No payload received for selected key"),
+        }
+    }
+
+    fn copy_selected_key(&mut self) {
+        match self.selected_topic_key() {
+            Some(key) => self.copy_to_clipboard(key, "key"),
+            None => self.set_error_toast("No key selected to copy"),
+        }
+    }
+
+    /// Network-space normal-mode keys (unified participant navigation + detail
+    /// actions). Global keys are consumed by `handle_key` before this runs.
+    fn handle_network_key(&mut self, key: KeyEvent) {
+        if let Some(action) = detail_scroll_action(key) {
+            self.node_detail_scroll = apply_detail_scroll(self.node_detail_scroll, action);
+            return;
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => self.move_network_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_network_selection(-1),
+            KeyCode::Char('s') => {
+                if !self.scout_in_progress {
+                    self.pending_scout_request = true;
+                }
+            }
+            KeyCode::Char('y') => self.copy_selected_participant(),
+            _ => {}
+        }
+    }
+
+    /// Move the unified cursor within `network_rows()`, clamped to bounds, and
+    /// reset the detail scroll so the new selection starts at the top.
+    fn move_network_selection(&mut self, delta: isize) {
+        let len = self.network_rows().len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.network_selected.min(len - 1) as isize;
+        self.network_selected = (cur + delta).clamp(0, len as isize - 1) as usize;
+        self.node_detail_scroll = 0;
+    }
+
+    fn copy_selected_participant(&mut self) {
+        match self.selected_network_row() {
+            Some(NetworkRow::Session(i)) => {
+                let zid = self.nodes[i].zid.clone();
+                self.copy_to_clipboard(zid, "zid");
+            }
+            Some(NetworkRow::Service(i)) => {
+                let key = self.liveliness_tokens[i].key_expr.clone();
+                self.copy_to_clipboard(key, "key");
+            }
+            None => self.set_error_toast("No participant selected to copy"),
+        }
+    }
+
+    /// The unified list of selectable participant rows, in display order: every
+    /// transport session (in node order) followed by every liveliness service.
+    /// Services are ordered so tokens of the same group are contiguous (groups in
+    /// first-appearance order), which is exactly the order the view draws them —
+    /// so `network_selected` maps 1:1 onto the rendered rows.
+    pub(crate) fn network_rows(&self) -> Vec<NetworkRow> {
+        let mut rows: Vec<NetworkRow> = (0..self.nodes.len()).map(NetworkRow::Session).collect();
+
+        let mut group_order: Vec<String> = Vec::new();
+        let mut by_group: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, token) in self.liveliness_tokens.iter().enumerate() {
+            let group = token
+                .group_prefix()
+                .unwrap_or_else(|| "(ungrouped)".to_string());
+            if !by_group.contains_key(&group) {
+                group_order.push(group.clone());
+            }
+            by_group.entry(group).or_default().push(i);
+        }
+        for group in &group_order {
+            for &i in &by_group[group] {
+                rows.push(NetworkRow::Service(i));
+            }
+        }
+        rows
+    }
+
+    /// The participant row under the unified cursor, if any.
+    pub(crate) fn selected_network_row(&self) -> Option<NetworkRow> {
+        self.network_rows().get(self.network_selected).copied()
+    }
+
+    fn switch_space(&mut self, space: Space) {
+        self.space = space;
+        self.pane_focus = PaneFocus::Master;
     }
 
     fn is_text_input_active(&self) -> bool {
         self.topics_filtering
             || self.stream_filtering
             || self.query_editing
-            || self.scout_port_modal_open
-            || self.mode_modal_open
+            || self.overlay == Overlay::Palette
+            || self.overlay == Overlay::ScoutPort
     }
 
+    /// Indices into [`palette_commands`] whose label contains `palette_input`
+    /// (case-insensitive substring). Empty input matches everything.
+    pub(crate) fn filtered_palette_commands(&self) -> Vec<usize> {
+        let needle = self.palette_input.to_ascii_lowercase();
+        palette_commands()
+            .iter()
+            .enumerate()
+            .filter(|(_, cmd)| {
+                needle.is_empty() || cmd.label.to_ascii_lowercase().contains(&needle)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Command-palette key handling: printable chars filter, arrows/Tab move the
+    /// cursor within the filtered list, Enter runs, Esc closes.
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+            }
+            KeyCode::Enter => {
+                let filtered = self.filtered_palette_commands();
+                if let Some(&idx) = filtered.get(self.palette_selected) {
+                    let action = palette_commands()[idx].action;
+                    self.run_palette_action(action);
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let len = self.filtered_palette_commands().len();
+                if len > 0 {
+                    self.palette_selected = (self.palette_selected + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => {
+                self.palette_selected = self.palette_selected.saturating_sub(1);
+            }
+            KeyCode::Backspace => {
+                self.palette_input.pop();
+                self.palette_selected = 0;
+            }
+            KeyCode::Char(c) => {
+                self.palette_input.push(c);
+                self.palette_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Perform a palette command's effect. Every action closes the palette,
+    /// except `OpenScoutPort`, which transitions to the ScoutPort overlay.
+    fn run_palette_action(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::SwitchSpace(space) => {
+                self.switch_space(space);
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::RunDoctor => {
+                self.overlay = Overlay::Doctor;
+                self.doctor_scroll = 0;
+                self.pending_doctor_request = true;
+            }
+            PaletteAction::ScoutRefresh => {
+                if !self.scout_in_progress {
+                    self.pending_scout_request = true;
+                }
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::SetMode(mode) => {
+                if mode != self.current_mode {
+                    self.pending_reconnect_mode = Some(mode);
+                    self.set_toast(format!("Switching to {} mode…", mode));
+                } else {
+                    self.set_toast(format!("Already in {} mode", mode));
+                }
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::OpenScoutPort => {
+                self.overlay = Overlay::ScoutPort;
+                self.scout_port_input.clear();
+            }
+            PaletteAction::OpenHelp => {
+                self.overlay = Overlay::Help;
+                self.help_scroll = 0;
+            }
+            PaletteAction::Quit => {
+                self.should_quit = true;
+            }
+        }
+    }
+
+    /// ScoutPort modal key handling: type a custom port, scan domains, or pick a
+    /// scanned result, then reconnect on that scout port.
     fn handle_scout_modal_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
-                self.scout_port_modal_open = false;
+                self.overlay = Overlay::None;
                 self.scout_port_input.clear();
             }
-            KeyCode::Char('s') => {
-                if self.scout_port_input.is_empty() && !self.port_scan_in_progress {
-                    self.pending_port_scan_request = true;
-                }
+            KeyCode::Char('s')
+                if self.scout_port_input.is_empty() && !self.port_scan_in_progress =>
+            {
+                self.pending_port_scan_request = true;
             }
             KeyCode::Enter => {
                 let from_input = self
@@ -748,17 +1069,15 @@ impl App {
                 if let Some(port) = from_input.or(from_list) {
                     self.pending_reconnect_port = Some(port);
                     self.scout_port_current = Some(port);
-                    self.scout_port_modal_open = false;
+                    self.overlay = Overlay::None;
                     self.scout_port_input.clear();
                     self.set_toast(format!("Reconnecting with scout port {}", port));
                 } else {
                     self.set_error_toast("Type a port or scan and select one");
                 }
             }
-            KeyCode::Char(c) if c.is_ascii_digit() => {
-                if self.scout_port_input.len() < 5 {
-                    self.scout_port_input.push(c);
-                }
+            KeyCode::Char(c) if c.is_ascii_digit() && self.scout_port_input.len() < 5 => {
+                self.scout_port_input.push(c);
             }
             KeyCode::Backspace => {
                 self.scout_port_input.pop();
@@ -767,13 +1086,12 @@ impl App {
                 self.port_scan_selected = self.port_scan_selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let hits = self
+                let count = self
                     .port_scan_results
                     .iter()
                     .filter(|r| !r.nodes.is_empty())
                     .count();
-                let max = hits.saturating_sub(1);
-                if self.port_scan_selected < max {
+                if count > 0 && self.port_scan_selected + 1 < count {
                     self.port_scan_selected += 1;
                 }
             }
@@ -781,207 +1099,86 @@ impl App {
         }
     }
 
-    fn handle_mode_modal_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('m') => {
-                self.mode_modal_open = false;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.mode_modal_selection = ConnectMode::Peer;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.mode_modal_selection = ConnectMode::Client;
-            }
-            KeyCode::Enter => {
-                let target = self.mode_modal_selection;
-                self.mode_modal_open = false;
-                let label = match target {
-                    ConnectMode::Peer => "peer",
-                    ConnectMode::Client => "client",
-                };
-                if target == self.current_mode {
-                    self.set_toast(format!("Already in {} mode", label));
-                } else {
-                    self.pending_reconnect_mode = Some(target);
-                    self.set_toast(format!("Switching to {} mode...", label));
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn handle_mouse(&mut self, ev: MouseEvent) {
-        if self.is_text_input_active() {
+        // No mouse routing while a text input or any overlay is active — the
+        // overlays own their own keyboard-driven scroll and selection.
+        if self.is_text_input_active() || self.overlay != Overlay::None {
             return;
         }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => self.handle_click(ev.column, ev.row),
-            MouseEventKind::ScrollUp => self.handle_wheel_up(),
-            MouseEventKind::ScrollDown => self.handle_wheel_down(),
+            MouseEventKind::ScrollUp => self.wheel(-1),
+            MouseEventKind::ScrollDown => self.wheel(1),
             _ => {}
         }
     }
 
-    /// Which Dashboard summary row (if any) a click landed on. Returns the
-    /// target view and the item index; `None` for borders / empty rows / clicks
-    /// outside both panels.
-    pub(crate) fn dashboard_click_target(&self, col: u16, row: u16) -> Option<(ActiveView, usize)> {
-        let in_rect = |rect: ratatui::layout::Rect| col >= rect.x && col < rect.x + rect.width;
-        if let Some(rect) = self.dash_node_rect {
-            if in_rect(rect) {
-                if let Some(idx) = list_hit(rect, row, 0, self.nodes.len(), rect.y + 1) {
-                    return Some((ActiveView::Nodes, idx));
-                }
-            }
+    /// Move the active space's master selection by `delta` (mouse-wheel parity
+    /// with `j`/`k`). Both movers clamp and reset the detail scroll.
+    fn wheel(&mut self, delta: isize) {
+        match self.space {
+            Space::Traffic => self.move_topic_selection(delta),
+            Space::Network => self.move_network_selection(delta),
         }
-        if let Some(rect) = self.dash_topic_rect {
-            if in_rect(rect) {
-                if let Some(idx) = list_hit(rect, row, 0, self.topics.len(), rect.y + 1) {
-                    return Some((ActiveView::Topics, idx));
-                }
-            }
-        }
-        None
     }
 
     fn handle_click(&mut self, col: u16, row: u16) {
-        if let Some(idx) = tab_hit(&self.tab_rects, col, row) {
-            self.active_view = match idx {
-                0 => ActiveView::Dashboard,
-                1 => ActiveView::Topics,
-                2 => ActiveView::Stream,
-                3 => ActiveView::Query,
-                4 => ActiveView::Nodes,
-                5 => ActiveView::Liveliness,
-                6 => ActiveView::Network,
-                _ => self.active_view,
+        if let Some(idx) = space_tab_hit(&self.space_tab_rects, col, row) {
+            self.space = match idx {
+                0 => Space::Traffic,
+                _ => Space::Network,
             };
+            self.pane_focus = PaneFocus::Master;
             return;
         }
 
-        // Dashboard summary panels are the entry point into the detailed views.
-        if self.active_view == ActiveView::Dashboard {
-            if let Some((view, idx)) = self.dashboard_click_target(col, row) {
-                match view {
-                    ActiveView::Nodes => {
-                        self.active_view = ActiveView::Nodes;
-                        self.node_selected = idx;
-                        self.node_detail_scroll = 0;
-                    }
-                    ActiveView::Topics => {
-                        // Clear any filter so the clicked index maps directly.
-                        self.topic_filter.clear();
-                        self.active_view = ActiveView::Topics;
-                        self.topic_selected = idx;
-                        self.topic_detail_scroll = 0;
-                    }
-                    _ => {}
-                }
-            }
-            return;
-        }
-
+        // A click inside the master list selects the row under the cursor. Each
+        // space maps a display row to a selection differently: Traffic rows are
+        // 1:1 with `filtered_topics()`, while Network interleaves non-selectable
+        // headers, so its click goes through `network_click_map`.
         let Some(rect) = self.list_rect else {
             return;
         };
-        if col < rect.x || col >= rect.x + rect.width {
+        let inside = col >= rect.x
+            && col < rect.x + rect.width
+            && row >= rect.y
+            && row < rect.y + rect.height;
+        if !inside {
             return;
         }
-        let total = match self.active_view {
-            ActiveView::Topics => self.filtered_topics().len(),
-            ActiveView::Stream => self.filtered_sub_messages().len(),
-            ActiveView::Query => self.query_results.len(),
-            ActiveView::Nodes => self.nodes.len(),
-            ActiveView::Liveliness => self.liveliness_tokens.len(),
-            ActiveView::Dashboard | ActiveView::Network => return,
-        };
-        let Some(idx) = list_hit(
-            rect,
-            row,
-            self.list_scroll_offset,
-            total,
-            self.list_first_item_row,
-        ) else {
-            return;
-        };
-        match self.active_view {
-            ActiveView::Topics => {
-                self.topic_selected = idx;
-                self.topic_detail_scroll = 0;
-            }
-            ActiveView::Stream => self.pin_stream_at(idx),
-            ActiveView::Query => self.query_selected = idx,
-            ActiveView::Nodes => self.node_selected = idx,
-            ActiveView::Liveliness => {
-                self.liveliness_selected = idx;
-                self.liveliness_log_scroll = 0;
-            }
-            ActiveView::Dashboard | ActiveView::Network => {}
-        }
-    }
 
-    fn handle_wheel_up(&mut self) {
-        match self.active_view {
-            ActiveView::Topics => {
-                self.topic_selected = self.topic_selected.saturating_sub(1);
-                self.topic_detail_scroll = 0;
-            }
-            ActiveView::Stream => {
-                self.pin_stream_at(self.sub_selected.saturating_sub(1));
-            }
-            ActiveView::Query => {
-                self.query_selected = self.query_selected.saturating_sub(1);
-            }
-            ActiveView::Nodes => {
-                self.node_selected = self.node_selected.saturating_sub(1);
-            }
-            ActiveView::Liveliness => {
-                self.liveliness_selected = self.liveliness_selected.saturating_sub(1);
-            }
-            ActiveView::Network => {
-                self.network_scroll = self.network_scroll.saturating_sub(1);
-            }
-            ActiveView::Dashboard => {}
-        }
-    }
-
-    fn handle_wheel_down(&mut self) {
-        match self.active_view {
-            ActiveView::Topics => {
-                let max = self.filtered_topics().len().saturating_sub(1);
-                if self.topic_selected < max {
-                    self.topic_selected += 1;
+        match self.space {
+            Space::Traffic => {
+                if let Some(idx) = list_hit(
+                    rect,
+                    row,
+                    self.list_scroll_offset,
+                    self.filtered_topics().len(),
+                    self.list_first_item_row,
+                ) {
+                    self.topic_selected = idx;
                     self.topic_detail_scroll = 0;
+                    // Drill into the detail pane; a no-op visually in wide mode
+                    // (both panes show) but the intended action when narrow.
+                    self.pane_focus = PaneFocus::Detail;
                 }
             }
-            ActiveView::Stream => {
-                let max = self.filtered_sub_messages().len().saturating_sub(1);
-                if self.sub_selected < max {
-                    self.pin_stream_at(self.sub_selected + 1);
+            Space::Network => {
+                if let Some(disp) = list_hit(
+                    rect,
+                    row,
+                    self.list_scroll_offset,
+                    self.network_click_map.len(),
+                    self.list_first_item_row,
+                ) {
+                    // A header row maps to `Some(&None)` → leave selection alone.
+                    if let Some(&Some(sel)) = self.network_click_map.get(disp) {
+                        self.network_selected = sel;
+                        self.node_detail_scroll = 0;
+                        self.pane_focus = PaneFocus::Detail;
+                    }
                 }
             }
-            ActiveView::Query => {
-                let max = self.query_results.len().saturating_sub(1);
-                if self.query_selected < max {
-                    self.query_selected += 1;
-                }
-            }
-            ActiveView::Nodes => {
-                let max = self.nodes.len().saturating_sub(1);
-                if self.node_selected < max {
-                    self.node_selected += 1;
-                }
-            }
-            ActiveView::Liveliness => {
-                let max = self.liveliness_tokens.len().saturating_sub(1);
-                if self.liveliness_selected < max {
-                    self.liveliness_selected += 1;
-                }
-            }
-            ActiveView::Network => {
-                self.network_scroll = self.network_scroll.saturating_add(1);
-            }
-            ActiveView::Dashboard => {}
         }
     }
 
@@ -1030,181 +1227,6 @@ impl App {
                     self.query_input.pop();
                 }
             }
-            _ => {}
-        }
-    }
-
-    fn handle_view_key(&mut self, key: KeyEvent) {
-        // Detail-panel scroll (uppercase J/K) is uniform across views.
-        if let Some(action) = detail_scroll_action(key) {
-            match self.active_view {
-                ActiveView::Topics => {
-                    self.topic_detail_scroll = apply_detail_scroll(self.topic_detail_scroll, action)
-                }
-                ActiveView::Nodes => {
-                    self.node_detail_scroll = apply_detail_scroll(self.node_detail_scroll, action)
-                }
-                ActiveView::Liveliness => {
-                    self.liveliness_log_scroll =
-                        apply_detail_scroll(self.liveliness_log_scroll, action)
-                }
-                ActiveView::Network => {
-                    self.network_scroll = apply_detail_scroll(self.network_scroll, action)
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        match self.active_view {
-            ActiveView::Topics => match (key.modifiers, key.code) {
-                (_, KeyCode::Char('/')) => self.topics_filtering = true,
-                (_, KeyCode::Char('y')) => {
-                    let filtered = self.filtered_topics();
-                    if let Some(topic) = filtered.get(self.topic_selected) {
-                        let key = topic.key_expr.clone();
-                        drop(filtered);
-                        if let Some((msg, _)) = self.topic_latest.get(&key).cloned() {
-                            let text = payload_to_string(&msg.payload);
-                            self.copy_to_clipboard(text, "payload");
-                        } else {
-                            self.set_error_toast("No data for selected topic");
-                        }
-                    }
-                }
-                (_, KeyCode::Char('Y')) => {
-                    let filtered = self.filtered_topics();
-                    if let Some(topic) = filtered.get(self.topic_selected) {
-                        let text = topic.key_expr.clone();
-                        drop(filtered);
-                        self.copy_to_clipboard(text, "key_expr");
-                    }
-                }
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    self.topic_selected = self.topic_selected.saturating_sub(1);
-                    self.topic_detail_scroll = 0;
-                }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    let max = self.filtered_topics().len().saturating_sub(1);
-                    if self.topic_selected < max {
-                        self.topic_selected += 1;
-                    }
-                    self.topic_detail_scroll = 0;
-                }
-                (_, KeyCode::Enter) => {
-                    self.open_selected_topic_in_stream();
-                }
-                _ => {}
-            },
-            ActiveView::Stream => match key.code {
-                KeyCode::Char('/') => {
-                    if let Some(key) = &self.stream_key_filter {
-                        self.stream_filter = key.clone();
-                    }
-                    self.stream_filtering = true;
-                }
-                KeyCode::Char('f') => self.follow_stream(),
-                KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
-                KeyCode::Char('y') => {
-                    if let Some(msg) = self
-                        .filtered_sub_messages()
-                        .get(self.sub_selected)
-                        .map(|msg| (*msg).clone())
-                    {
-                        let text = payload_to_string(&msg.payload);
-                        self.copy_to_clipboard(text, "payload");
-                    } else {
-                        self.set_error_toast("No message selected");
-                    }
-                }
-                KeyCode::Char('Y') => {
-                    if let Some(msg) = self
-                        .filtered_sub_messages()
-                        .get(self.sub_selected)
-                        .map(|msg| (*msg).clone())
-                    {
-                        self.copy_to_clipboard(msg.key_expr, "key_expr");
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.pin_stream_at(self.sub_selected.saturating_sub(1));
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let max = self.filtered_sub_messages().len().saturating_sub(1);
-                    if self.sub_selected < max {
-                        self.pin_stream_at(self.sub_selected + 1);
-                    }
-                }
-                _ => {}
-            },
-            ActiveView::Query => match key.code {
-                KeyCode::Char('/') | KeyCode::Char('i') => self.query_editing = true,
-                KeyCode::Char('y') => {
-                    if let Some(msg) = self.query_results.get(self.query_selected).cloned() {
-                        let text = payload_to_string(&msg.payload);
-                        self.copy_to_clipboard(text, "payload");
-                    } else {
-                        self.set_error_toast("No result selected");
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let max = self.query_results.len().saturating_sub(1);
-                    if self.query_selected < max {
-                        self.query_selected += 1;
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.query_selected = self.query_selected.saturating_sub(1);
-                }
-                _ => {}
-            },
-            ActiveView::Nodes => match key.code {
-                KeyCode::Char('y') => {
-                    if let Some(node) = self.nodes.get(self.node_selected).cloned() {
-                        self.copy_to_clipboard(node.zid, "zid");
-                    } else {
-                        self.set_error_toast("No node selected");
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.node_selected = self.node_selected.saturating_sub(1);
-                    self.node_detail_scroll = 0;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let max = self.nodes.len().saturating_sub(1);
-                    if self.node_selected < max {
-                        self.node_selected += 1;
-                        self.node_detail_scroll = 0;
-                    }
-                }
-                KeyCode::Char('s') if !self.scout_in_progress => {
-                    self.pending_scout_request = true;
-                }
-                _ => {}
-            },
-            ActiveView::Liveliness => match key.code {
-                KeyCode::Char('y') => {
-                    if let Some(token) = self
-                        .liveliness_tokens
-                        .get(self.liveliness_selected)
-                        .cloned()
-                    {
-                        self.copy_to_clipboard(token.key_expr, "key_expr");
-                    } else {
-                        self.set_error_toast("No token selected");
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.liveliness_selected = self.liveliness_selected.saturating_sub(1);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let max = self.liveliness_tokens.len().saturating_sub(1);
-                    if self.liveliness_selected < max {
-                        self.liveliness_selected += 1;
-                    }
-                }
-                _ => {}
-            },
             _ => {}
         }
     }
@@ -1389,6 +1411,7 @@ impl App {
                 .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
     fn open_selected_topic_in_stream(&mut self) {
         let key = self
             .filtered_topics()
@@ -1402,7 +1425,7 @@ impl App {
         self.stream_key_filter = Some(key.clone());
         self.stream_filtering = false;
         self.follow_stream();
-        self.active_view = ActiveView::Stream;
+        self.space = Space::Traffic;
         self.set_toast(format!("Stream filtered to exact topic: {}", key));
     }
 
@@ -1420,82 +1443,31 @@ impl App {
         self.sub_selected = 0;
     }
 
+    #[allow(dead_code)]
     fn pin_stream_at(&mut self, idx: usize) {
         self.stream_follow = false;
         self.sub_selected = idx;
         self.clamp_stream_selection();
     }
 
-    pub fn render(&mut self, frame: &mut Frame) {
-        let [tabs_area, content_area, status_area] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-        ])
-        .areas(frame.area());
-
-        let tabs_block = Block::default().borders(Borders::ALL).title(" zenmon ");
-        let inner = tabs_block.inner(tabs_area);
-        frame.render_widget(tabs_block, tabs_area);
-
-        let divider_width: u16 = 2;
-        let mut x = inner.x;
-        for (i, title) in TAB_TITLES.iter().enumerate() {
-            let label = format!("[{}] {}", i + 1, title);
-            let label_width = label.chars().count() as u16;
-            if x + label_width > inner.x + inner.width {
-                self.tab_rects[i] = None;
-                continue;
+    /// How the active space splits `body`: two side-by-side panes on wide
+    /// terminals, or a single focused pane when narrow (Termux/tablet target).
+    pub(crate) fn body_layout(&self, body: Rect) -> BodyLayout {
+        if is_narrow(body.width) {
+            BodyLayout::Single {
+                pane: body,
+                focus: self.pane_focus,
             }
-            let rect = ratatui::layout::Rect::new(x, inner.y, label_width, inner.height);
-            self.tab_rects[i] = Some(rect);
-            let style = if i == self.active_view.index() {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let para = ratatui::widgets::Paragraph::new(Span::styled(label, style));
-            frame.render_widget(para, rect);
-            x += label_width + divider_width;
+        } else {
+            let [master, detail] =
+                Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+                    .areas(body);
+            BodyLayout::Split { master, detail }
         }
+    }
 
-        match self.active_view {
-            ActiveView::Dashboard => views::dashboard::render(self, frame, content_area),
-            ActiveView::Topics => views::topics::render(self, frame, content_area),
-            ActiveView::Stream => views::stream::render(self, frame, content_area),
-            ActiveView::Query => views::query::render(self, frame, content_area),
-            ActiveView::Nodes => views::nodes::render(self, frame, content_area),
-            ActiveView::Liveliness => views::liveliness::render(self, frame, content_area),
-            ActiveView::Network => views::network::render(self, frame, content_area),
-        }
-
-        if self.scout_port_modal_open {
-            self.render_scout_port_modal(frame, content_area);
-        }
-        if self.mode_modal_open {
-            self.render_mode_modal(frame, content_area);
-        }
-        if self.help_open {
-            self.render_help_overlay(frame, content_area);
-        }
-
-        let (conn_text, conn_style) = match &self.connection_state {
-            ConnectionState::Connected(zid) => (
-                format!(" Connected zid:{} ", &zid[..zid.len().min(16)]),
-                Style::default().fg(Color::Black).bg(Color::Green),
-            ),
-            ConnectionState::Connecting => (
-                " Connecting... ".to_string(),
-                Style::default().fg(Color::Black).bg(Color::Yellow),
-            ),
-            ConnectionState::Disconnected(reason) => (
-                format!(" Disconnected: {} ", reason),
-                Style::default().fg(Color::White).bg(Color::Red),
-            ),
-        };
-
+    pub fn render(&mut self, frame: &mut Frame) {
+        // Expire stale toasts each frame.
         let toast_expired = self
             .toast
             .as_ref()
@@ -1505,52 +1477,156 @@ impl App {
             self.toast = None;
         }
 
-        let middle_span = if let Some((msg, _)) = &self.toast {
-            let style = if self.toast_is_error {
-                Style::default().fg(Color::White).bg(Color::Red)
-            } else {
-                Style::default().fg(Color::Black).bg(Color::Green)
-            };
-            Span::styled(format!(" {} ", msg), style)
-        } else if self.is_text_input_active() {
-            Span::styled(" INPUT ", Style::default().fg(Color::Cyan))
-        } else {
-            Span::styled(" NORMAL ", Style::default().fg(Color::Cyan))
+        let compact = frame.area().width < TWO_PANE_MIN_WIDTH;
+        let header_h = if compact { 1 } else { 2 };
+        let [header_area, body_area, hint_area] = Layout::vertical([
+            Constraint::Length(header_h),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+
+        self.render_header(frame, header_area, compact);
+        match self.space {
+            Space::Traffic => views::traffic::render(self, frame, body_area),
+            Space::Network => views::network::render(self, frame, body_area),
+        }
+        self.render_hint_bar(frame, hint_area);
+
+        if self.overlay == Overlay::Help {
+            self.render_help_overlay(frame, body_area);
+        }
+        if self.overlay == Overlay::Doctor {
+            self.render_doctor_overlay(frame, body_area);
+        }
+        if self.overlay == Overlay::Palette {
+            self.render_palette_overlay(frame, body_area);
+        }
+        if self.overlay == Overlay::ScoutPort {
+            self.render_scout_port_modal(frame, body_area);
+        }
+    }
+
+    fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
+        let conn_text = match &self.connection_state {
+            ConnectionState::Connected(zid) => {
+                format!("Connected zid:{}", &zid[..zid.len().min(16)])
+            }
+            ConnectionState::Connecting => "Connecting...".to_string(),
+            ConnectionState::Disconnected(reason) => format!("Disconnected: {}", reason),
         };
 
-        let port_text = match self.scout_port_current {
-            Some(p) => format!(" {} ", domain_port_label(p)),
-            None => " domain 0 (port 7446) ".to_string(),
+        // Health dot: reflects the last `doctor` run's overall status when a
+        // report exists, otherwise falls back to socket connection state.
+        let (dot_glyph, dot_color, health_label) = match &self.doctor_report {
+            Some(report) => match report.status {
+                CheckStatus::Pass => ("●", Color::Green, "OK".to_string()),
+                CheckStatus::Warn => {
+                    let n = report
+                        .checks
+                        .iter()
+                        .filter(|c| c.status != CheckStatus::Pass)
+                        .count();
+                    ("⚠", Color::Yellow, format!("{} warn", n))
+                }
+                CheckStatus::Fail => {
+                    let n = report
+                        .checks
+                        .iter()
+                        .filter(|c| c.status == CheckStatus::Fail)
+                        .count();
+                    ("✖", Color::Red, format!("{} fail", n))
+                }
+            },
+            None => match &self.connection_state {
+                ConnectionState::Connected(_) => ("●", Color::Green, "OK".to_string()),
+                ConnectionState::Connecting => ("●", Color::Yellow, "connecting".to_string()),
+                ConnectionState::Disconnected(_) => ("●", Color::Red, "offline".to_string()),
+            },
         };
 
-        let mode_text = match self.current_mode {
-            ConnectMode::Peer => " mode:peer ",
-            ConnectMode::Client => " mode:client ",
-        };
+        let [line0, line1] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(if compact { 0 } else { 1 }),
+        ])
+        .areas(area);
 
-        let status = Line::from(vec![
-            Span::styled(conn_text, conn_style),
+        // Line 0: health dot + label, connection string, then the two space tabs.
+        let mut spans = vec![
+            Span::styled(format!("{} ", dot_glyph), Style::default().fg(dot_color)),
             Span::styled(
-                format!(" {} ", self.endpoint),
-                Style::default().fg(Color::Gray),
+                format!("{}  ", health_label),
+                Style::default().fg(dot_color),
             ),
-            Span::styled(
-                port_text,
-                Style::default().fg(Color::Black).bg(Color::Magenta),
-            ),
-            Span::styled(mode_text, Style::default().fg(Color::Black).bg(Color::Blue)),
-            middle_span,
-            Span::styled(
-                format!(" {} ", compact_hint(self.active_view)),
+        ];
+        if self.doctor_running {
+            spans.push(Span::styled(
+                "checking…  ",
                 Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-        frame.render_widget(status, status_area);
+            ));
+        }
+        spans.push(Span::styled(conn_text, Style::default().fg(Color::Gray)));
+        spans.push(Span::raw("  "));
+        let prefix_width: u16 = spans.iter().map(|s| s.content.chars().count() as u16).sum();
+        frame.render_widget(Paragraph::new(Line::from(spans)), line0);
+
+        // Space tabs — record each label rect for mouse hit-testing.
+        let mut x = line0.x + prefix_width;
+        for (i, title) in SPACE_TITLES.iter().enumerate() {
+            let label = format!("[{}]", title);
+            let label_width = label.chars().count() as u16;
+            if x + label_width > line0.x + line0.width {
+                self.space_tab_rects[i] = None;
+                continue;
+            }
+            let rect = Rect::new(x, line0.y, label_width, 1);
+            self.space_tab_rects[i] = Some(rect);
+            let style = if i == self.space.index() {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
+            x += label_width + 1;
+        }
+
+        // Line 1 (skipped when compact): counts summary.
+        if !compact {
+            let counts = format!(
+                "{} sessions · {} services · {} keys · {:.0} msg/s · {}",
+                self.nodes.len(),
+                self.liveliness_tokens.len(),
+                self.topics.len(),
+                self.total_hz,
+                format_bytes_per_sec(self.total_bytes_per_sec()),
+            );
+            frame.render_widget(
+                Paragraph::new(Span::styled(counts, Style::default().fg(Color::DarkGray))),
+                line1,
+            );
+        }
+    }
+
+    fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
+        let hint = match self.space {
+            Space::Traffic => {
+                "Tab space  / filter  j/k move  Enter open  L live  Q query  y/Y copy  : cmds  d doctor  ? help  q quit"
+            }
+            Space::Network => {
+                "Tab space  j/k move  Enter drill  s scout  y copy  : cmds  d doctor  ? help  q quit"
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+            area,
+        );
     }
 
     fn render_help_overlay(&self, frame: &mut Frame, content_area: Rect) {
         let width = 60.min(content_area.width.saturating_sub(2));
-        let height = 24.min(content_area.height.saturating_sub(2));
+        let height = 16.min(content_area.height.saturating_sub(2));
         if width < 24 || height < 6 {
             return;
         }
@@ -1559,46 +1635,121 @@ impl App {
         let popup = Rect::new(x, y, width, height);
 
         frame.render_widget(Clear, popup);
-        let view_name = TAB_TITLES[self.active_view.index()];
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Keybindings — {} ", view_name))
+            .title(" Keybindings ")
             .style(Style::default().fg(Color::White).bg(Color::Black));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let mut lines: Vec<Line> = Vec::new();
-        let section = |lines: &mut Vec<Line>, name: &str, hints: &[KeyHint]| {
-            lines.push(Line::from(Span::styled(
-                name.to_string(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for h in hints {
-                lines.push(Line::from(vec![
+        // Generated from the same command table the palette uses, so help and
+        // the `:` palette can never drift apart.
+        let mut lines: Vec<Line> = palette_commands()
+            .iter()
+            .map(|cmd| {
+                Line::from(vec![
                     Span::styled(
-                        format!("  {:<9}", h.keys),
+                        format!("  {:<6}", cmd.key_hint),
                         Style::default().fg(Color::Yellow),
                     ),
-                    Span::styled(h.desc.to_string(), Style::default().fg(Color::White)),
-                ]));
-            }
-            lines.push(Line::from(""));
-        };
-        section(
-            &mut lines,
-            &format!("{} view", view_name),
-            view_hints(self.active_view),
-        );
-        section(&mut lines, "Global", global_hints());
+                    Span::styled(cmd.label.to_string(), Style::default().fg(Color::White)),
+                ])
+            })
+            .collect();
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "j/k or ↑↓ to scroll · Esc/q/? to close",
+            "`:` opens the command palette · j/k or ↑↓ to scroll · Esc/q/? to close",
             Style::default().fg(Color::DarkGray),
         )));
 
         let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
         let scroll = self.help_scroll.min(max_scroll);
+        let para = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0));
+        frame.render_widget(para, inner);
+    }
+
+    fn render_doctor_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 72.min(content_area.width.saturating_sub(2));
+        let height = 20.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Doctor ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let mut lines: Vec<Line> = Vec::new();
+        match &self.doctor_report {
+            None => {
+                if self.doctor_running {
+                    lines.push(Line::from(Span::styled(
+                        "Running diagnostics…",
+                        Style::default().fg(Color::Yellow),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "No diagnostics yet.",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            Some(report) => {
+                if self.doctor_running {
+                    lines.push(Line::from(Span::styled(
+                        "Re-running diagnostics…",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                for check in &report.checks {
+                    let (icon, color) = match check.status {
+                        CheckStatus::Pass => ("✓", Color::Green),
+                        CheckStatus::Warn => ("⚠", Color::Yellow),
+                        CheckStatus::Fail => ("✖", Color::Red),
+                    };
+                    let mut spans = vec![
+                        Span::styled(format!("{} ", icon), Style::default().fg(color)),
+                        Span::styled(
+                            format!("{:<12}", check.name),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled(
+                            format!("{:>6}ms  ", check.latency_ms),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ];
+                    if let Some(msg) = &check.message {
+                        spans.push(Span::styled(msg.clone(), Style::default().fg(Color::Gray)));
+                    }
+                    lines.push(Line::from(spans));
+                    if check.status != CheckStatus::Pass {
+                        if let Some(hint) = &check.hint {
+                            lines.push(Line::from(Span::styled(
+                                format!("      hint: {}", hint),
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[r] re-run   [j/k] scroll   [Esc] close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+        let scroll = self.doctor_scroll.min(max_scroll);
         let para = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0));
@@ -1730,10 +1881,10 @@ impl App {
         );
     }
 
-    fn render_mode_modal(&self, frame: &mut Frame, content_area: Rect) {
-        let width = 36.min(content_area.width.saturating_sub(2));
-        let height = 9.min(content_area.height.saturating_sub(2));
-        if width < 24 || height < 7 {
+    fn render_palette_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 54.min(content_area.width.saturating_sub(2));
+        let height = 16.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
             return;
         }
         let x = content_area.x + (content_area.width - width) / 2;
@@ -1743,52 +1894,62 @@ impl App {
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Mode ")
-            .style(
-                Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            );
+            .title(" Commands ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let [_pad, peer_row, client_row, _gap, current_row, hint_row] = Layout::vertical([
+        let [input_row, list_area, hint_row] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .areas(inner);
 
-        let (peer_marker, client_marker) = match self.mode_modal_selection {
-            ConnectMode::Peer => ("> [*] Peer", "  [ ] Client"),
-            ConnectMode::Client => ("  [ ] Peer", "> [*] Client"),
-        };
-
         frame.render_widget(
-            Paragraph::new(peer_marker).style(Style::default().fg(Color::Cyan)),
-            peer_row,
-        );
-        frame.render_widget(
-            Paragraph::new(client_marker).style(Style::default().fg(Color::Cyan)),
-            client_row,
+            Paragraph::new(format!("> {}▏", self.palette_input))
+                .style(Style::default().fg(Color::Cyan)),
+            input_row,
         );
 
-        let current_label = match self.current_mode {
-            ConnectMode::Peer => "current: peer",
-            ConnectMode::Client => "current: client",
-        };
-        frame.render_widget(
-            Paragraph::new(current_label).style(Style::default().fg(Color::Gray)),
-            current_row,
-        );
+        let commands = palette_commands();
+        let filtered = self.filtered_palette_commands();
+        let label_width = list_area.width.saturating_sub(2) as usize;
+        let lines: Vec<Line> = filtered
+            .iter()
+            .enumerate()
+            .map(|(row, &idx)| {
+                let cmd = &commands[idx];
+                let selected = row == self.palette_selected;
+                let marker = if selected { "> " } else { "  " };
+                let hint_w = cmd.key_hint.chars().count();
+                let label_w = cmd.label.chars().count();
+                let pad = label_width
+                    .saturating_sub(2)
+                    .saturating_sub(label_w)
+                    .saturating_sub(hint_w);
+                let label_style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(vec![
+                    Span::styled(format!("{}{}", marker, cmd.label), label_style),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(
+                        cmd.key_hint.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), list_area);
 
         frame.render_widget(
-            Paragraph::new(" jk/UpDn:select  Enter:apply  Esc:close ")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("[Enter] run   [Esc] close").style(Style::default().fg(Color::DarkGray)),
             hint_row,
         );
     }
@@ -1799,6 +1960,7 @@ mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
+    use std::time::Duration;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -1827,18 +1989,6 @@ mod tests {
         assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
     }
 
-    fn node(zid: &str) -> NodeInfo {
-        NodeInfo {
-            zid: zid.into(),
-            kind: "peer".into(),
-            locators: vec![],
-            metadata: None,
-            sources: zenmon_core::types::NodeSources::ADMIN,
-            admin_last_seen: None,
-            scout_last_seen: None,
-        }
-    }
-
     #[test]
     fn rate_window_evicts_beyond_cap_and_detects_idle() {
         let mut w = RateWindow::new(3);
@@ -1863,47 +2013,10 @@ mod tests {
     }
 
     #[test]
-    fn key_7_switches_to_network_view() {
-        let mut app = App::new("test".into());
-        app.handle_key(key(KeyCode::Char('7')));
-        assert_eq!(app.active_view, ActiveView::Network);
-        // J/K scroll the graph in the Network view.
-        app.handle_key(key(KeyCode::Char('J')));
-        assert_eq!(app.network_scroll, 3);
-    }
-
-    #[test]
-    fn dashboard_click_targets_node_and_topic_rows() {
-        let mut app = App::new("t".into());
-        app.nodes = vec![node("a"), node("b")];
-        app.topics = vec![
-            TopicInfo {
-                key_expr: "x".into(),
-            },
-            TopicInfo {
-                key_expr: "y".into(),
-            },
-        ];
-        app.dash_node_rect = Some(Rect::new(0, 5, 40, 10));
-        app.dash_topic_rect = Some(Rect::new(40, 5, 40, 10));
-
-        // First item row is rect.y + 1 = 6.
-        assert_eq!(
-            app.dashboard_click_target(5, 6),
-            Some((ActiveView::Nodes, 0))
-        );
-        assert_eq!(
-            app.dashboard_click_target(5, 7),
-            Some((ActiveView::Nodes, 1))
-        );
-        assert_eq!(
-            app.dashboard_click_target(45, 6),
-            Some((ActiveView::Topics, 0))
-        );
-        // Border row → no-op.
-        assert_eq!(app.dashboard_click_target(5, 5), None);
-        // Past the last item → no-op.
-        assert_eq!(app.dashboard_click_target(5, 8), None);
+    fn narrow_below_threshold() {
+        assert!(is_narrow(89));
+        assert!(!is_narrow(90));
+        assert!(!is_narrow(200));
     }
 
     #[test]
@@ -1930,24 +2043,15 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_toggles_help_in_normal_mode() {
+    fn question_mark_toggles_help_overlay() {
         let mut app = App::new("test".into());
-        assert!(!app.help_open);
+        assert_eq!(app.overlay, Overlay::None);
         app.handle_key(key(KeyCode::Char('?')));
-        assert!(app.help_open);
+        assert_eq!(app.overlay, Overlay::Help);
         // q closes the overlay (does not quit)
         app.handle_key(key(KeyCode::Char('q')));
-        assert!(!app.help_open);
+        assert_eq!(app.overlay, Overlay::None);
         assert!(!app.should_quit);
-    }
-
-    #[test]
-    fn question_mark_is_literal_during_text_input() {
-        let mut app = App::new("test".into());
-        app.active_view = ActiveView::Query;
-        app.query_editing = true; // text input active
-        app.handle_key(key(KeyCode::Char('?')));
-        assert!(!app.help_open, "? must not open help while editing");
     }
 
     #[test]
@@ -1959,23 +2063,38 @@ mod tests {
         app.handle_key(key(KeyCode::Char('k')));
         assert_eq!(app.help_scroll, 0);
         app.handle_key(key(KeyCode::Esc));
-        assert!(!app.help_open);
+        assert_eq!(app.overlay, Overlay::None);
     }
 
     #[test]
-    fn every_view_has_hints_and_compact_ends_with_help() {
-        for v in [
-            ActiveView::Dashboard,
-            ActiveView::Topics,
-            ActiveView::Stream,
-            ActiveView::Query,
-            ActiveView::Nodes,
-            ActiveView::Liveliness,
-        ] {
-            assert!(!view_hints(v).is_empty(), "{v:?} has no hints");
-            assert!(compact_hint(v).ends_with("?:help"));
-        }
-        assert!(global_hints().iter().any(|h| h.keys == "q"));
+    fn tab_and_number_keys_switch_space() {
+        let mut app = App::new("test".into());
+        assert_eq!(app.space, Space::Traffic);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.space, Space::Network);
+        app.handle_key(key(KeyCode::Char('1')));
+        assert_eq!(app.space, Space::Traffic);
+        app.handle_key(key(KeyCode::Char('2')));
+        assert_eq!(app.space, Space::Network);
+    }
+
+    #[test]
+    fn enter_and_esc_move_pane_focus() {
+        let mut app = App::new("test".into());
+        assert_eq!(app.pane_focus, PaneFocus::Master);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pane_focus, PaneFocus::Detail);
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.pane_focus, PaneFocus::Master);
+    }
+
+    #[test]
+    fn switching_space_resets_pane_focus_to_master() {
+        let mut app = App::new("test".into());
+        app.pane_focus = PaneFocus::Detail;
+        app.handle_key(key(KeyCode::Char('2')));
+        assert_eq!(app.space, Space::Network);
+        assert_eq!(app.pane_focus, PaneFocus::Master);
     }
 
     #[test]
@@ -2000,123 +2119,17 @@ mod tests {
     }
 
     #[test]
-    fn topics_detail_scroll_works_without_shift_modifier() {
-        let mut app = App::new("test".into());
-        app.active_view = ActiveView::Topics;
-        app.handle_key(key(KeyCode::Char('J')));
-        assert_eq!(app.topic_detail_scroll, 3);
-        app.handle_key(key(KeyCode::Char('K')));
-        assert_eq!(app.topic_detail_scroll, 0);
+    fn space_tab_hit_inside_rect_returns_index() {
+        let rects = [Some(Rect::new(1, 0, 9, 1)), Some(Rect::new(12, 0, 9, 1))];
+        assert_eq!(space_tab_hit(&rects, 2, 0), Some(0));
+        assert_eq!(space_tab_hit(&rects, 14, 0), Some(1));
     }
 
     #[test]
-    fn pressing_m_opens_mode_modal_with_current_mode_selected() {
-        let mut app = App::new("test".into());
-        app.current_mode = ConnectMode::Peer;
-        app.mode_modal_selection = ConnectMode::Client; // stale prior value
-
-        app.handle_key(key(KeyCode::Char('m')));
-
-        assert!(app.mode_modal_open);
-        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
-    }
-
-    #[test]
-    fn mode_modal_arrow_keys_change_selection() {
-        let mut app = App::new("test".into());
-        app.mode_modal_open = true;
-        app.mode_modal_selection = ConnectMode::Client;
-
-        app.handle_key(key(KeyCode::Up));
-        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
-
-        app.handle_key(key(KeyCode::Down));
-        assert_eq!(app.mode_modal_selection, ConnectMode::Client);
-
-        app.handle_key(key(KeyCode::Char('k')));
-        assert_eq!(app.mode_modal_selection, ConnectMode::Peer);
-
-        app.handle_key(key(KeyCode::Char('j')));
-        assert_eq!(app.mode_modal_selection, ConnectMode::Client);
-    }
-
-    #[test]
-    fn mode_modal_enter_same_mode_does_not_set_pending() {
-        let mut app = App::new("test".into());
-        app.current_mode = ConnectMode::Peer;
-        app.mode_modal_open = true;
-        app.mode_modal_selection = ConnectMode::Peer;
-
-        app.handle_key(key(KeyCode::Enter));
-
-        assert!(app.pending_reconnect_mode.is_none());
-        assert!(!app.mode_modal_open);
-    }
-
-    #[test]
-    fn mode_modal_enter_different_mode_sets_pending_and_closes() {
-        let mut app = App::new("test".into());
-        app.current_mode = ConnectMode::Client;
-        app.mode_modal_open = true;
-        app.mode_modal_selection = ConnectMode::Peer;
-
-        app.handle_key(key(KeyCode::Enter));
-
-        assert_eq!(app.pending_reconnect_mode, Some(ConnectMode::Peer));
-        assert!(!app.mode_modal_open);
-    }
-
-    #[test]
-    fn mode_modal_esc_closes_without_setting_pending() {
-        let mut app = App::new("test".into());
-        app.current_mode = ConnectMode::Client;
-        app.mode_modal_open = true;
-        app.mode_modal_selection = ConnectMode::Peer;
-
-        app.handle_key(key(KeyCode::Esc));
-
-        assert!(app.pending_reconnect_mode.is_none());
-        assert!(!app.mode_modal_open);
-    }
-
-    #[test]
-    fn pressing_m_again_closes_mode_modal() {
-        let mut app = App::new("test".into());
-        app.handle_key(key(KeyCode::Char('m')));
-        assert!(app.mode_modal_open);
-        app.handle_key(key(KeyCode::Char('m')));
-        assert!(!app.mode_modal_open);
-    }
-
-    #[test]
-    fn tab_hit_inside_rect_returns_index() {
-        let rects = [
-            Some(Rect::new(1, 0, 14, 3)),
-            Some(Rect::new(16, 0, 10, 3)),
-            Some(Rect::new(28, 0, 12, 3)),
-            None,
-            None,
-            None,
-            None,
-        ];
-        assert_eq!(tab_hit(&rects, 2, 1), Some(0));
-        assert_eq!(tab_hit(&rects, 20, 1), Some(1));
-        assert_eq!(tab_hit(&rects, 30, 2), Some(2));
-    }
-
-    #[test]
-    fn tab_hit_outside_returns_none() {
-        let rects = [
-            Some(Rect::new(1, 0, 14, 3)),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ];
-        assert_eq!(tab_hit(&rects, 50, 1), None);
-        assert_eq!(tab_hit(&rects, 2, 5), None);
+    fn space_tab_hit_outside_returns_none() {
+        let rects = [Some(Rect::new(1, 0, 9, 1)), None];
+        assert_eq!(space_tab_hit(&rects, 50, 0), None);
+        assert_eq!(space_tab_hit(&rects, 2, 5), None);
     }
 
     #[test]
@@ -2208,108 +2221,6 @@ mod tests {
         app.stream_filter = "idle".into();
         assert_eq!(app.filtered_sub_messages().len(), 1);
         assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/status");
-    }
-
-    #[test]
-    fn topics_enter_replaces_stream_filter_with_selected_exact_key() {
-        let mut app = App::new("test".into());
-        let make = |key: &str| ZenohMessage {
-            key_expr: key.into(),
-            payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
-            encoding: String::new(),
-            payload_bytes: 0,
-            timestamp: None,
-            kind: "put".into(),
-            attachment: None,
-            attachment_bytes: None,
-        };
-        app.handle_zenoh_message(make("alpha/topic"));
-        app.handle_zenoh_message(make("beta/topic"));
-        app.topic_filter = "beta".into();
-        app.topic_selected = 0;
-        app.stream_filter = "old filter".into();
-        app.stream_follow = false;
-        app.sub_selected = 1;
-        app.active_view = ActiveView::Topics;
-
-        app.handle_view_key(KeyEvent::from(KeyCode::Enter));
-
-        assert_eq!(app.active_view, ActiveView::Stream);
-        assert_eq!(app.stream_key_filter.as_deref(), Some("beta/topic"));
-        assert!(app.stream_filter.is_empty());
-        assert!(app.stream_follow);
-        assert_eq!(app.sub_selected, 0);
-        assert!(app
-            .toast
-            .as_ref()
-            .is_some_and(|(message, _)| message.contains("beta/topic")));
-    }
-
-    #[test]
-    fn topic_jump_filter_does_not_match_payload_on_another_key() {
-        let mut app = App::new("test".into());
-        app.handle_zenoh_message(ZenohMessage {
-            key_expr: "selected/topic".into(),
-            payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!("selected")),
-            encoding: String::new(),
-            payload_bytes: 0,
-            timestamp: None,
-            kind: "put".into(),
-            attachment: None,
-            attachment_bytes: None,
-        });
-        app.handle_zenoh_message(ZenohMessage {
-            key_expr: "other/topic".into(),
-            payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(
-                "selected/topic"
-            )),
-            encoding: String::new(),
-            payload_bytes: 0,
-            timestamp: None,
-            kind: "put".into(),
-            attachment: None,
-            attachment_bytes: None,
-        });
-        app.topic_filter = "selected/topic".into();
-        app.active_view = ActiveView::Topics;
-
-        app.handle_view_key(KeyEvent::from(KeyCode::Enter));
-
-        let messages = app.filtered_sub_messages();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].key_expr, "selected/topic");
-    }
-
-    #[test]
-    fn topics_enter_with_no_topic_is_a_no_op() {
-        let mut app = App::new("test".into());
-        app.active_view = ActiveView::Topics;
-        app.stream_filter = "existing".into();
-
-        app.handle_view_key(KeyEvent::from(KeyCode::Enter));
-
-        assert_eq!(app.active_view, ActiveView::Topics);
-        assert_eq!(app.stream_filter, "existing");
-        assert!(app.stream_key_filter.is_none());
-    }
-
-    #[test]
-    fn exact_topic_filter_changes_mode_only_after_an_edit() {
-        let mut app = App::new("test".into());
-        app.active_view = ActiveView::Stream;
-        app.stream_key_filter = Some("selected/topic".into());
-
-        app.handle_view_key(KeyEvent::from(KeyCode::Char('/')));
-        assert_eq!(app.stream_filter, "selected/topic");
-        assert_eq!(app.stream_key_filter.as_deref(), Some("selected/topic"));
-
-        app.handle_text_input_key(KeyEvent::from(KeyCode::Esc));
-        assert_eq!(app.stream_key_filter.as_deref(), Some("selected/topic"));
-
-        app.handle_view_key(KeyEvent::from(KeyCode::Char('/')));
-        app.handle_text_input_key(KeyEvent::from(KeyCode::Backspace));
-        assert!(app.stream_key_filter.is_none());
-        assert_eq!(app.stream_filter, "selected/topi");
     }
 
     #[test]
@@ -2452,5 +2363,787 @@ mod tests {
         assert_eq!(app.stream_filter, "xyz");
         assert!(!app.stream_follow);
         assert!(app.sub_paused);
+    }
+
+    fn seed_topics(app: &mut App, keys: &[&str]) {
+        for k in keys {
+            app.topics.push(TopicInfo {
+                key_expr: (*k).into(),
+            });
+        }
+        app.topics.sort_by(|a, b| a.key_expr.cmp(&b.key_expr));
+    }
+
+    #[test]
+    fn traffic_q_runs_query_on_selected_key() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["demo/a", "demo/b"]);
+        app.topic_selected = 1; // demo/b
+        app.handle_key(key(KeyCode::Char('Q')));
+        assert_eq!(app.detail_mode, DetailMode::Query);
+        assert_eq!(app.pending_query, Some("demo/b".to_string()));
+        assert_eq!(app.query_history, vec!["demo/b".to_string()]);
+    }
+
+    #[test]
+    fn traffic_l_sets_live_mode() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        app.detail_mode = DetailMode::Query;
+        app.handle_key(key(KeyCode::Char('L')));
+        assert_eq!(app.detail_mode, DetailMode::Live);
+    }
+
+    #[test]
+    fn traffic_jk_move_and_clamp_selection() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        assert_eq!(app.topic_selected, 0);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.topic_selected, 1);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.topic_selected, 2);
+        // Clamp at the bottom.
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.topic_selected, 2);
+        app.handle_key(key(KeyCode::Char('k')));
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.topic_selected, 0);
+        // Clamp at the top.
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.topic_selected, 0);
+    }
+
+    #[test]
+    fn traffic_move_resets_detail_scroll() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b"]);
+        app.topic_detail_scroll = 9;
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.topic_selected, 1);
+        assert_eq!(app.topic_detail_scroll, 0);
+    }
+
+    #[test]
+    fn render_traffic_with_data_wide_and_narrow_shows_key() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        for (w, h) in [(120u16, 30u16), (60u16, 20u16)] {
+            let mut app = App::new("tcp/127.0.0.1:7447".into());
+            app.space = Space::Traffic;
+            app.connection_state = ConnectionState::Connected("zid".into());
+            app.topics.push(TopicInfo {
+                key_expr: "demo/robot/pose".into(),
+            });
+            let msg = ZenohMessage {
+                key_expr: "demo/robot/pose".into(),
+                payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
+                encoding: "application/json".into(),
+                payload_bytes: 8,
+                timestamp: None,
+                kind: "put".into(),
+                attachment: None,
+                attachment_bytes: None,
+            };
+            app.topic_latest
+                .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+            app.sub_messages.push_front(msg);
+            app.topic_hz.insert("demo/robot/pose".into(), 12.0);
+
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            // Wide → master; narrow default focus is Master → master shows the key.
+            terminal.draw(|f| app.render(f)).unwrap();
+            let text = buffer_text(terminal.backend().buffer());
+            assert!(
+                text.contains("demo/robot/pose"),
+                "key missing at {}x{}: {}",
+                w,
+                h,
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn render_traffic_narrow_detail_pane_does_not_panic() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.pane_focus = PaneFocus::Detail;
+        app.connection_state = ConnectionState::Connected("zid".into());
+        app.topics.push(TopicInfo {
+            key_expr: "demo/robot/pose".into(),
+        });
+        let msg = ZenohMessage {
+            key_expr: "demo/robot/pose".into(),
+            payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
+            encoding: "application/json".into(),
+            payload_bytes: 8,
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+            attachment_bytes: None,
+        };
+        app.topic_latest
+            .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+        app.sub_messages.push_front(msg);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("demo/robot/pose"), "detail key missing");
+    }
+
+    /// Headless render smoke test: drive `render()` through ratatui's in-memory
+    /// TestBackend at wide and narrow widths (either side of the two-pane
+    /// breakpoint) to prove the layout builds without panicking and the header
+    /// tab / space body actually paint. Substitutes for interactive TTY checks.
+    fn render_at(width: u16, height: u16, space: Space) -> ratatui::buffer::Buffer {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = space;
+        terminal.draw(|f| app.render(f)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn buffer_text(buf: &ratatui::buffer::Buffer) -> String {
+        buf.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    /// Render `buf` back into a row-by-row text grid (with borders visible), for
+    /// eyeballing the real layout in a terminal.
+    fn buffer_grid(buf: &ratatui::buffer::Buffer) -> String {
+        let area = buf.area();
+        let mut out = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                out.push_str(buf[(area.x + x, area.y + y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// A dev harness (not run by default): seed a realistic network and dump the
+    /// actual rendered frames to stdout for manual inspection.
+    /// Run with: `cargo test -p zenmon-tui dump_frames -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_frames() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let seed = |space: Space| {
+            let mut app = App::new("tcp/127.0.0.1:7447".into());
+            app.space = space;
+            app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+            app.self_zid = Some("a3f19c0011223344".into());
+            // Topics + rates.
+            for (k, hz) in [
+                ("demo/robot/pose", 12.0),
+                ("demo/robot/battery", 1.0),
+                ("demo/sensor/lidar", 30.0),
+                ("sys/health", 0.0),
+            ] {
+                app.topics.push(TopicInfo { key_expr: k.into() });
+                app.topic_hz.insert(k.into(), hz);
+            }
+            let msg = ZenohMessage {
+                key_expr: "demo/robot/pose".into(),
+                payload: MessagePayload::from_json(
+                    &serde_json::json!({"x": 1.21, "y": 3.40, "theta": 0.11}),
+                ),
+                encoding: "application/json".into(),
+                payload_bytes: 40,
+                timestamp: None,
+                kind: "put".into(),
+                attachment: None,
+                attachment_bytes: None,
+            };
+            app.topic_latest
+                .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+            app.sub_messages.push_front(msg);
+            app.total_hz = 43.0;
+            // Nodes + services.
+            app.nodes.push(make_node("a3f19c0011223344", "router"));
+            app.nodes.push(make_node("b2c4ffee00990011", "peer"));
+            app.liveliness_tokens
+                .push(make_token("demo/robot/node/action_executor", true));
+            app.liveliness_tokens
+                .push(make_token("demo/robot/node/topic_recorder", false));
+            app.liveliness_tokens
+                .push(make_token("sys/node/system_monitor", true));
+            app
+        };
+
+        for (label, space, w, h) in [
+            ("TRAFFIC (wide 110x24)", Space::Traffic, 110u16, 24u16),
+            ("NETWORK (wide 110x24)", Space::Network, 110u16, 24u16),
+            ("NETWORK (narrow 64x20)", Space::Network, 64u16, 20u16),
+        ] {
+            let mut app = seed(space);
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            println!("\n===== {label} =====");
+            print!("{}", buffer_grid(terminal.backend().buffer()));
+        }
+
+        // Doctor overlay over the Network space, with a mixed report.
+        {
+            use std::time::Duration;
+            use zenmon_core::doctor::{Check, DoctorReport};
+            let mut app = seed(Space::Network);
+            app.doctor_report = Some(DoctorReport::new(vec![
+                Check::pass("config", Duration::from_millis(1), None),
+                Check::pass("session", Duration::from_millis(8), None),
+                Check::pass(
+                    "connection",
+                    Duration::from_millis(12),
+                    Some("1 router(s), 1 peer(s)".into()),
+                ),
+                Check::warn(
+                    "liveliness",
+                    Duration::from_millis(0),
+                    "no_tokens",
+                    "no liveliness tokens on 'sys/**'",
+                    "is the monitored app declaring liveliness?",
+                ),
+            ]));
+            app.overlay = Overlay::Doctor;
+            let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            println!("\n===== DOCTOR overlay (110x24) =====");
+            print!("{}", buffer_grid(terminal.backend().buffer()));
+        }
+
+        // Command palette over Traffic.
+        {
+            let mut app = seed(Space::Traffic);
+            app.overlay = Overlay::Palette;
+            let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            println!("\n===== PALETTE overlay (110x24) =====");
+            print!("{}", buffer_grid(terminal.backend().buffer()));
+        }
+    }
+
+    #[test]
+    fn render_wide_paints_two_pane_traffic() {
+        let buf = render_at(120, 30, Space::Traffic);
+        let text = buffer_text(&buf);
+        assert!(text.contains("Traffic"), "space tab / master title missing");
+        assert!(
+            text.contains("Detail"),
+            "detail pane missing in wide layout"
+        );
+    }
+
+    #[test]
+    fn render_narrow_single_pane_does_not_panic() {
+        // Below TWO_PANE_MIN_WIDTH: single pane, compact 1-line header.
+        let buf = render_at(60, 20, Space::Network);
+        let text = buffer_text(&buf);
+        assert!(text.contains("Network"), "network master title missing");
+    }
+
+    fn make_node(zid: &str, kind: &str) -> NodeInfo {
+        NodeInfo {
+            zid: zid.into(),
+            kind: kind.into(),
+            locators: vec!["tcp/127.0.0.1:7447".into()],
+            metadata: None,
+            sources: zenmon_core::types::NodeSources::ADMIN,
+            admin_last_seen: Some(SystemTime::now()),
+            scout_last_seen: None,
+        }
+    }
+
+    fn make_token(key_expr: &str, alive: bool) -> LivelinessToken {
+        LivelinessToken {
+            key_expr: key_expr.into(),
+            source_zid: None,
+            alive,
+        }
+    }
+
+    #[test]
+    fn network_jk_move_and_clamp_selection() {
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        app.nodes.push(make_node("z1", "router"));
+        app.nodes.push(make_node("z2", "peer"));
+        app.liveliness_tokens
+            .push(make_token("fleet/r1/node/a", true));
+        // 2 sessions + 1 service = 3 selectable rows.
+        assert_eq!(app.network_rows().len(), 3);
+        assert_eq!(app.network_selected, 0);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.network_selected, 1);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.network_selected, 2);
+        // Clamp at the bottom.
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.network_selected, 2);
+        app.handle_key(key(KeyCode::Char('k')));
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.network_selected, 0);
+        // Clamp at the top.
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.network_selected, 0);
+    }
+
+    #[test]
+    fn network_move_resets_detail_scroll() {
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        app.nodes.push(make_node("z1", "router"));
+        app.nodes.push(make_node("z2", "peer"));
+        app.node_detail_scroll = 9;
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.network_selected, 1);
+        assert_eq!(app.node_detail_scroll, 0);
+    }
+
+    #[test]
+    fn network_selection_resolves_session_then_service() {
+        let mut app = App::new("test".into());
+        app.nodes.push(make_node("z1", "router"));
+        app.nodes.push(make_node("z2", "peer"));
+        app.liveliness_tokens
+            .push(make_token("fleet/r1/node/a", true));
+        assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(0)));
+        app.network_selected = 1;
+        assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(1)));
+        app.network_selected = 2;
+        assert_eq!(app.selected_network_row(), Some(NetworkRow::Service(0)));
+    }
+
+    #[test]
+    fn network_s_requests_scout_refresh() {
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        assert!(!app.pending_scout_request);
+        app.handle_key(key(KeyCode::Char('s')));
+        assert!(app.pending_scout_request);
+    }
+
+    #[test]
+    fn network_s_does_not_request_while_scout_in_progress() {
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        app.scout_in_progress = true;
+        app.handle_key(key(KeyCode::Char('s')));
+        assert!(!app.pending_scout_request);
+    }
+
+    #[test]
+    fn render_network_with_data_wide_and_narrow_shows_participant() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        for (w, h) in [(120u16, 30u16), (60u16, 20u16)] {
+            let mut app = App::new("tcp/127.0.0.1:7447".into());
+            app.space = Space::Network;
+            app.connection_state = ConnectionState::Connected("zidrouter0000000".into());
+            app.nodes.push(make_node("zidrouter0000000", "router"));
+            app.liveliness_tokens
+                .push(make_token("fleet/r1/node/action_executor_ec98a701", true));
+
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let text = buffer_text(terminal.backend().buffer());
+            // Master (wide → both panes; narrow default focus is Master) shows the
+            // session zid and the service name.
+            assert!(
+                text.contains("zidrouter"),
+                "session zid missing at {}x{}: {}",
+                w,
+                h,
+                text
+            );
+            assert!(
+                text.contains("action_executor"),
+                "service name missing at {}x{}: {}",
+                w,
+                h,
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn render_help_overlay_paints() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.overlay = Overlay::Help;
+        terminal.draw(|f| app.render(f)).unwrap();
+        // Overlay drew on top without panicking; buffer is non-empty.
+        assert!(!buffer_text(terminal.backend().buffer()).trim().is_empty());
+    }
+
+    #[test]
+    fn d_opens_doctor_overlay_and_requests_run() {
+        let mut app = App::new("test".into());
+        assert_eq!(app.overlay, Overlay::None);
+        assert!(!app.pending_doctor_request);
+        app.handle_key(key(KeyCode::Char('d')));
+        assert_eq!(app.overlay, Overlay::Doctor);
+        assert!(app.pending_doctor_request);
+        assert_eq!(app.doctor_scroll, 0);
+    }
+
+    #[test]
+    fn doctor_overlay_r_reruns_and_esc_closes() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('d')));
+        app.pending_doctor_request = false;
+        // r re-runs
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.pending_doctor_request);
+        // j/k scroll
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.doctor_scroll, 1);
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.doctor_scroll, 0);
+        // Esc closes
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn doctor_events_toggle_running_and_store_report() {
+        use zenmon_core::doctor::Check;
+        let mut app = App::new("test".into());
+        app.handle_event(AppEvent::DoctorStarted);
+        assert!(app.doctor_running);
+        assert!(app.doctor_report.is_none());
+
+        let report = DoctorReport::new(vec![Check::pass("config", Duration::from_millis(1), None)]);
+        app.handle_event(AppEvent::DoctorReport(report));
+        assert!(!app.doctor_running);
+        assert!(app.doctor_report.is_some());
+    }
+
+    #[test]
+    fn render_doctor_overlay_shows_checks_and_hints() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use zenmon_core::doctor::Check;
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.doctor_report = Some(DoctorReport::new(vec![
+            Check::pass("config", Duration::from_millis(2), None),
+            Check::fail(
+                "connection",
+                Duration::from_millis(5),
+                "router_unreachable",
+                "no router connected in client mode",
+                "start a router (zenohd) and check --endpoint",
+            ),
+        ]));
+        app.overlay = Overlay::Doctor;
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("✖"), "fail glyph missing: {}", text);
+        assert!(text.contains("connection"), "check name missing: {}", text);
+        assert!(
+            text.contains("start a router"),
+            "hint text missing: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn header_dot_reflects_failing_doctor_report() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use zenmon_core::doctor::Check;
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.connection_state = ConnectionState::Connected("zid".into());
+        app.doctor_report = Some(DoctorReport::new(vec![Check::fail(
+            "connection",
+            Duration::from_millis(5),
+            "router_unreachable",
+            "no router connected in client mode",
+            "start a router",
+        )]));
+        // Renders without panic and paints the fail glyph in the header.
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("✖"), "header fail glyph missing: {}", text);
+    }
+
+    #[test]
+    fn colon_opens_command_palette() {
+        let mut app = App::new("test".into());
+        assert_eq!(app.overlay, Overlay::None);
+        app.handle_key(key(KeyCode::Char(':')));
+        assert_eq!(app.overlay, Overlay::Palette);
+        assert!(app.palette_input.is_empty());
+        assert_eq!(app.palette_selected, 0);
+    }
+
+    #[test]
+    fn palette_filtering_shrinks_and_matches() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char(':')));
+        let all = app.filtered_palette_commands().len();
+        assert_eq!(all, palette_commands().len());
+
+        // Type "peer" (case-insensitive) → only the peer-mode command matches.
+        for c in "peer".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        let filtered = app.filtered_palette_commands();
+        assert!(filtered.len() < all);
+        assert_eq!(filtered.len(), 1);
+        assert!(matches!(
+            palette_commands()[filtered[0]].action,
+            PaletteAction::SetMode(ConnectMode::Peer)
+        ));
+    }
+
+    #[test]
+    fn palette_enter_runs_peer_mode_command() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.handle_key(key(KeyCode::Char(':')));
+        for c in "peer".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_reconnect_mode, Some(ConnectMode::Peer));
+        // Palette closed after running.
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn palette_set_mode_same_mode_does_not_reconnect() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.run_palette_action(PaletteAction::SetMode(ConnectMode::Client));
+        assert_eq!(app.pending_reconnect_mode, None);
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn palette_esc_closes_without_action() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char(':')));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.overlay, Overlay::None);
+        assert_eq!(app.pending_reconnect_mode, None);
+    }
+
+    #[test]
+    fn palette_arrow_navigation_clamps() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char(':')));
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.palette_selected, 0);
+        let count = app.filtered_palette_commands().len();
+        for _ in 0..(count + 3) {
+            app.handle_key(key(KeyCode::Down));
+        }
+        assert_eq!(app.palette_selected, count - 1);
+    }
+
+    #[test]
+    fn scout_port_action_opens_modal_and_reconnects() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        assert_eq!(app.overlay, Overlay::ScoutPort);
+        // Type a port and confirm.
+        app.handle_key(key(KeyCode::Char('7')));
+        app.handle_key(key(KeyCode::Char('4')));
+        app.handle_key(key(KeyCode::Char('5')));
+        app.handle_key(key(KeyCode::Char('0')));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_reconnect_port, Some(7450));
+        assert_eq!(app.scout_port_current, Some(7450));
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn scout_port_modal_esc_closes() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        app.handle_key(key(KeyCode::Char('7')));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.overlay, Overlay::None);
+        assert!(app.scout_port_input.is_empty());
+        assert_eq!(app.pending_reconnect_port, None);
+    }
+
+    #[test]
+    fn scout_port_modal_s_requests_scan() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        app.handle_key(key(KeyCode::Char('s')));
+        assert!(app.pending_port_scan_request);
+    }
+
+    #[test]
+    fn scout_port_enter_uses_selected_scan_result() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        app.port_scan_results = vec![
+            PortScoutResult {
+                port: 7446,
+                nodes: vec![],
+            },
+            PortScoutResult {
+                port: 7448,
+                nodes: vec![zenmon_core::types::ScoutInfo {
+                    zid: "z1".into(),
+                    whatami: "peer".into(),
+                    locators: vec![],
+                }],
+            },
+        ];
+        app.port_scan_selected = 0; // first non-empty result → port 7448
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_reconnect_port, Some(7448));
+    }
+
+    #[test]
+    fn render_palette_overlay_paints_labels() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.overlay = Overlay::Palette;
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Commands"), "palette title missing: {}", text);
+        assert!(text.contains("doctor"), "doctor command missing: {}", text);
+        assert!(
+            text.contains("Network"),
+            "network command missing: {}",
+            text
+        );
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn traffic_click_selects_row_and_drills() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.list_rect = Some(Rect::new(0, 2, 40, 10));
+        app.list_first_item_row = 3;
+        app.list_scroll_offset = 0;
+        // Row 5 == first_item_row(3) + 2 → index 2.
+        app.handle_click(5, 5);
+        assert_eq!(app.topic_selected, 2);
+        assert_eq!(app.topic_detail_scroll, 0);
+        assert_eq!(app.pane_focus, PaneFocus::Detail);
+    }
+
+    #[test]
+    fn traffic_click_outside_list_is_ignored() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.topic_selected = 1;
+        app.list_rect = Some(Rect::new(0, 2, 40, 10));
+        app.list_first_item_row = 3;
+        // Row 1 is above the list rect (y == 2) → no change.
+        app.handle_click(5, 1);
+        assert_eq!(app.topic_selected, 1);
+    }
+
+    #[test]
+    fn network_click_map_marks_headers_and_rows() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        app.connection_state = ConnectionState::Connected("z1".into());
+        app.nodes.push(make_node("z1", "router"));
+        app.nodes.push(make_node("z2", "peer"));
+        app.liveliness_tokens
+            .push(make_token("fleet/r1/node/a", true));
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        // Display rows: Sessions header, z1, z2, Services header, group header,
+        // token. Headers → None; participants → their `network_rows()` index.
+        assert_eq!(
+            app.network_click_map,
+            vec![None, Some(0), Some(1), None, None, Some(2)]
+        );
+
+        // Clicking the z2 display row (index 2) selects network_rows() index 1.
+        let rect = app.list_rect.unwrap();
+        let row = app.list_first_item_row + 2 - app.list_scroll_offset as u16;
+        app.handle_click(rect.x + 1, row);
+        assert_eq!(app.network_selected, 1);
+        assert_eq!(app.pane_focus, PaneFocus::Detail);
+
+        // Clicking a header row (display index 0) leaves the selection alone.
+        let hdr_row = app.list_first_item_row - app.list_scroll_offset as u16;
+        app.handle_click(rect.x + 1, hdr_row);
+        assert_eq!(app.network_selected, 1);
+    }
+
+    #[test]
+    fn wheel_moves_traffic_selection_and_clamps() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
+        assert_eq!(app.topic_selected, 1);
+        // Clamp at the bottom.
+        app.wheel(1);
+        app.wheel(1);
+        assert_eq!(app.topic_selected, 2);
+        // Scroll back up and clamp at the top.
+        app.handle_mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
+        app.wheel(-1);
+        app.wheel(-1);
+        assert_eq!(app.topic_selected, 0);
+    }
+
+    #[test]
+    fn wheel_moves_network_selection_and_clamps() {
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        app.nodes.push(make_node("z1", "router"));
+        app.nodes.push(make_node("z2", "peer"));
+        // 2 selectable rows.
+        app.wheel(1);
+        assert_eq!(app.network_selected, 1);
+        app.wheel(1); // clamp
+        assert_eq!(app.network_selected, 1);
+        app.wheel(-1);
+        assert_eq!(app.network_selected, 0);
+    }
+
+    #[test]
+    fn wheel_ignored_while_overlay_open() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.overlay = Overlay::Help;
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
+        assert_eq!(app.topic_selected, 0);
     }
 }

@@ -25,7 +25,6 @@ pub async fn run(mut config: ZenmonConfig, refresh: Duration) -> Result<()> {
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
     app.current_mode = config.mode;
-    app.mode_modal_selection = config.mode;
 
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
     let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel::<ZenohMessage>();
@@ -115,6 +114,16 @@ fn spawn_scout_task(config: ZenmonConfig, tx: mpsc::UnboundedSender<AppEvent>, t
                 let _ = tx.send(AppEvent::ScoutNodes(Vec::new()));
             }
         }
+    });
+}
+
+fn spawn_doctor_task(config: ZenmonConfig, tx: mpsc::UnboundedSender<AppEvent>, timeout: Duration) {
+    tokio::spawn(async move {
+        let _ = tx.send(AppEvent::DoctorStarted);
+        // `doctor::run` opens its own session internally, so no shared session
+        // is needed here; mirror the scout/port-scan background-task pattern.
+        let report = zenmon_core::doctor::run(&config, timeout).await;
+        let _ = tx.send(AppEvent::DoctorReport(report));
     });
 }
 
@@ -256,6 +265,11 @@ async fn run_loop(
             spawn_port_scan_task(config.clone(), tx.clone());
         }
 
+        if app.pending_doctor_request {
+            app.pending_doctor_request = false;
+            spawn_doctor_task(config.clone(), tx.clone(), Duration::from_secs(5));
+        }
+
         if let Some(new_port) = app.pending_reconnect_port.take() {
             config.scout_port = Some(new_port);
             *session.lock().await = None;
@@ -322,6 +336,9 @@ async fn run_loop(
                                 .await
                                 .ok();
                         spawn_liveliness_subscriber(&s, tx.clone());
+                        // Run diagnostics on every (re)connect so the header
+                        // health dot reflects a fresh doctor report.
+                        app.pending_doctor_request = true;
                         *session.lock().await = Some(s);
                     }
                     ConnectResult::Failed(reason) => {
