@@ -9,6 +9,7 @@ use ratatui::Frame;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Instant, SystemTime};
 use zenmon_core::config::ConnectMode;
+use zenmon_core::doctor::{CheckStatus, DoctorReport};
 use zenmon_core::merge::merge_nodes;
 use zenmon_core::types::{
     LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage,
@@ -124,6 +125,7 @@ pub const SPACE_TITLES: [&str; 2] = ["Traffic", "Network"];
 pub enum Overlay {
     None,
     Help,
+    Doctor,
 }
 
 /// Which pane holds focus when the terminal is too narrow to show both.
@@ -372,6 +374,16 @@ pub struct App {
 
     /// Cursor over the unified Network participant list (see [`NetworkRow`]).
     pub network_selected: usize,
+
+    /// Latest one-shot diagnostics report (drives the header health dot and the
+    /// Doctor overlay). `None` until the first `doctor` run completes.
+    pub doctor_report: Option<DoctorReport>,
+    /// A doctor run is in flight (set on `DoctorStarted`, cleared on report).
+    pub doctor_running: bool,
+    /// Scroll offset for the Doctor overlay check list.
+    pub doctor_scroll: u16,
+    /// Set to request a doctor run; consumed by the run-loop in `lib.rs`.
+    pub pending_doctor_request: bool,
 }
 
 impl App {
@@ -450,6 +462,10 @@ impl App {
             dash_topic_rect: None,
             network_scroll: 0,
             network_selected: 0,
+            doctor_report: None,
+            doctor_running: false,
+            doctor_scroll: 0,
+            pending_doctor_request: false,
         }
     }
 
@@ -536,6 +552,13 @@ impl App {
                 self.port_scan_in_progress = false;
             }
             AppEvent::Liveliness(event) => self.handle_liveliness(event),
+            AppEvent::DoctorStarted => {
+                self.doctor_running = true;
+            }
+            AppEvent::DoctorReport(report) => {
+                self.doctor_report = Some(report);
+                self.doctor_running = false;
+            }
         }
     }
 
@@ -603,6 +626,22 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.overlay == Overlay::Doctor {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
+                    self.overlay = Overlay::None;
+                }
+                KeyCode::Char('r') => self.pending_doctor_request = true,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.doctor_scroll = self.doctor_scroll.saturating_add(1)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.doctor_scroll = self.doctor_scroll.saturating_sub(1)
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.overlay != Overlay::None {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
@@ -630,6 +669,11 @@ impl App {
             KeyCode::Char('?') => {
                 self.overlay = Overlay::Help;
                 self.help_scroll = 0;
+            }
+            KeyCode::Char('d') => {
+                self.overlay = Overlay::Doctor;
+                self.doctor_scroll = 0;
+                self.pending_doctor_request = true;
             }
             KeyCode::Tab => self.switch_space(self.space.next()),
             KeyCode::Char('1') => self.switch_space(Space::Traffic),
@@ -1140,20 +1184,47 @@ impl App {
         if self.overlay == Overlay::Help {
             self.render_help_overlay(frame, body_area);
         }
+        if self.overlay == Overlay::Doctor {
+            self.render_doctor_overlay(frame, body_area);
+        }
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
-        // Health dot: a placeholder derived from socket state this phase; real
-        // `doctor` wiring lands in phase 5.
-        let (dot_color, conn_text) = match &self.connection_state {
-            ConnectionState::Connected(zid) => (
-                Color::Green,
-                format!("Connected zid:{}", &zid[..zid.len().min(16)]),
-            ),
-            ConnectionState::Connecting => (Color::Yellow, "Connecting...".to_string()),
-            ConnectionState::Disconnected(reason) => {
-                (Color::Red, format!("Disconnected: {}", reason))
+        let conn_text = match &self.connection_state {
+            ConnectionState::Connected(zid) => {
+                format!("Connected zid:{}", &zid[..zid.len().min(16)])
             }
+            ConnectionState::Connecting => "Connecting...".to_string(),
+            ConnectionState::Disconnected(reason) => format!("Disconnected: {}", reason),
+        };
+
+        // Health dot: reflects the last `doctor` run's overall status when a
+        // report exists, otherwise falls back to socket connection state.
+        let (dot_glyph, dot_color, health_label) = match &self.doctor_report {
+            Some(report) => match report.status {
+                CheckStatus::Pass => ("●", Color::Green, "OK".to_string()),
+                CheckStatus::Warn => {
+                    let n = report
+                        .checks
+                        .iter()
+                        .filter(|c| c.status != CheckStatus::Pass)
+                        .count();
+                    ("⚠", Color::Yellow, format!("{} warn", n))
+                }
+                CheckStatus::Fail => {
+                    let n = report
+                        .checks
+                        .iter()
+                        .filter(|c| c.status == CheckStatus::Fail)
+                        .count();
+                    ("✖", Color::Red, format!("{} fail", n))
+                }
+            },
+            None => match &self.connection_state {
+                ConnectionState::Connected(_) => ("●", Color::Green, "OK".to_string()),
+                ConnectionState::Connecting => ("●", Color::Yellow, "connecting".to_string()),
+                ConnectionState::Disconnected(_) => ("●", Color::Red, "offline".to_string()),
+            },
         };
 
         let [line0, line1] = Layout::vertical([
@@ -1162,12 +1233,22 @@ impl App {
         ])
         .areas(area);
 
-        // Line 0: dot + connection string, then the two space tabs (right side).
-        let spans = vec![
-            Span::styled("● ", Style::default().fg(dot_color)),
-            Span::styled(conn_text, Style::default().fg(Color::Gray)),
-            Span::raw("  "),
+        // Line 0: health dot + label, connection string, then the two space tabs.
+        let mut spans = vec![
+            Span::styled(format!("{} ", dot_glyph), Style::default().fg(dot_color)),
+            Span::styled(
+                format!("{}  ", health_label),
+                Style::default().fg(dot_color),
+            ),
         ];
+        if self.doctor_running {
+            spans.push(Span::styled(
+                "checking…  ",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        spans.push(Span::styled(conn_text, Style::default().fg(Color::Gray)));
+        spans.push(Span::raw("  "));
         let prefix_width: u16 = spans.iter().map(|s| s.content.chars().count() as u16).sum();
         frame.render_widget(Paragraph::new(Line::from(spans)), line0);
 
@@ -1213,10 +1294,10 @@ impl App {
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = match self.space {
             Space::Traffic => {
-                "Tab space  / filter  j/k move  Enter open  L live  Q query  y/Y copy  ? help  q quit"
+                "Tab space  / filter  j/k move  Enter open  L live  Q query  y/Y copy  d doctor  ? help  q quit"
             }
             Space::Network => {
-                "Tab space  j/k move  Enter drill  s scout  y copy  ? help  q quit"
+                "Tab space  j/k move  Enter drill  s scout  y copy  d doctor  ? help  q quit"
             }
         };
         frame.render_widget(
@@ -1243,11 +1324,12 @@ impl App {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let entries: [(&str, &str); 6] = [
+        let entries: [(&str, &str); 7] = [
             ("Tab / 1 / 2", "switch space"),
             ("j / k", "move"),
             ("Enter / →", "drill into detail"),
             ("Esc / ←", "back to list"),
+            ("d", "doctor / diagnostics"),
             ("?", "help"),
             ("q", "quit"),
         ];
@@ -1271,6 +1353,92 @@ impl App {
 
         let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
         let scroll = self.help_scroll.min(max_scroll);
+        let para = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0));
+        frame.render_widget(para, inner);
+    }
+
+    fn render_doctor_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 72.min(content_area.width.saturating_sub(2));
+        let height = 20.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Doctor ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let mut lines: Vec<Line> = Vec::new();
+        match &self.doctor_report {
+            None => {
+                if self.doctor_running {
+                    lines.push(Line::from(Span::styled(
+                        "Running diagnostics…",
+                        Style::default().fg(Color::Yellow),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "No diagnostics yet.",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            Some(report) => {
+                if self.doctor_running {
+                    lines.push(Line::from(Span::styled(
+                        "Re-running diagnostics…",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                for check in &report.checks {
+                    let (icon, color) = match check.status {
+                        CheckStatus::Pass => ("✓", Color::Green),
+                        CheckStatus::Warn => ("⚠", Color::Yellow),
+                        CheckStatus::Fail => ("✖", Color::Red),
+                    };
+                    let mut spans = vec![
+                        Span::styled(format!("{} ", icon), Style::default().fg(color)),
+                        Span::styled(
+                            format!("{:<12}", check.name),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled(
+                            format!("{:>6}ms  ", check.latency_ms),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ];
+                    if let Some(msg) = &check.message {
+                        spans.push(Span::styled(msg.clone(), Style::default().fg(Color::Gray)));
+                    }
+                    lines.push(Line::from(spans));
+                    if check.status != CheckStatus::Pass {
+                        if let Some(hint) = &check.hint {
+                            lines.push(Line::from(Span::styled(
+                                format!("      hint: {}", hint),
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[r] re-run   [j/k] scroll   [Esc] close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+        let scroll = self.doctor_scroll.min(max_scroll);
         let para = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0));
@@ -1473,6 +1641,7 @@ mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
+    use std::time::Duration;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -2105,6 +2274,34 @@ mod tests {
             println!("\n===== {label} =====");
             print!("{}", buffer_grid(terminal.backend().buffer()));
         }
+
+        // Doctor overlay over the Network space, with a mixed report.
+        {
+            use std::time::Duration;
+            use zenmon_core::doctor::{Check, DoctorReport};
+            let mut app = seed(Space::Network);
+            app.doctor_report = Some(DoctorReport::new(vec![
+                Check::pass("config", Duration::from_millis(1), None),
+                Check::pass("session", Duration::from_millis(8), None),
+                Check::pass(
+                    "connection",
+                    Duration::from_millis(12),
+                    Some("1 router(s), 1 peer(s)".into()),
+                ),
+                Check::warn(
+                    "liveliness",
+                    Duration::from_millis(0),
+                    "no_tokens",
+                    "no liveliness tokens on 'sys/**'",
+                    "is the monitored app declaring liveliness?",
+                ),
+            ]));
+            app.overlay = Overlay::Doctor;
+            let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            println!("\n===== DOCTOR overlay (110x24) =====");
+            print!("{}", buffer_grid(terminal.backend().buffer()));
+        }
     }
 
     #[test]
@@ -2260,5 +2457,98 @@ mod tests {
         terminal.draw(|f| app.render(f)).unwrap();
         // Overlay drew on top without panicking; buffer is non-empty.
         assert!(!buffer_text(terminal.backend().buffer()).trim().is_empty());
+    }
+
+    #[test]
+    fn d_opens_doctor_overlay_and_requests_run() {
+        let mut app = App::new("test".into());
+        assert_eq!(app.overlay, Overlay::None);
+        assert!(!app.pending_doctor_request);
+        app.handle_key(key(KeyCode::Char('d')));
+        assert_eq!(app.overlay, Overlay::Doctor);
+        assert!(app.pending_doctor_request);
+        assert_eq!(app.doctor_scroll, 0);
+    }
+
+    #[test]
+    fn doctor_overlay_r_reruns_and_esc_closes() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char('d')));
+        app.pending_doctor_request = false;
+        // r re-runs
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.pending_doctor_request);
+        // j/k scroll
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.doctor_scroll, 1);
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.doctor_scroll, 0);
+        // Esc closes
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn doctor_events_toggle_running_and_store_report() {
+        use zenmon_core::doctor::Check;
+        let mut app = App::new("test".into());
+        app.handle_event(AppEvent::DoctorStarted);
+        assert!(app.doctor_running);
+        assert!(app.doctor_report.is_none());
+
+        let report = DoctorReport::new(vec![Check::pass("config", Duration::from_millis(1), None)]);
+        app.handle_event(AppEvent::DoctorReport(report));
+        assert!(!app.doctor_running);
+        assert!(app.doctor_report.is_some());
+    }
+
+    #[test]
+    fn render_doctor_overlay_shows_checks_and_hints() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use zenmon_core::doctor::Check;
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.doctor_report = Some(DoctorReport::new(vec![
+            Check::pass("config", Duration::from_millis(2), None),
+            Check::fail(
+                "connection",
+                Duration::from_millis(5),
+                "router_unreachable",
+                "no router connected in client mode",
+                "start a router (zenohd) and check --endpoint",
+            ),
+        ]));
+        app.overlay = Overlay::Doctor;
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("✖"), "fail glyph missing: {}", text);
+        assert!(text.contains("connection"), "check name missing: {}", text);
+        assert!(
+            text.contains("start a router"),
+            "hint text missing: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn header_dot_reflects_failing_doctor_report() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        use zenmon_core::doctor::Check;
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.connection_state = ConnectionState::Connected("zid".into());
+        app.doctor_report = Some(DoctorReport::new(vec![Check::fail(
+            "connection",
+            Duration::from_millis(5),
+            "router_unreachable",
+            "no router connected in client mode",
+            "start a router",
+        )]));
+        // Renders without panic and paints the fail glyph in the header.
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("✖"), "header fail glyph missing: {}", text);
     }
 }
