@@ -33,6 +33,44 @@ cp skills/zenmon/SKILL.md ~/.claude/skills/zenmon/
 The skill triggers on Zenoh debugging requests and is read-only by default
 (`pub`/`replay`/`queryable` require explicit confirmation).
 
+### Build features
+
+The TUI's copy-to-clipboard action uses [`arboard`], whose Linux backend needs
+X11/Wayland. The dashboard itself runs anywhere a terminal does, so clipboard is
+split into its own feature to support display-less targets:
+
+| Build | Dashboard TUI | Clipboard copy | Target |
+|-------|:---:|:---:|--------|
+| `cargo build --release` | ✅ | ✅ | macOS / Linux desktop |
+| `cargo build --release --no-default-features --features tui` | ✅ | ❌ | Android / Termux |
+| `cargo build --release --no-default-features` | ❌ | ❌ | Headless CLI only |
+
+[`arboard`]: https://crates.io/crates/arboard
+
+### Android (Termux)
+
+zenmon runs on an Android phone/tablet under [Termux] (a big-screen tablet gets
+the full dashboard). The phone joins the Zenoh network over Wi-Fi and observes
+it directly — no cloud or tunnel involved.
+
+```bash
+pkg install rust git
+git clone <repo-url> && cd zenmon
+# Full dashboard, minus the copy action (no X11 on Termux):
+cargo build --release --no-default-features --features tui
+./target/release/zenmon tui
+```
+
+Notes:
+- Building `zenoh` on-device is heavy. On low-RAM devices, cap parallelism to
+  avoid the linker OOM-ing: `CARGO_BUILD_JOBS=2 cargo build ...`.
+- Use the **F-Droid** build of Termux (the Play Store one is unmaintained).
+- To skip the slow on-device compile, cross-compile from a workstation with
+  [`cargo-ndk`] for the `aarch64-linux-android` target and copy over the binary.
+
+[Termux]: https://termux.dev
+[`cargo-ndk`]: https://github.com/bbqsrc/cargo-ndk
+
 ## CLI Usage
 
 ```bash
