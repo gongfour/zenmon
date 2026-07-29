@@ -32,7 +32,6 @@ pub(crate) fn space_tab_hit(rects: &[Option<Rect>; 2], col: u16, row: u16) -> Op
 /// `first_item_row` is the absolute screen row of item 0 (typically `rect.y + 1`
 /// to skip the top border). `scroll_offset` is the number of items skipped before
 /// rendering. `total_items` rejects clicks past the end of the list.
-#[allow(dead_code)]
 pub(crate) fn list_hit(
     rect: Rect,
     click_row: u16,
@@ -431,6 +430,12 @@ pub struct App {
     pub list_first_item_row: u16,
     pub list_scroll_offset: usize,
 
+    /// One entry per rendered Network-master display row: `Some(selectable_index)`
+    /// (an index into [`App::network_rows`] / the `network_selected` space) for a
+    /// Session/Service row, or `None` for a non-selectable section/group header.
+    /// Rebuilt every Network render so clicks map back to the right participant.
+    pub network_click_map: Vec<Option<usize>>,
+
     pub toast: Option<(String, std::time::Instant)>,
     pub toast_is_error: bool,
 
@@ -526,6 +531,7 @@ impl App {
             list_rect: None,
             list_first_item_row: 0,
             list_scroll_offset: 0,
+            network_click_map: Vec::new(),
             toast: None,
             toast_is_error: false,
             self_zid: None,
@@ -1094,11 +1100,25 @@ impl App {
     }
 
     fn handle_mouse(&mut self, ev: MouseEvent) {
-        if self.is_text_input_active() {
+        // No mouse routing while a text input or any overlay is active — the
+        // overlays own their own keyboard-driven scroll and selection.
+        if self.is_text_input_active() || self.overlay != Overlay::None {
             return;
         }
-        if let MouseEventKind::Down(MouseButton::Left) = ev.kind {
-            self.handle_click(ev.column, ev.row);
+        match ev.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.handle_click(ev.column, ev.row),
+            MouseEventKind::ScrollUp => self.wheel(-1),
+            MouseEventKind::ScrollDown => self.wheel(1),
+            _ => {}
+        }
+    }
+
+    /// Move the active space's master selection by `delta` (mouse-wheel parity
+    /// with `j`/`k`). Both movers clamp and reset the detail scroll.
+    fn wheel(&mut self, delta: isize) {
+        match self.space {
+            Space::Traffic => self.move_topic_selection(delta),
+            Space::Network => self.move_network_selection(delta),
         }
     }
 
@@ -1109,6 +1129,56 @@ impl App {
                 _ => Space::Network,
             };
             self.pane_focus = PaneFocus::Master;
+            return;
+        }
+
+        // A click inside the master list selects the row under the cursor. Each
+        // space maps a display row to a selection differently: Traffic rows are
+        // 1:1 with `filtered_topics()`, while Network interleaves non-selectable
+        // headers, so its click goes through `network_click_map`.
+        let Some(rect) = self.list_rect else {
+            return;
+        };
+        let inside = col >= rect.x
+            && col < rect.x + rect.width
+            && row >= rect.y
+            && row < rect.y + rect.height;
+        if !inside {
+            return;
+        }
+
+        match self.space {
+            Space::Traffic => {
+                if let Some(idx) = list_hit(
+                    rect,
+                    row,
+                    self.list_scroll_offset,
+                    self.filtered_topics().len(),
+                    self.list_first_item_row,
+                ) {
+                    self.topic_selected = idx;
+                    self.topic_detail_scroll = 0;
+                    // Drill into the detail pane; a no-op visually in wide mode
+                    // (both panes show) but the intended action when narrow.
+                    self.pane_focus = PaneFocus::Detail;
+                }
+            }
+            Space::Network => {
+                if let Some(disp) = list_hit(
+                    rect,
+                    row,
+                    self.list_scroll_offset,
+                    self.network_click_map.len(),
+                    self.list_first_item_row,
+                ) {
+                    // A header row maps to `Some(&None)` → leave selection alone.
+                    if let Some(&Some(sel)) = self.network_click_map.get(disp) {
+                        self.network_selected = sel;
+                        self.node_detail_scroll = 0;
+                        self.pane_focus = PaneFocus::Detail;
+                    }
+                }
+            }
         }
     }
 
@@ -2960,5 +3030,120 @@ mod tests {
             "network command missing: {}",
             text
         );
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn traffic_click_selects_row_and_drills() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.list_rect = Some(Rect::new(0, 2, 40, 10));
+        app.list_first_item_row = 3;
+        app.list_scroll_offset = 0;
+        // Row 5 == first_item_row(3) + 2 → index 2.
+        app.handle_click(5, 5);
+        assert_eq!(app.topic_selected, 2);
+        assert_eq!(app.topic_detail_scroll, 0);
+        assert_eq!(app.pane_focus, PaneFocus::Detail);
+    }
+
+    #[test]
+    fn traffic_click_outside_list_is_ignored() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.topic_selected = 1;
+        app.list_rect = Some(Rect::new(0, 2, 40, 10));
+        app.list_first_item_row = 3;
+        // Row 1 is above the list rect (y == 2) → no change.
+        app.handle_click(5, 1);
+        assert_eq!(app.topic_selected, 1);
+    }
+
+    #[test]
+    fn network_click_map_marks_headers_and_rows() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        app.connection_state = ConnectionState::Connected("z1".into());
+        app.nodes.push(make_node("z1", "router"));
+        app.nodes.push(make_node("z2", "peer"));
+        app.liveliness_tokens
+            .push(make_token("fleet/r1/node/a", true));
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        // Display rows: Sessions header, z1, z2, Services header, group header,
+        // token. Headers → None; participants → their `network_rows()` index.
+        assert_eq!(
+            app.network_click_map,
+            vec![None, Some(0), Some(1), None, None, Some(2)]
+        );
+
+        // Clicking the z2 display row (index 2) selects network_rows() index 1.
+        let rect = app.list_rect.unwrap();
+        let row = app.list_first_item_row + 2 - app.list_scroll_offset as u16;
+        app.handle_click(rect.x + 1, row);
+        assert_eq!(app.network_selected, 1);
+        assert_eq!(app.pane_focus, PaneFocus::Detail);
+
+        // Clicking a header row (display index 0) leaves the selection alone.
+        let hdr_row = app.list_first_item_row - app.list_scroll_offset as u16;
+        app.handle_click(rect.x + 1, hdr_row);
+        assert_eq!(app.network_selected, 1);
+    }
+
+    #[test]
+    fn wheel_moves_traffic_selection_and_clamps() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
+        assert_eq!(app.topic_selected, 1);
+        // Clamp at the bottom.
+        app.wheel(1);
+        app.wheel(1);
+        assert_eq!(app.topic_selected, 2);
+        // Scroll back up and clamp at the top.
+        app.handle_mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
+        app.wheel(-1);
+        app.wheel(-1);
+        assert_eq!(app.topic_selected, 0);
+    }
+
+    #[test]
+    fn wheel_moves_network_selection_and_clamps() {
+        let mut app = App::new("test".into());
+        app.space = Space::Network;
+        app.nodes.push(make_node("z1", "router"));
+        app.nodes.push(make_node("z2", "peer"));
+        // 2 selectable rows.
+        app.wheel(1);
+        assert_eq!(app.network_selected, 1);
+        app.wheel(1); // clamp
+        assert_eq!(app.network_selected, 1);
+        app.wheel(-1);
+        assert_eq!(app.network_selected, 0);
+    }
+
+    #[test]
+    fn wheel_ignored_while_overlay_open() {
+        let mut app = App::new("test".into());
+        app.space = Space::Traffic;
+        seed_topics(&mut app, &["a", "b", "c"]);
+        app.overlay = Overlay::Help;
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
+        assert_eq!(app.topic_selected, 0);
     }
 }

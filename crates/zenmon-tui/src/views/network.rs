@@ -72,6 +72,7 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
         app.list_rect = Some(area);
         app.list_first_item_row = area.y + 1;
         app.list_scroll_offset = 0;
+        app.network_click_map = Vec::new();
         return;
     }
 
@@ -97,21 +98,27 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
     let n_sessions = app.nodes.len();
 
     let mut items: Vec<ListItem> = Vec::new();
+    // One entry per display row (parallel to `items`): `Some(selectable_index)`
+    // for a Session/Service row, `None` for a header. `selectable_index` is the
+    // row's position in `network_rows()` order (== the `network_selected` value).
+    let mut click_map: Vec<Option<usize>> = Vec::new();
     let mut selected_display: Option<usize> = None;
     let mut last_section: Option<u8> = None;
     let mut last_group: Option<String> = None;
 
-    for row in &rows {
+    for (sel_idx, row) in rows.iter().enumerate() {
         match *row {
             NetworkRow::Session(i) => {
                 if last_section != Some(0) {
                     items.push(header_item(format!("── Sessions ({}) ──", n_sessions)));
+                    click_map.push(None);
                     last_section = Some(0);
                 }
                 if selected_row == Some(NetworkRow::Session(i)) {
                     selected_display = Some(items.len());
                 }
                 items.push(node_item(&app.nodes[i], now, self_zid.as_deref()));
+                click_map.push(Some(sel_idx));
             }
             NetworkRow::Service(i) => {
                 if last_section != Some(1) {
@@ -119,6 +126,7 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                         "── Services ({}/{}) ──",
                         total_alive, total_tokens
                     )));
+                    click_map.push(None);
                     last_section = Some(1);
                     last_group = None;
                 }
@@ -132,15 +140,20 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                         "── {} ({}/{}) ──",
                         group, alive, total
                     )));
+                    click_map.push(None);
                     last_group = Some(group);
                 }
                 if selected_row == Some(NetworkRow::Service(i)) {
                     selected_display = Some(items.len());
                 }
                 items.push(token_item(token));
+                click_map.push(Some(sel_idx));
             }
         }
     }
+
+    debug_assert_eq!(click_map.len(), items.len());
+    app.network_click_map = click_map;
 
     let list = List::new(items).block(block).highlight_style(
         Style::default()
