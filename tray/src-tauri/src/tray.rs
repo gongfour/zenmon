@@ -4,7 +4,7 @@
 
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
 use crate::capture::{CaptureState, CaptureStatus};
@@ -34,7 +34,23 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .icon(solid_icon(COLOR_IDLE))
         .tooltip("zenmon-tray — not capturing")
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        // Left click toggles capture directly — that's the one action worth a
+        // single click. The menu stays on right click (Windows convention).
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle().clone();
+                if let Err(err) = crate::state::toggle_capture(&app) {
+                    tracing::error!(error = %err, "toggle capture failed");
+                    crate::state::push_status(&app);
+                }
+            }
+        })
         .on_menu_event(|app, event| {
             let id = event.id.as_ref();
             let app = app.clone();
@@ -134,29 +150,48 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 }
 
 /// Patch the icon and tooltip to match the current capture status.
+///
+/// The icon is only re-sent when the state actually changed: on Windows every
+/// `set_icon` is a `Shell_NotifyIcon(NIM_MODIFY)` that repaints the tray, so
+/// re-sending an identical icon at capture rate shows up as flicker.
 pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
 
-    let color = match status.state {
-        CaptureState::Running => COLOR_ONLINE,
-        CaptureState::Starting => COLOR_WARNING,
-        CaptureState::Failed => COLOR_ERROR,
-        CaptureState::Idle => COLOR_IDLE,
+    let icon_changed = {
+        let state = app.state::<AppState>();
+        let mut inner = state.inner.lock().expect("state poisoned");
+        if inner.tray_icon_state == Some(status.state) {
+            false
+        } else {
+            inner.tray_icon_state = Some(status.state);
+            true
+        }
     };
-    let _ = tray.set_icon(Some(solid_icon(color)));
 
+    if icon_changed {
+        let color = match status.state {
+            CaptureState::Running => COLOR_ONLINE,
+            CaptureState::Starting => COLOR_WARNING,
+            CaptureState::Failed => COLOR_ERROR,
+            CaptureState::Idle => COLOR_IDLE,
+        };
+        let _ = tray.set_icon(Some(solid_icon(color)));
+    }
+
+    // The hints are how left-click-to-toggle gets discovered — there is no
+    // other affordance for it.
     let tooltip = match (&status.last_error, status.state) {
         (Some(err), _) => format!("zenmon-tray — {}: {err}", status.profile_name),
         (None, CaptureState::Running) => format!(
-            "zenmon-tray — {} ({} msgs)",
+            "zenmon-tray — {} · {} msgs\nClick to stop",
             status.profile_name, status.messages_written
         ),
         (None, CaptureState::Starting) => {
-            format!("zenmon-tray — {} (connecting…)", status.profile_name)
+            format!("zenmon-tray — {} · connecting…", status.profile_name)
         }
-        (None, _) => "zenmon-tray — not capturing".to_string(),
+        (None, _) => "zenmon-tray — not capturing\nClick to start".to_string(),
     };
     let _ = tray.set_tooltip(Some(&tooltip));
 }

@@ -7,11 +7,15 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::capture::{self, CaptureHandle, CaptureStatus};
+use crate::capture::{self, CaptureHandle, CaptureState, CaptureStatus};
 use crate::config::{self, AppConfig, Paths};
 
 /// Event name the frontend listens on for capture status pushes.
 pub const CAPTURE_STATUS_EVENT: &str = "capture-status";
+
+/// How often a *running* capture's counters are allowed to reach the tray and
+/// the webview. State transitions bypass this.
+const VISUAL_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub struct AppState {
     pub paths: Paths,
@@ -21,6 +25,11 @@ pub struct AppState {
 pub struct Inner {
     pub config: AppConfig,
     pub capture: Option<CaptureHandle>,
+    /// Last capture state actually pushed to the tray icon. Every
+    /// `Shell_NotifyIcon` call repaints the icon, so re-sending the same one at
+    /// message rate makes it visibly flicker — this lets the tray skip
+    /// no-op icon updates.
+    pub tray_icon_state: Option<CaptureState>,
 }
 
 impl AppState {
@@ -30,6 +39,7 @@ impl AppState {
             inner: Mutex::new(Inner {
                 config,
                 capture: None,
+                tray_icon_state: None,
             }),
         }
     }
@@ -203,9 +213,17 @@ pub fn push_status(app: &AppHandle) {
     let _ = app.emit(CAPTURE_STATUS_EVENT, &status);
 }
 
-/// Follow the running capture's status channel and mirror every change into
-/// the tray icon/tooltip and the webview. Ends when the capture task does.
+/// Follow the running capture's status channel and mirror it into the tray
+/// visuals and the webview. Ends when the capture task does.
+///
+/// The channel ticks once per captured message — potentially hundreds of times
+/// a second — but nothing downstream benefits from that rate: the tray shows a
+/// message *count* and the settings window shows human-readable numbers. So
+/// updates are coalesced to [`VISUAL_REFRESH_INTERVAL`], with state changes
+/// (start/stop/failure) always going through immediately.
 fn spawn_status_watcher(app: AppHandle) {
+    use std::time::Instant;
+
     tauri::async_runtime::spawn(async move {
         let mut rx = {
             let state = app.state::<AppState>();
@@ -217,10 +235,22 @@ fn spawn_status_watcher(app: AppHandle) {
         };
 
         push_status(&app);
+        let mut last_state = Some(rx.borrow().state);
+        let mut last_push = Instant::now();
+
         while rx.changed().await.is_ok() {
             let status = rx.borrow().clone();
-            crate::tray::refresh_visuals(&app, &status);
-            let _ = app.emit(CAPTURE_STATUS_EVENT, &status);
+            let state_changed = last_state != Some(status.state);
+            if state_changed || last_push.elapsed() >= VISUAL_REFRESH_INTERVAL {
+                crate::tray::refresh_visuals(&app, &status);
+                let _ = app.emit(CAPTURE_STATUS_EVENT, &status);
+                last_state = Some(status.state);
+                last_push = Instant::now();
+            }
         }
+
+        // The task ended (stopped, or the subscription died) — make sure the
+        // final state lands even if it arrived inside the throttle window.
+        push_status(&app);
     });
 }
