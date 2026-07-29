@@ -12,19 +12,30 @@ cargo check                    # Quick type check
 cargo run -- sub "test/**"     # Run via cargo
 ```
 
-The tray app is a Tauri project and **must be built through the Tauri CLI**, not
-plain cargo — Tauri decides dev-vs-production by the `custom-protocol` feature
-(`dev = !custom_protocol` in tauri's build.rs), which only the CLI enables. A
-plain `cargo build --release -p zenmon-tray` produces a binary that tries to
-load the UI from the vite dev server and shows a connection-refused page.
+These only build the CLI/TUI crates — `zenmon-tray` is excluded from the
+workspace `default-members` on purpose (see below).
+
+### zenmon-tray must be built with the Tauri CLI, never bare cargo
+
+Tauri picks dev-vs-production from the **`custom-protocol` cargo feature**
+(`dev = !custom_protocol`, in tauri's own `build.rs`), and only the Tauri CLI
+passes it. `cargo build --release -p zenmon-tray` therefore yields a *dev*
+binary that loads the UI from the vite dev server — run standalone it shows a
+blank `ERR_CONNECTION_REFUSED` page. Worse, both builds write to the **same
+path**, so a stray cargo build silently replaces a working binary.
 
 ```bash
 cd tray
-npm install                    # first time only
-npm run tauri dev              # dev: vite HMR + console logs
+npm install                          # first time only
+npm run tauri dev                    # dev: vite HMR + live logs
 npm run tauri build -- --no-bundle   # → ./target/release/zenmon-tray.exe
-npm run tauri build            # …plus installers
+npm run tauri build                  # …plus installers
 ```
+
+Guards against re-tripping this: `default-members` excludes the tray from bare
+cargo builds, and a dev binary prints a warning naming the fix on startup. To
+identify a binary, run it and read the first line — do **not** grep the exe for
+UI strings, Tauri compresses embedded assets. Details in `tray/README.md`.
 
 Requires: Rust 1.75+, Node 20+ (tray only), zenohd for testing (homebrew: `brew install zenoh`)
 
@@ -49,6 +60,7 @@ tray/             # Tauri app: system-tray capture toggle
 
 Toggles `zenmon capture --dir`-equivalent recording from the tray, so traffic
 can be captured for post-incident debugging without keeping a terminal open.
+Full notes in `tray/README.md`; the load-bearing ones:
 
 - **Capture loop** (`tray/src-tauri/src/capture.rs`) is ported from `zenmon-cli`'s
   `Command::Capture` dir-mode arm, with two deliberate differences: the stop
@@ -67,6 +79,11 @@ can be captured for post-incident debugging without keeping a terminal open.
 - **Permissions**: Tauri v2 grants no plugin permissions without
   `src-tauri/capabilities/default.json` — without it `emit`/`listen` fail silently
   and the capture-status events never reach the UI.
+- **The capture status channel ticks once per captured message.** Anything hanging
+  off it must throttle: `set_icon`/`set_tooltip` are each a
+  `Shell_NotifyIcon(NIM_MODIFY)` that repaints the tray, so driving them at message
+  rate makes the icon strobe. `state.rs` coalesces to 1 Hz, `tray.rs` skips no-op
+  icon writes, and state transitions bypass both.
 
 ## Key Patterns
 

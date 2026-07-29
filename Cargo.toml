@@ -9,6 +9,20 @@ members = [
     "tray/src-tauri",
 ]
 
+# zenmon-tray is deliberately excluded from the default set. Tauri decides
+# dev-vs-production from the `custom-protocol` feature, which only the Tauri
+# CLI passes — so a bare `cargo build --release` would emit a *dev* binary that
+# looks for the vite dev server, and it would land on the exact same path the
+# real build writes to (`target/release/zenmon-tray.exe`), silently replacing a
+# working binary with a broken one. Build the tray with `npm run tauri build`
+# (see tray/README.md); `cargo build --workspace` still reaches it if you
+# explicitly ask for it.
+default-members = [
+    "crates/zenmon-core",
+    "crates/zenmon-cli",
+    "crates/zenmon-tui",
+]
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
