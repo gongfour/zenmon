@@ -1,6 +1,7 @@
 # zenmon
 
-Zenoh network monitor and debugger. CLI + TUI tool built with Rust.
+Zenoh network monitor and debugger. CLI + TUI tool built with Rust, plus
+`zenmon-tray`, a desktop app that records traffic from the system tray.
 
 Lightweight terminal-based alternative to web dashboards for monitoring Zenoh networks. Uses native Zenoh API directly (not REST), so features like attachments are fully supported.
 
@@ -18,6 +19,9 @@ cargo build --release
 ```
 
 Requires a Rust toolchain (1.75+).
+
+Both commands build the CLI and TUI only. The tray app has its own build —
+see [Desktop tray app](#desktop-tray-app); do **not** build it with bare `cargo`.
 
 ### AI skill (optional)
 
@@ -374,16 +378,38 @@ Interactive terminal dashboard with 5 views:
 - **Attachment display** — Zenoh attachments shown in magenta across all views
 - **Non-blocking** — Reconnection and queries run in background, UI stays responsive
 
+## Desktop tray app
+
+`zenmon-tray` records Zenoh traffic from the system tray — the same rotating
+segment store `zenmon capture --dir` writes and `zenmon trace` reads — so a
+session can be captured for post-incident debugging without keeping a terminal
+open. Left click toggles capture, right click opens the menu.
+
+```bash
+cd tray
+npm install                            # first time only
+npm run tauri build -- --no-bundle     # → ../target/release/zenmon-tray.exe
+```
+
+Requires Node 20+. **Build it with the Tauri CLI, never with bare `cargo`** —
+`cargo build -p zenmon-tray` writes a *dev* binary to the same path, which shows
+a blank page when run standalone. Full notes, dev workflow and layout in
+[`tray/README.md`](tray/README.md).
+
 ## Architecture
 
-Cargo workspace with 3 crates:
+Cargo workspace with 3 crates plus the tray app:
 
 ```
 crates/
   zenmon-core/    # Zenoh session, subscribe, query, registry (library)
   zenmon-cli/     # clap subcommands, produces `zenmon` binary
   zenmon-tui/     # ratatui views and event loop (library)
+tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 ```
+
+`zenmon-tray` is excluded from the workspace `default-members`, so a bare
+`cargo build --release` at the root does not touch it.
 
 ### Tech Stack
 
@@ -391,6 +417,7 @@ crates/
 - [tokio](https://tokio.rs/) — Async runtime
 - [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) — Terminal UI
 - [clap](https://clap.rs/) — CLI argument parsing
+- [tauri](https://tauri.app/) + [React](https://react.dev/) — Desktop tray app
 
 ## Roadmap
 
@@ -428,6 +455,7 @@ crates/
 21. [ ] Automatic `events` in the episode (safety transitions, stalls) beyond `--track`
 22. [ ] Strict contract payload validation (field/type checks against the schema)
 23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
+24. [x] `zenmon-tray` — always-on capture from the system tray, no terminal required
 
 ## License
 
