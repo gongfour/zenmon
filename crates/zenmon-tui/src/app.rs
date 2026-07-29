@@ -119,13 +119,89 @@ impl Space {
 
 pub const SPACE_TITLES: [&str; 2] = ["Traffic", "Network"];
 
-/// A modal overlay drawn on top of the active space. `Palette` (phase 2) and
-/// `Doctor` (phase 5) are added in later phases.
+/// A modal overlay drawn on top of the active space. `Palette` opens the `:`
+/// command list; `ScoutPort` is the numeric scout-port/domain switcher reached
+/// through the palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     None,
     Help,
     Doctor,
+    Palette,
+    ScoutPort,
+}
+
+/// An effect the command palette can trigger. Each entry in [`palette_commands`]
+/// maps a human label to one of these; [`App::run_palette_action`] performs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteAction {
+    SwitchSpace(Space),
+    RunDoctor,
+    ScoutRefresh,
+    SetMode(ConnectMode),
+    OpenScoutPort,
+    OpenHelp,
+    Quit,
+}
+
+/// One row in the command palette / help overlay: a `label`, a short `key_hint`
+/// (the direct keybinding, if any), and the [`PaletteAction`] it runs.
+pub struct PaletteCommand {
+    pub label: &'static str,
+    pub key_hint: &'static str,
+    pub action: PaletteAction,
+}
+
+/// The static command table. The palette and help overlay both render from this
+/// list so the two can never drift out of sync.
+pub fn palette_commands() -> &'static [PaletteCommand] {
+    &[
+        PaletteCommand {
+            label: "Go to Traffic",
+            key_hint: "1",
+            action: PaletteAction::SwitchSpace(Space::Traffic),
+        },
+        PaletteCommand {
+            label: "Go to Network",
+            key_hint: "2",
+            action: PaletteAction::SwitchSpace(Space::Network),
+        },
+        PaletteCommand {
+            label: "Run doctor",
+            key_hint: "d",
+            action: PaletteAction::RunDoctor,
+        },
+        PaletteCommand {
+            label: "Refresh nodes (scout)",
+            key_hint: "s",
+            action: PaletteAction::ScoutRefresh,
+        },
+        PaletteCommand {
+            label: "Switch to peer mode",
+            key_hint: "",
+            action: PaletteAction::SetMode(ConnectMode::Peer),
+        },
+        PaletteCommand {
+            label: "Switch to client mode",
+            key_hint: "",
+            action: PaletteAction::SetMode(ConnectMode::Client),
+        },
+        PaletteCommand {
+            label: "Set scout domain / port…",
+            key_hint: "",
+            action: PaletteAction::OpenScoutPort,
+        },
+        PaletteCommand {
+            label: "Help",
+            key_hint: "?",
+            action: PaletteAction::OpenHelp,
+        },
+        PaletteCommand {
+            label: "Quit",
+            key_hint: "q",
+            action: PaletteAction::Quit,
+        },
+    ]
 }
 
 /// Which pane holds focus when the terminal is too narrow to show both.
@@ -337,13 +413,14 @@ pub struct App {
     pub last_scout_at: Option<SystemTime>,
     pub pending_scout_request: bool,
 
-    pub scout_port_modal_open: bool,
     pub scout_port_input: String,
     pub scout_port_current: Option<u16>,
     pub current_mode: ConnectMode,
-    pub mode_modal_open: bool,
-    pub mode_modal_selection: ConnectMode,
     pub pending_reconnect_mode: Option<ConnectMode>,
+
+    /// Command-palette filter text and selected filtered-row index.
+    pub palette_input: String,
+    pub palette_selected: usize,
     pub port_scan_results: Vec<PortScoutResult>,
     pub port_scan_selected: usize,
     pub port_scan_in_progress: bool,
@@ -435,13 +512,12 @@ impl App {
             scout_in_progress: false,
             last_scout_at: None,
             pending_scout_request: false,
-            scout_port_modal_open: false,
             scout_port_input: String::new(),
             scout_port_current: None,
             current_mode: ConnectMode::Client,
-            mode_modal_open: false,
-            mode_modal_selection: ConnectMode::Client,
             pending_reconnect_mode: None,
+            palette_input: String::new(),
+            palette_selected: 0,
             port_scan_results: Vec::new(),
             port_scan_selected: 0,
             port_scan_in_progress: false,
@@ -626,6 +702,14 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.overlay == Overlay::Palette {
+            self.handle_palette_key(key);
+            return;
+        }
+        if self.overlay == Overlay::ScoutPort {
+            self.handle_scout_modal_key(key);
+            return;
+        }
         if self.overlay == Overlay::Doctor {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
@@ -674,6 +758,11 @@ impl App {
                 self.overlay = Overlay::Doctor;
                 self.doctor_scroll = 0;
                 self.pending_doctor_request = true;
+            }
+            KeyCode::Char(':') => {
+                self.overlay = Overlay::Palette;
+                self.palette_input.clear();
+                self.palette_selected = 0;
             }
             KeyCode::Tab => self.switch_space(self.space.next()),
             KeyCode::Char('1') => self.switch_space(Space::Traffic),
@@ -847,8 +936,161 @@ impl App {
         self.topics_filtering
             || self.stream_filtering
             || self.query_editing
-            || self.scout_port_modal_open
-            || self.mode_modal_open
+            || self.overlay == Overlay::Palette
+            || self.overlay == Overlay::ScoutPort
+    }
+
+    /// Indices into [`palette_commands`] whose label contains `palette_input`
+    /// (case-insensitive substring). Empty input matches everything.
+    pub(crate) fn filtered_palette_commands(&self) -> Vec<usize> {
+        let needle = self.palette_input.to_ascii_lowercase();
+        palette_commands()
+            .iter()
+            .enumerate()
+            .filter(|(_, cmd)| {
+                needle.is_empty() || cmd.label.to_ascii_lowercase().contains(&needle)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Command-palette key handling: printable chars filter, arrows/Tab move the
+    /// cursor within the filtered list, Enter runs, Esc closes.
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+            }
+            KeyCode::Enter => {
+                let filtered = self.filtered_palette_commands();
+                if let Some(&idx) = filtered.get(self.palette_selected) {
+                    let action = palette_commands()[idx].action;
+                    self.run_palette_action(action);
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let len = self.filtered_palette_commands().len();
+                if len > 0 {
+                    self.palette_selected = (self.palette_selected + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => {
+                self.palette_selected = self.palette_selected.saturating_sub(1);
+            }
+            KeyCode::Backspace => {
+                self.palette_input.pop();
+                self.palette_selected = 0;
+            }
+            KeyCode::Char(c) => {
+                self.palette_input.push(c);
+                self.palette_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Perform a palette command's effect. Every action closes the palette,
+    /// except `OpenScoutPort`, which transitions to the ScoutPort overlay.
+    fn run_palette_action(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::SwitchSpace(space) => {
+                self.switch_space(space);
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::RunDoctor => {
+                self.overlay = Overlay::Doctor;
+                self.doctor_scroll = 0;
+                self.pending_doctor_request = true;
+            }
+            PaletteAction::ScoutRefresh => {
+                if !self.scout_in_progress {
+                    self.pending_scout_request = true;
+                }
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::SetMode(mode) => {
+                if mode != self.current_mode {
+                    self.pending_reconnect_mode = Some(mode);
+                    self.set_toast(format!("Switching to {} mode…", mode));
+                } else {
+                    self.set_toast(format!("Already in {} mode", mode));
+                }
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::OpenScoutPort => {
+                self.overlay = Overlay::ScoutPort;
+                self.scout_port_input.clear();
+            }
+            PaletteAction::OpenHelp => {
+                self.overlay = Overlay::Help;
+                self.help_scroll = 0;
+            }
+            PaletteAction::Quit => {
+                self.should_quit = true;
+            }
+        }
+    }
+
+    /// ScoutPort modal key handling: type a custom port, scan domains, or pick a
+    /// scanned result, then reconnect on that scout port.
+    fn handle_scout_modal_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+                self.scout_port_input.clear();
+            }
+            KeyCode::Char('s')
+                if self.scout_port_input.is_empty() && !self.port_scan_in_progress =>
+            {
+                self.pending_port_scan_request = true;
+            }
+            KeyCode::Enter => {
+                let from_input = self
+                    .scout_port_input
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| *p > 0);
+                let from_list = if self.scout_port_input.is_empty() {
+                    self.port_scan_results
+                        .iter()
+                        .filter(|r| !r.nodes.is_empty())
+                        .nth(self.port_scan_selected)
+                        .map(|r| r.port)
+                } else {
+                    None
+                };
+                if let Some(port) = from_input.or(from_list) {
+                    self.pending_reconnect_port = Some(port);
+                    self.scout_port_current = Some(port);
+                    self.overlay = Overlay::None;
+                    self.scout_port_input.clear();
+                    self.set_toast(format!("Reconnecting with scout port {}", port));
+                } else {
+                    self.set_error_toast("Type a port or scan and select one");
+                }
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() && self.scout_port_input.len() < 5 => {
+                self.scout_port_input.push(c);
+            }
+            KeyCode::Backspace => {
+                self.scout_port_input.pop();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.port_scan_selected = self.port_scan_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let count = self
+                    .port_scan_results
+                    .iter()
+                    .filter(|r| !r.nodes.is_empty())
+                    .count();
+                if count > 0 && self.port_scan_selected + 1 < count {
+                    self.port_scan_selected += 1;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn handle_mouse(&mut self, ev: MouseEvent) {
@@ -1187,6 +1429,12 @@ impl App {
         if self.overlay == Overlay::Doctor {
             self.render_doctor_overlay(frame, body_area);
         }
+        if self.overlay == Overlay::Palette {
+            self.render_palette_overlay(frame, body_area);
+        }
+        if self.overlay == Overlay::ScoutPort {
+            self.render_scout_port_modal(frame, body_area);
+        }
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
@@ -1294,10 +1542,10 @@ impl App {
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = match self.space {
             Space::Traffic => {
-                "Tab space  / filter  j/k move  Enter open  L live  Q query  y/Y copy  d doctor  ? help  q quit"
+                "Tab space  / filter  j/k move  Enter open  L live  Q query  y/Y copy  : cmds  d doctor  ? help  q quit"
             }
             Space::Network => {
-                "Tab space  j/k move  Enter drill  s scout  y copy  d doctor  ? help  q quit"
+                "Tab space  j/k move  Enter drill  s scout  y copy  : cmds  d doctor  ? help  q quit"
             }
         };
         frame.render_widget(
@@ -1324,30 +1572,23 @@ impl App {
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let entries: [(&str, &str); 7] = [
-            ("Tab / 1 / 2", "switch space"),
-            ("j / k", "move"),
-            ("Enter / →", "drill into detail"),
-            ("Esc / ←", "back to list"),
-            ("d", "doctor / diagnostics"),
-            ("?", "help"),
-            ("q", "quit"),
-        ];
-        let mut lines: Vec<Line> = entries
+        // Generated from the same command table the palette uses, so help and
+        // the `:` palette can never drift apart.
+        let mut lines: Vec<Line> = palette_commands()
             .iter()
-            .map(|(keys, desc)| {
+            .map(|cmd| {
                 Line::from(vec![
                     Span::styled(
-                        format!("  {:<12}", keys),
+                        format!("  {:<6}", cmd.key_hint),
                         Style::default().fg(Color::Yellow),
                     ),
-                    Span::styled(desc.to_string(), Style::default().fg(Color::White)),
+                    Span::styled(cmd.label.to_string(), Style::default().fg(Color::White)),
                 ])
             })
             .collect();
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "j/k or ↑↓ to scroll · Esc/q/? to close",
+            "`:` opens the command palette · j/k or ↑↓ to scroll · Esc/q/? to close",
             Style::default().fg(Color::DarkGray),
         )));
 
@@ -1445,7 +1686,6 @@ impl App {
         frame.render_widget(para, inner);
     }
 
-    #[allow(dead_code)]
     fn render_scout_port_modal(&self, frame: &mut Frame, content_area: Rect) {
         let width = 58.min(content_area.width.saturating_sub(2));
         let height = 16.min(content_area.height.saturating_sub(2));
@@ -1571,11 +1811,10 @@ impl App {
         );
     }
 
-    #[allow(dead_code)]
-    fn render_mode_modal(&self, frame: &mut Frame, content_area: Rect) {
-        let width = 36.min(content_area.width.saturating_sub(2));
-        let height = 9.min(content_area.height.saturating_sub(2));
-        if width < 24 || height < 7 {
+    fn render_palette_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 54.min(content_area.width.saturating_sub(2));
+        let height = 16.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
             return;
         }
         let x = content_area.x + (content_area.width - width) / 2;
@@ -1585,52 +1824,62 @@ impl App {
         frame.render_widget(Clear, popup);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Mode ")
-            .style(
-                Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            );
+            .title(" Commands ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
-        let [_pad, peer_row, client_row, _gap, current_row, hint_row] = Layout::vertical([
+        let [input_row, list_area, hint_row] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .areas(inner);
 
-        let (peer_marker, client_marker) = match self.mode_modal_selection {
-            ConnectMode::Peer => ("> [*] Peer", "  [ ] Client"),
-            ConnectMode::Client => ("  [ ] Peer", "> [*] Client"),
-        };
-
         frame.render_widget(
-            Paragraph::new(peer_marker).style(Style::default().fg(Color::Cyan)),
-            peer_row,
-        );
-        frame.render_widget(
-            Paragraph::new(client_marker).style(Style::default().fg(Color::Cyan)),
-            client_row,
+            Paragraph::new(format!("> {}▏", self.palette_input))
+                .style(Style::default().fg(Color::Cyan)),
+            input_row,
         );
 
-        let current_label = match self.current_mode {
-            ConnectMode::Peer => "current: peer",
-            ConnectMode::Client => "current: client",
-        };
-        frame.render_widget(
-            Paragraph::new(current_label).style(Style::default().fg(Color::Gray)),
-            current_row,
-        );
+        let commands = palette_commands();
+        let filtered = self.filtered_palette_commands();
+        let label_width = list_area.width.saturating_sub(2) as usize;
+        let lines: Vec<Line> = filtered
+            .iter()
+            .enumerate()
+            .map(|(row, &idx)| {
+                let cmd = &commands[idx];
+                let selected = row == self.palette_selected;
+                let marker = if selected { "> " } else { "  " };
+                let hint_w = cmd.key_hint.chars().count();
+                let label_w = cmd.label.chars().count();
+                let pad = label_width
+                    .saturating_sub(2)
+                    .saturating_sub(label_w)
+                    .saturating_sub(hint_w);
+                let label_style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(vec![
+                    Span::styled(format!("{}{}", marker, cmd.label), label_style),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(
+                        cmd.key_hint.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), list_area);
 
         frame.render_widget(
-            Paragraph::new(" jk/UpDn:select  Enter:apply  Esc:close ")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("[Enter] run   [Esc] close").style(Style::default().fg(Color::DarkGray)),
             hint_row,
         );
     }
@@ -2302,6 +2551,16 @@ mod tests {
             println!("\n===== DOCTOR overlay (110x24) =====");
             print!("{}", buffer_grid(terminal.backend().buffer()));
         }
+
+        // Command palette over Traffic.
+        {
+            let mut app = seed(Space::Traffic);
+            app.overlay = Overlay::Palette;
+            let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            println!("\n===== PALETTE overlay (110x24) =====");
+            print!("{}", buffer_grid(terminal.backend().buffer()));
+        }
     }
 
     #[test]
@@ -2550,5 +2809,156 @@ mod tests {
         terminal.draw(|f| app.render(f)).unwrap();
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("✖"), "header fail glyph missing: {}", text);
+    }
+
+    #[test]
+    fn colon_opens_command_palette() {
+        let mut app = App::new("test".into());
+        assert_eq!(app.overlay, Overlay::None);
+        app.handle_key(key(KeyCode::Char(':')));
+        assert_eq!(app.overlay, Overlay::Palette);
+        assert!(app.palette_input.is_empty());
+        assert_eq!(app.palette_selected, 0);
+    }
+
+    #[test]
+    fn palette_filtering_shrinks_and_matches() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char(':')));
+        let all = app.filtered_palette_commands().len();
+        assert_eq!(all, palette_commands().len());
+
+        // Type "peer" (case-insensitive) → only the peer-mode command matches.
+        for c in "peer".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        let filtered = app.filtered_palette_commands();
+        assert!(filtered.len() < all);
+        assert_eq!(filtered.len(), 1);
+        assert!(matches!(
+            palette_commands()[filtered[0]].action,
+            PaletteAction::SetMode(ConnectMode::Peer)
+        ));
+    }
+
+    #[test]
+    fn palette_enter_runs_peer_mode_command() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.handle_key(key(KeyCode::Char(':')));
+        for c in "peer".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_reconnect_mode, Some(ConnectMode::Peer));
+        // Palette closed after running.
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn palette_set_mode_same_mode_does_not_reconnect() {
+        let mut app = App::new("test".into());
+        app.current_mode = ConnectMode::Client;
+        app.run_palette_action(PaletteAction::SetMode(ConnectMode::Client));
+        assert_eq!(app.pending_reconnect_mode, None);
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn palette_esc_closes_without_action() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char(':')));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.overlay, Overlay::None);
+        assert_eq!(app.pending_reconnect_mode, None);
+    }
+
+    #[test]
+    fn palette_arrow_navigation_clamps() {
+        let mut app = App::new("test".into());
+        app.handle_key(key(KeyCode::Char(':')));
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.palette_selected, 0);
+        let count = app.filtered_palette_commands().len();
+        for _ in 0..(count + 3) {
+            app.handle_key(key(KeyCode::Down));
+        }
+        assert_eq!(app.palette_selected, count - 1);
+    }
+
+    #[test]
+    fn scout_port_action_opens_modal_and_reconnects() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        assert_eq!(app.overlay, Overlay::ScoutPort);
+        // Type a port and confirm.
+        app.handle_key(key(KeyCode::Char('7')));
+        app.handle_key(key(KeyCode::Char('4')));
+        app.handle_key(key(KeyCode::Char('5')));
+        app.handle_key(key(KeyCode::Char('0')));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_reconnect_port, Some(7450));
+        assert_eq!(app.scout_port_current, Some(7450));
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn scout_port_modal_esc_closes() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        app.handle_key(key(KeyCode::Char('7')));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.overlay, Overlay::None);
+        assert!(app.scout_port_input.is_empty());
+        assert_eq!(app.pending_reconnect_port, None);
+    }
+
+    #[test]
+    fn scout_port_modal_s_requests_scan() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        app.handle_key(key(KeyCode::Char('s')));
+        assert!(app.pending_port_scan_request);
+    }
+
+    #[test]
+    fn scout_port_enter_uses_selected_scan_result() {
+        let mut app = App::new("test".into());
+        app.run_palette_action(PaletteAction::OpenScoutPort);
+        app.port_scan_results = vec![
+            PortScoutResult {
+                port: 7446,
+                nodes: vec![],
+            },
+            PortScoutResult {
+                port: 7448,
+                nodes: vec![zenmon_core::types::ScoutInfo {
+                    zid: "z1".into(),
+                    whatami: "peer".into(),
+                    locators: vec![],
+                }],
+            },
+        ];
+        app.port_scan_selected = 0; // first non-empty result → port 7448
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_reconnect_port, Some(7448));
+    }
+
+    #[test]
+    fn render_palette_overlay_paints_labels() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.overlay = Overlay::Palette;
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Commands"), "palette title missing: {}", text);
+        assert!(text.contains("doctor"), "doctor command missing: {}", text);
+        assert!(
+            text.contains("Network"),
+            "network command missing: {}",
+            text
+        );
     }
 }

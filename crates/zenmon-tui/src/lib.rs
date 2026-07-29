@@ -25,7 +25,6 @@ pub async fn run(mut config: ZenmonConfig, refresh: Duration) -> Result<()> {
     let mut app = App::new(endpoint);
     app.scout_port_current = config.scout_port;
     app.current_mode = config.mode;
-    app.mode_modal_selection = config.mode;
 
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
     let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel::<ZenohMessage>();
