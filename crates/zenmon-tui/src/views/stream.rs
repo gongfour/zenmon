@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::app::App;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -6,7 +7,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use std::str::FromStr;
 
-fn format_stream_timestamp(raw: &str) -> String {
+pub(crate) fn format_stream_timestamp(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
     }
