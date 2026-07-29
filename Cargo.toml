@@ -4,6 +4,9 @@ members = [
     "crates/zenmon-core",
     "crates/zenmon-cli",
     "crates/zenmon-tui",
+    # Tauri app: Rust backend lives under the frontend project, mirroring the
+    # standard Tauri layout (crates/ stays pure-Rust crates).
+    "tray/src-tauri",
 ]
 
 [workspace.package]

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions the settings webview needs: core plugins (including core:event, so backend→frontend capture-status events reach the UI) and autostart (Launch at login). Tauri v2 grants no plugin permissions without this file, so listen/emit would silently fail.",
+  "windows": ["main"],
+  "permissions": ["core:default", "autostart:default", "dialog:default"]
+}

@@ -1,0 +1,171 @@
+/* Design tokens lifted verbatim from dotori's launcher
+   (dotori_rcs/gui/src/styles/app.css; canonical spec docs/gui_design.md
+   §3 color · §4 type · §7 depth) so this tray app reads as part of the same
+   toolchain. Only the component classes this app actually uses are kept —
+   the launcher's rail/compose/deploy view styles are not copied.
+
+   Principles carried over:
+   - surfaces are a single flat color; separation is done by lines, not fills
+   - --accent means "interactive", never "status" (status = go/warn/stop)
+   - shadows mean "dismissible", not "elevated" — only on things that close */
+:root{
+  color-scheme:light;
+  --canvas:#FFFFFF; --surface:#FFFFFF; --sunken:#F8FAFC;
+  --scrim:rgba(15,23,42,.26);
+  /* --line-strong is for boundaries of operable components (WCAG 1.4.11, 3:1) */
+  --line:#E4E7EB; --line-soft:#F1F3F5; --line-strong:#8290A5;
+  /* --faint is 2.6:1 — never use it for text that carries unique information */
+  --ink:#0F172A; --dim:#64748B; --faint:#94A3B8;
+  --accent:#2563EB; --accent-hover:#1D4ED8;
+  --accent-wash:#EFF4FF; --accent-line:#C7D9FB; --accent-ring:rgba(37,99,235,.18);
+  --accent-ink:#FFFFFF;
+  --go:#15803D;   --go-wash:#F0FBF4;   --go-line:#BBE7C9;
+  --warn:#B45309; --warn-wash:#FFFAF0; --warn-line:#F0DCB8;
+  --stop:#B91C1C; --stop-wash:#FEF2F2; --stop-line:#F6C9C6;
+  --sh-modal:0 16px 48px -12px rgba(15,23,42,.28);
+  --ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --canvas:#12151C; --surface:#12151C; --sunken:#0B0E14;
+  --scrim:rgba(0,0,0,.55);
+  --line:#262D3B; --line-soft:#1C2230; --line-strong:#57657E;
+  --ink:#E6EAF2; --dim:#94A1B5; --faint:#5F6C82;
+  --accent:#7AA2F7; --accent-hover:#96B7FF;
+  --accent-wash:rgba(122,162,247,.13); --accent-line:rgba(122,162,247,.34); --accent-ring:rgba(122,162,247,.28);
+  --accent-ink:#0D1220;
+  --go:#57C08B;   --go-wash:rgba(87,192,139,.11);   --go-line:rgba(87,192,139,.32);
+  --warn:#DFA858; --warn-wash:rgba(223,168,88,.11); --warn-line:rgba(223,168,88,.32);
+  --stop:#E06C6C; --stop-wash:rgba(224,108,108,.11); --stop-line:rgba(224,108,108,.34);
+  --sh-modal:0 16px 48px -12px rgba(0,0,0,.65);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%}
+body{background:var(--canvas);color:var(--ink);font-family:var(--ui);font-size:13px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+button,input,select{font-family:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ─── shell ──────────────────────────────────────────────────── */
+.app{display:flex;flex-direction:column;height:100vh;min-width:0}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:18px 24px 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.topbar .tb-main{min-width:0}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.16em;color:var(--dim);text-transform:uppercase}
+.h1{font-weight:600;font-size:19px;letter-spacing:-.01em;margin-top:3px}
+.body{flex:1;overflow-y:auto;padding:20px 24px}
+.footbar{display:flex;align-items:center;gap:10px;padding:14px 24px;
+  border-top:1px solid var(--line);flex:0 0 auto}
+.footbar .grow{flex:1}
+
+/* ─── capture status pill (topbar) ───────────────────────────── */
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;padding:4px 10px;border-radius:999px;border:1px solid;white-space:nowrap}
+.pill i{width:5px;height:5px;border-radius:50%;background:currentColor;display:block;flex:0 0 auto}
+.pill.run{color:var(--go);border-color:var(--go-line);background:var(--go-wash)}
+.pill.warn{color:var(--warn);border-color:var(--warn-line);background:var(--warn-wash)}
+.pill.stop{color:var(--stop);border-color:var(--stop-line);background:var(--stop-wash)}
+.pill.idle{color:var(--dim);border-color:var(--line-strong);background:var(--sunken)}
+.statline{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.statline.bad{color:var(--stop)}
+
+/* ─── fieldset / rows (the form vocabulary) ──────────────────── */
+.fieldset{background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  padding:4px 0 8px;margin-bottom:16px}
+.fs-h{display:flex;align-items:center;gap:9px;padding:13px 16px 11px;border-bottom:1px solid var(--line)}
+.fs-h .lbl{font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.fs-h .grow{flex:1}
+.row{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;gap:14px}
+.row + .row{border-top:1px solid var(--line-soft)}
+.row label{color:var(--dim);font-weight:500}
+.row label .hint{display:block;color:var(--dim);font-weight:400;font-size:11px;margin-top:1px}
+.sel{position:relative;min-width:150px}
+.sel select,.inp input{width:100%;appearance:none;background:var(--sunken);border:1px solid var(--line-strong);
+  color:var(--ink);font-family:var(--mono);font-size:12px;padding:8px 30px 8px 11px;border-radius:5px;cursor:pointer}
+.sel select:focus,.inp input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-ring)}
+.sel .chev{position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--dim);
+  pointer-events:none;font-size:10px}
+.inp{flex:1;min-width:0;max-width:300px}
+.inp input{font-family:var(--mono);cursor:text;padding-right:11px}
+.inp.wide{max-width:none}
+/* numeric field + unit suffix */
+.num{display:flex;align-items:center;gap:8px;justify-content:flex-end;flex:0 0 auto}
+.num input{width:96px;background:var(--sunken);border:1px solid var(--line-strong);color:var(--ink);
+  font-family:var(--mono);font-size:12px;padding:8px 11px;border-radius:5px;text-align:right}
+.num input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-ring)}
+.num .unit{font-family:var(--mono);font-size:11px;color:var(--dim);width:38px}
+
+/* segmented control (mode: client|peer) */
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:5px;overflow:hidden}
+.seg button{background:var(--sunken);border:none;color:var(--dim);cursor:pointer;
+  font-family:var(--mono);font-size:12px;padding:8px 16px}
+.seg button + button{border-left:1px solid var(--line-strong)}
+.seg button.on{background:var(--accent-wash);color:var(--accent);font-weight:600}
+
+/* checkbox rows */
+.ck{display:flex;align-items:center;gap:9px;cursor:pointer;color:var(--ink)}
+.ck input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+
+/* ─── buttons ────────────────────────────────────────────────── */
+.btn{font-family:var(--ui);font-size:13px;font-weight:500;height:30px;padding:0 12px;border-radius:6px;
+  border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);cursor:pointer}
+.btn:hover:not(:disabled){background:var(--sunken)}
+.btn:disabled{color:var(--faint);border-color:var(--line-soft);cursor:not-allowed}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600;height:36px}
+.btn.primary:hover:not(:disabled){background:var(--accent-hover)}
+/* destructive actions get 36px — misclick cost is asymmetric (§9); the border
+   is the full --stop, not --stop-line: it is both boundary and meaning */
+.btn.danger{height:36px;color:var(--stop);border-color:var(--stop)}
+.btn.danger:hover:not(:disabled){background:var(--stop-wash)}
+.btn.sm{height:28px;padding:0 10px;font-size:12px}
+
+/* ─── profile strip ──────────────────────────────────────────── */
+.pstrip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.pchip{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;color:var(--ink);
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:999px;padding:6px 13px;cursor:pointer}
+.pchip:hover{background:var(--sunken)}
+.pchip.on{background:var(--accent-wash);border-color:var(--accent);color:var(--accent);font-weight:600}
+.pchip .d{width:6px;height:6px;border-radius:50%;background:var(--go);flex:0 0 auto}
+.pchip.add{color:var(--accent);background:none;border:1px dashed var(--line-strong)}
+.pchip.add:hover{border-color:var(--accent)}
+
+/* ─── notes ──────────────────────────────────────────────────── */
+.note{display:flex;gap:9px;align-items:flex-start;padding:11px 14px;border-radius:6px;
+  font-size:12px;line-height:1.5;margin-bottom:14px}
+.note.err{background:var(--stop-wash);border:1px solid var(--stop-line);color:var(--ink)}
+.note.info{background:var(--accent-wash);border:1px solid var(--accent-line);color:var(--ink)}
+.note .msg{font-family:var(--mono);font-size:11.5px;overflow-wrap:anywhere}
+
+/* ─── modal (§7 level 4 — shadow means dismissible) ──────────── */
+.modal-scrim{position:fixed;inset:0;background:var(--scrim);display:flex;
+  align-items:center;justify-content:center;z-index:60}
+.modal{width:min(420px,90vw);background:var(--surface);border:1px solid var(--line);
+  border-radius:8px;box-shadow:var(--sh-modal);padding:18px 20px}
+.modal-title{font-size:15px;font-weight:600}
+.modal-body{font-size:13px;color:var(--ink);margin-top:9px;line-height:1.6}
+.modal-body .strong{font-weight:600}
+.modal-body input{width:100%;margin-top:12px;background:var(--sunken);border:1px solid var(--line-strong);
+  color:var(--ink);font-family:var(--mono);font-size:12px;padding:8px 11px;border-radius:5px}
+.modal-body input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-ring)}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.modal-actions .btn{height:36px}
+
+.mono{font-family:var(--mono)}
+
+/* Narrow viewport — on a high-DPI display the window's CSS viewport can land
+   near 450px, so the label-left/field-right row has to be able to stack.
+   Same rule keeps the form usable when the window is resized down. */
+@media (max-width:620px){
+  .row{flex-direction:column;align-items:stretch;gap:7px}
+  .row label{order:0}
+  .row .inp,.row .sel,.row .num,.row .seg{order:1;max-width:none;justify-content:flex-start}
+  .row .num input{flex:1;min-width:0;text-align:left}
+  .row .num .unit{width:auto}
+  /* checkbox rows must stay horizontal — the label belongs beside the box */
+  .row label.ck{flex-direction:row;align-items:center}
+  .topbar{flex-wrap:wrap;gap:8px}
+  .footbar{flex-wrap:wrap}
+}
