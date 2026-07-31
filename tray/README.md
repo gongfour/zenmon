@@ -67,6 +67,12 @@ The binary starts hidden — it lives in the system tray:
 Logs go to stdout *and* `%LOCALAPPDATA%\zenmon-tray\data\logs\zenmon-tray.log`.
 `RUST_LOG` overrides the default filter (`warn,zenmon_tray=debug,zenmon_core=debug`).
 
+On Windows the release binary is **GUI-subsystem**, so launching it at login or
+by double-click shows nothing but the tray icon — no console window. Started
+from a terminal it reattaches to that terminal and still streams logs; the only
+difference is that the shell does not block on it, so output arrives beside the
+next prompt. Dev builds are unaffected (see below).
+
 ---
 
 ## Layout
@@ -89,6 +95,14 @@ src-tauri/src/
 
 ## Things worth knowing before changing this
 
+- **`windows_subsystem = "windows"` is gated on `not(debug_assertions)`**, and a
+  release binary calls `AttachConsole(ATTACH_PARENT_PROCESS)` in `main.rs`
+  before anything else. Without the gate, `npm run tauri dev` would lose its
+  console; without the attach, a release binary run from a terminal would print
+  nothing at all — including the DEV-build warning the section above tells you
+  to look for. Attaching also has to reinstall the std handles by hand
+  (`CONOUT$`), since a GUI-subsystem process starts without them and Rust's
+  stdio re-reads them on every write.
 - **`ZenmonConfig` cannot be built as a struct literal** outside `zenmon-core` —
   `endpoint_override`/`mode_override` are private. Go through
   `config::resolve_config_with_env`, as `Profile::to_zenmon_config` does.

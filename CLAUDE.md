@@ -76,6 +76,11 @@ Full notes in `tray/README.md`; the load-bearing ones:
   spec `docs/gui_design.md`) so the two apps read as one toolchain: flat surfaces
   separated by lines, accent blue means *interactive* (never status), status uses
   go/warn/stop, shadows only on dismissible things.
+- **Windows subsystem**: release builds set `windows_subsystem = "windows"` so an
+  autostart/double-click launch is tray-only with no console window; the attribute
+  is gated on `not(debug_assertions)` (dev keeps its console) and `main.rs`
+  reattaches to the parent console — std handles included — so a release binary run
+  from a terminal still streams logs.
 - **Permissions**: Tauri v2 grants no plugin permissions without
   `src-tauri/capabilities/default.json` — without it `emit`/`listen` fail silently
   and the capture-status events never reach the UI.

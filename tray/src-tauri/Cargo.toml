@@ -28,3 +28,13 @@ tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 toml = "1"
 directories = "6"
+
+# Release builds are GUI-subsystem (see main.rs), which means no console and no
+# std handles — these are what reattach one when a terminal launched us.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+] }
