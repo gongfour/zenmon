@@ -1,5 +1,6 @@
 mod cli;
 mod duration;
+mod remote;
 mod watch;
 
 use clap::Parser;
@@ -366,6 +367,10 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 print_effective_config(&resolved.effective, cli.json)?;
             }
         },
+
+        // Purely local: edits a per-user file and never opens a session. The
+        // Zenoh config resolved above is irrelevant here.
+        Command::Remote { command } => remote::run(command, cli.json)?,
 
         Command::Discover { key_expr } => {
             warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());

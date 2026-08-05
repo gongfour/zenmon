@@ -167,7 +167,39 @@ zenmon -n myfleet --contract mynet.contract.yaml sub "topic/**"
 zenmon config validate
 zenmon config show --effective
 zenmon --json config show --effective
+
+# Manage where releases are fetched from (no network access; edits a local file)
+zenmon remote list
+zenmon remote add gh --github gongfour/zenmon
+zenmon remote add usb --path E:/zenmon_releases --default
+zenmon remote default gh
+zenmon remote remove usb
 ```
+
+### Release remotes (`remote`)
+
+A *remote* names a place holding release manifests and artifacts — a GitHub
+repository, or a directory with the same file layout (local disk, a USB stick,
+a UNC share). The registry is a per-user TOML file, kept outside any checkout:
+
+| Platform | Registry |
+|---|---|
+| Windows | `%APPDATA%\zenmon\remotes.toml` |
+| Linux | `~/.config/zenmon/remotes.toml` |
+| macOS | `~/Library/Application Support/zenmon/remotes.toml` |
+
+`ZENMON_REMOTES` overrides the path outright, which is how to try things
+without touching your real registry.
+
+The first remote added becomes the default. With none configured, zenmon falls
+back to the built-in `gongfour/zenmon` — a fresh install can update itself
+before anything has been set up. Once you *have* configured remotes, zenmon
+never guesses: with no default set it asks rather than picking one.
+
+A remote whose `kind` this build does not recognise (added by a newer zenmon)
+is listed and preserved byte-for-byte rather than rejected, so an older binary
+cannot destroy a newer one's configuration — it fails only if you ask to use
+that remote.
 
 ### Global Options
 
