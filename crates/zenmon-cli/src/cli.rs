@@ -25,7 +25,11 @@ impl From<ConsolidationArg> for zenoh::query::ConsolidationMode {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "zenmon", about = "Zenoh network monitor and debugger")]
+// `version` is load-bearing beyond being polite: `zenmon update` runs the
+// binary it just downloaded and checks that what it reports matches the
+// manifest, so a build with no `--version` cannot be verified before it
+// replaces the running one.
+#[command(name = "zenmon", version, about = "Zenoh network monitor and debugger")]
 pub struct Cli {
     /// Zenoh connection endpoint (default: tcp/localhost:7447, resolved via config)
     #[arg(short, long)]
@@ -78,6 +82,12 @@ pub enum Command {
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
+    },
+
+    /// Check for, and install, a newer zenmon
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommand,
     },
 
     /// Discover active keys/topics
@@ -576,6 +586,30 @@ pub enum RemoteCommand {
     Default {
         /// Name of the remote to make default
         name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum UpdateCommand {
+    /// Compare the installed version against the newest release. Downloads
+    /// nothing.
+    Check {
+        /// Remote to consult (default: the registry's default remote)
+        #[arg(long, value_name = "NAME")]
+        remote: Option<String>,
+    },
+
+    /// Download and install the newest release
+    Apply {
+        /// Remote to install from (default: the registry's default remote)
+        #[arg(long, value_name = "NAME")]
+        remote: Option<String>,
+
+        /// Install even when the release is not newer than what is installed.
+        /// Covers re-installing the same version and rolling back to an older
+        /// one; the checksum and staging checks still run.
+        #[arg(long)]
+        reinstall: bool,
     },
 }
 

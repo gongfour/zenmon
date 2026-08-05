@@ -1,4 +1,7 @@
 /target
+# Default OUT_DIR of scripts/release/package-cli.sh — release archives, their
+# manifest fragments, and the assembled zenmon.json.
+/dist
 Cargo.lock
 .worktrees/
 .superpowers/

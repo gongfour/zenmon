@@ -174,7 +174,41 @@ zenmon remote add gh --github gongfour/zenmon
 zenmon remote add usb --path E:/zenmon_releases --default
 zenmon remote default gh
 zenmon remote remove usb
+
+# Update zenmon itself
+zenmon update check                     # compare versions; downloads nothing
+zenmon update apply                     # download, verify, replace in place
+zenmon update apply --remote usb        # from a specific remote
+zenmon update apply --reinstall         # same version again, or roll back
 ```
+
+### Self-update (`update`)
+
+`zenmon update apply` downloads the release archive for your platform, checks
+it against the SHA-256 in `zenmon.json`, runs the new binary once to confirm it
+reports the version the manifest promised, and only then swaps it in. When the
+command returns the new binary is already installed — there is no background
+helper and nothing to wait for.
+
+The replacement is rename-only, so it works while zenmon is running: the old
+binary is moved to `zenmon.exe.old-N` and the new one takes its place. Windows
+refuses to *delete* a running executable but allows *renaming* it. Old files
+still being executed by a running process are left alone and swept by a later
+update; `apply` says so when that happens.
+
+`update` refuses to touch a binary in cargo's `bin` directory — cargo owns that
+file, and overwriting it would leave `.crates2.json` wrong and let the next
+`cargo install` silently revert the update. Install a release binary elsewhere
+on your `PATH` and update that one, or keep using `cargo install`.
+
+| Environment variable | Effect |
+|---|---|
+| `ZENMON_UPDATE_TOKEN` | Bearer token for the GitHub API. Only needed for a private fork, or when the 60-requests-per-hour anonymous limit is exhausted by others sharing your IP. |
+| `ZENMON_REMOTES` | Use a different remote registry file. |
+
+Builds made with `--no-default-features` have no updater (the `self-update`
+feature is off): releases are published for windows/linux/macos only, so a
+source-built Termux install could never have an artifact to update to.
 
 ### Release remotes (`remote`)
 
