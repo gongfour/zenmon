@@ -153,10 +153,18 @@ jobs:
 
       - name: collect installer
         shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
           cp target/release/bundle/nsis/*-setup.exe dist/
+          # Registers the installer in the manifest's trayArtifacts so
+          # `zenmon update` can drive it. BINARY is the installer itself:
+          # there is nothing to extract, the updater runs it with /S.
+          setup="$(basename "$(ls dist/*-setup.exe)")"
+          MANIFEST_TARGET=windows-x86_64 ARTIFACT="dist/${setup}" BINARY="${setup}" \
+            bash scripts/release/package-tray.sh
           ls -l dist
 
       - uses: actions/upload-artifact@v7
@@ -165,9 +173,65 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  build-tray-macos:
+    name: tray (macos)
+    needs: guard
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: tray/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install frontend deps
+        working-directory: tray
+        run: npm ci
+
+      # `--bundles app` produces just the .app directory; a dmg is a
+      # human-install convenience the updater would never read, and skipping
+      # it removes a bundling step that can flake.
+      #
+      # No Developer ID, no notarization — deliberate for now. Tauri ad-hoc
+      # signs the bundle, which is all Apple Silicon requires to *run*. The
+      # planned tray update path downloads over HTTPS without setting the
+      # quarantine attribute, so Gatekeeper never assesses the file; only a
+      # browser download needs `xattr -dr com.apple.quarantine`. Revisit when
+      # the tray is distributed beyond the team.
+      - name: tauri build
+        working-directory: tray
+        run: npm run tauri build -- --bundles app -- --locked
+
+      - name: package
+        shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # tar.gz, not zip: the .app is a directory tree whose executable
+          # bits and symlinks must survive, and the updater side will untar.
+          archive="zenmon-tray-${VERSION}-aarch64-apple-darwin.app.tar.gz"
+          tar czf "dist/${archive}" \
+            -C target/release/bundle/macos zenmon-tray.app
+          # Registers the archive in the manifest's trayArtifacts; BINARY names
+          # the .app directory `zenmon update` untars and swaps into place.
+          MANIFEST_TARGET=macos-aarch64 ARTIFACT="dist/${archive}" BINARY=zenmon-tray.app \
+            bash scripts/release/package-tray.sh
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tray-macos
+          path: dist/
+          if-no-files-found: error
+
   publish:
     name: assemble & publish
-    needs: [guard, build-cli, build-tray]
+    needs: [guard, build-cli, build-tray, build-tray-macos]
     # This job runs on workflow_dispatch too, and only its last step is
     # tag-gated. Gating the whole job meant `download-artifact`, the manifest
     # assembly and the fragment pruning were reachable *only* by tagging — so

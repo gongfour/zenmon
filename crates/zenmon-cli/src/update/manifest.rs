@@ -27,6 +27,14 @@ pub struct ReleaseManifest {
     #[serde(default)]
     pub channel: String,
     pub artifacts: Vec<ReleaseArtifact>,
+    /// Tray app builds, keyed by the same target strings as `artifacts`.
+    ///
+    /// A separate list rather than a `kind` tag on `artifacts`: the shipped
+    /// v0.1.0 updater selects from `artifacts` by target alone and would
+    /// install a tray archive as the CLI. An extra field it never reads is
+    /// harmless to it — which is also why this stays schema version 1.
+    #[serde(default)]
+    pub tray_artifacts: Vec<ReleaseArtifact>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -108,6 +116,15 @@ impl ReleaseManifest {
                 ))
             })
     }
+
+    /// The tray artifact for a platform. An `Option`, not a `Result`: most
+    /// platforms have no tray build and never will, so its absence is a
+    /// non-event rather than an error to explain.
+    pub fn tray_artifact_for(&self, target: &str) -> Option<&ReleaseArtifact> {
+        self.tray_artifacts
+            .iter()
+            .find(|artifact| artifact.target == target)
+    }
 }
 
 /// Rejects a checksum that could never match before anything is downloaded.
@@ -177,6 +194,32 @@ mod tests {
     fn a_newer_schema_says_to_upgrade() {
         let err = ReleaseManifest::parse(manifest_json(2).as_bytes(), "test").unwrap_err();
         assert!(err.to_string().contains("upgrade zenmon"), "{err}");
+    }
+
+    /// Manifests from releases that predate tray builds carry no
+    /// `trayArtifacts`; both sides of the compatibility contract are tested —
+    /// absent parses as empty, present is selectable by target.
+    #[test]
+    fn tray_artifacts_are_optional_and_selectable() {
+        let manifest = ReleaseManifest::parse(manifest_json(1).as_bytes(), "test").unwrap();
+        assert!(manifest.tray_artifacts.is_empty());
+        assert!(manifest.tray_artifact_for("windows-x86_64").is_none());
+
+        let json = format!(
+            r#"{{"schemaVersion":1,"version":"0.2.0","channel":"stable",
+                "artifacts":[{{"target":"macos-aarch64","url":"cli.tar.gz","sha256":"{sha}","binary":"zenmon"}}],
+                "trayArtifacts":[{{"target":"macos-aarch64","url":"tray.app.tar.gz","sha256":"{sha}","binary":"zenmon-tray.app"}}]}}"#,
+            sha = "a".repeat(64)
+        );
+        let manifest = ReleaseManifest::parse(json.as_bytes(), "test").unwrap();
+        let tray = manifest.tray_artifact_for("macos-aarch64").unwrap();
+        assert_eq!(tray.binary, "zenmon-tray.app");
+        // the CLI selection is unaffected by the tray entry sharing its target
+        assert_eq!(
+            manifest.artifact_for("macos-aarch64").unwrap().binary,
+            "zenmon"
+        );
+        assert!(manifest.tray_artifact_for("linux-x86_64").is_none());
     }
 
     #[test]

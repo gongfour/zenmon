@@ -75,6 +75,28 @@ next prompt. Dev builds are unaffected (see below).
 
 ---
 
+## Installing & updating a release build
+
+Releases carry the tray in the `trayArtifacts` list of `zenmon.json`, and
+**`zenmon update apply` updates an installed tray alongside the CLI** — it
+detects the installation, compares versions, downloads, verifies the checksum,
+quits the running tray, swaps it, and relaunches (`crates/zenmon-cli/src/update/tray.rs`).
+No tray installed means the whole topic is skipped; the updater never installs
+a tray you didn't choose to have.
+
+First install is manual, per platform:
+
+- **Windows**: run the `*-setup.exe` from the release. It registers the
+  uninstall key the updater later uses for detection.
+- **macOS**: untar `zenmon-tray-*-aarch64-apple-darwin.app.tar.gz` into
+  `/Applications` (or `~/Applications`). Download with `curl`/`gh` — a
+  browser download gets the quarantine attribute, and the bundle is ad-hoc
+  signed, not notarized, so Gatekeeper would block it. If a browser was used:
+  `xattr -dr com.apple.quarantine /Applications/zenmon-tray.app`. The updater
+  itself downloads without the attribute, so updates never hit Gatekeeper.
+
+---
+
 ## Layout
 
 ```
