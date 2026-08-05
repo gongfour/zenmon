@@ -7,11 +7,39 @@ Lightweight terminal-based alternative to web dashboards for monitoring Zenoh ne
 
 ## Install
 
+### Download a release — no Rust toolchain needed
+
+Take the archive for your platform from the
+[latest release](https://github.com/gongfour/zenmon/releases/latest), unpack it,
+and put `zenmon` somewhere on your `PATH`.
+
+| Platform | Asset |
+|---|---|
+| Windows x86_64 | `zenmon-<version>-x86_64-pc-windows-msvc.zip` |
+| Linux x86_64 | `zenmon-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `zenmon-<version>-aarch64-apple-darwin.tar.gz` |
+
+Every release also carries **`zenmon.json`**, a manifest naming each asset with
+its SHA-256, so a download can be checked against it:
+
+```bash
+sha256sum zenmon-0.1.0-x86_64-unknown-linux-gnu.tar.gz   # macOS: shasum -a 256
+```
+
+The tray app ships in the same release as `zenmon-tray_<version>_x64-setup.exe`
+(Windows).
+
+Releases are built only by [`.github/workflows/release.yml`](.github/workflows/release.yml)
+from a `v<version>` tag. Other platforms — including Termux/Android — build from
+source; see [Build features](#build-features).
+
+### Build from source
+
 ```bash
 cargo install --path crates/zenmon-cli
 ```
 
-Or build from source:
+Or:
 
 ```bash
 cargo build --release

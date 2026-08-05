@@ -1,0 +1,6 @@
+# Shell scripts must keep LF endings. bash treats a trailing CR as part of the
+# command and fails with `$'\r': command not found`, so a Windows checkout
+# (core.autocrlf=true, the default here) would rewrite scripts/release/*.sh to
+# CRLF and they would stop running locally — while still working in CI, which
+# is the worst version of this bug to debug.
+*.sh text eol=lf

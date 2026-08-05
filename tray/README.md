@@ -95,6 +95,13 @@ src-tauri/src/
 
 ## Things worth knowing before changing this
 
+- **`tauri.conf.json` has no `version` key, on purpose.** Tauri falls back to the
+  `zenmon-tray` crate version, which is `version.workspace = true` — so the
+  installer name and the app's reported version track the workspace version with
+  nothing to bump twice. The release workflow's guard only compares the git tag
+  against the workspace version (`.github/workflows/release.yml`), so a
+  hardcoded value here would be unguarded and could quietly name the installer
+  after the wrong release. Do not add it back.
 - **`windows_subsystem = "windows"` is gated on `not(debug_assertions)`**, and a
   release binary calls `AttachConsole(ATTACH_PARENT_PROCESS)` in `main.rs`
   before anything else. Without the gate, `npm run tauri dev` would lose its
