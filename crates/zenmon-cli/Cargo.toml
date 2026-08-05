@@ -8,27 +8,56 @@ name = "zenmon"
 path = "src/main.rs"
 
 [features]
-default = ["tui", "clipboard"]
+default = ["tui", "clipboard", "self-update"]
 # `tui` pulls in the ratatui dashboard. It runs anywhere a terminal does,
 # including Termux on Android. `clipboard` adds the arboard-backed copy action,
 # which needs X11/Wayland — split out so display-less targets can keep the TUI.
-#   default                          -> desktop: full TUI + clipboard
+#   default                          -> desktop: full TUI + clipboard + updater
 #   --no-default-features --features tui -> Android/Termux: TUI, no clipboard
 #   --no-default-features            -> headless CLI only
 tui = ["dep:zenmon-tui"]
 clipboard = ["zenmon-tui/clipboard"]
+# `self-update` pulls in an HTTP+TLS stack and archive readers for
+# `zenmon update`. Split out because it is only useful where we publish
+# binaries: the release workflow builds windows/linux/macos, and Termux/Android
+# is documented as a source build, so a Termux user could never have an
+# artifact to update to. Gating it also keeps the ring/rustls build off a
+# platform where it is the most painful.
+#
+# The `update` subcommand still exists without the feature — it explains that
+# this build has no updater, which beats "unrecognized subcommand".
+self-update = ["dep:reqwest", "dep:semver", "dep:sha2", "dep:zip", "dep:tar", "dep:flate2"]
 
 [dependencies]
 zenmon-core.workspace = true
 zenmon-tui = { workspace = true, optional = true }
 zenoh.workspace = true
 tokio.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 color-eyre.workspace = true
 humantime.workspace = true
 clap = { version = "4", features = ["derive"] }
+
+# `self-update` only. rustls with the platform trust store rather than bundled
+# roots: a machine behind a corporate TLS-inspecting proxy has that proxy's CA
+# installed, and bundled roots would reject exactly the network the `path`
+# remote exists to work around.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "rustls-native-certs",
+    "system-proxy",
+    "http2",
+], optional = true }
+semver = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+zip = { version = "6", default-features = false, features = [
+    "deflate",
+], optional = true }
+tar = { version = "0.4", optional = true }
+flate2 = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

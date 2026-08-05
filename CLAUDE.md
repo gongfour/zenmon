@@ -100,7 +100,8 @@ Full notes in `tray/README.md`; the load-bearing ones:
 
 ## Testing
 
-No unit tests yet. Manual testing:
+`cargo test --workspace` runs the suite (~370 tests). Anything touching a Zenoh
+session still needs the manual loop below — the tests cover pure logic only.
 
 ```bash
 # Terminal 1: Start router

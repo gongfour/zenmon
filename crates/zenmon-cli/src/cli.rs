@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -25,7 +25,11 @@ impl From<ConsolidationArg> for zenoh::query::ConsolidationMode {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "zenmon", about = "Zenoh network monitor and debugger")]
+// `version` is load-bearing beyond being polite: `zenmon update` runs the
+// binary it just downloaded and checks that what it reports matches the
+// manifest, so a build with no `--version` cannot be verified before it
+// replaces the running one.
+#[command(name = "zenmon", version, about = "Zenoh network monitor and debugger")]
 pub struct Cli {
     /// Zenoh connection endpoint (default: tcp/localhost:7447, resolved via config)
     #[arg(short, long)]
@@ -72,6 +76,18 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+
+    /// Manage the release remotes `zenmon update` fetches from
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+
+    /// Check for, and install, a newer zenmon
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommand,
     },
 
     /// Discover active keys/topics
@@ -533,6 +549,70 @@ pub enum ConfigCommand {
     },
 }
 
+/// Registry of places releases are fetched from. Stored per user, outside any
+/// zenmon checkout — see `zenmon_core::remotes`.
+#[derive(Subcommand, Debug)]
+pub enum RemoteCommand {
+    /// Register a remote. The first one added becomes the default.
+    #[command(group(ArgGroup::new("remote_kind").required(true).args(["github", "path"])))]
+    Add {
+        /// Short name to refer to this remote by
+        name: String,
+
+        /// GitHub repository holding the releases, as owner/name
+        #[arg(long, value_name = "OWNER/REPO")]
+        github: Option<String>,
+
+        /// Directory holding the release files — local disk, a USB stick, or
+        /// a UNC share. Not required to exist yet.
+        #[arg(long, value_name = "DIR")]
+        path: Option<String>,
+
+        /// Use this remote when `--remote` is not given
+        #[arg(long)]
+        default: bool,
+    },
+
+    /// List registered remotes
+    List,
+
+    /// Remove a remote
+    Remove {
+        /// Name of the remote to remove
+        name: String,
+    },
+
+    /// Choose the remote used when `--remote` is not given
+    Default {
+        /// Name of the remote to make default
+        name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum UpdateCommand {
+    /// Compare the installed version against the newest release. Downloads
+    /// nothing.
+    Check {
+        /// Remote to consult (default: the registry's default remote)
+        #[arg(long, value_name = "NAME")]
+        remote: Option<String>,
+    },
+
+    /// Download and install the newest release
+    Apply {
+        /// Remote to install from (default: the registry's default remote)
+        #[arg(long, value_name = "NAME")]
+        remote: Option<String>,
+
+        /// Install even when the release is not newer than what is installed.
+        /// Covers re-installing the same version and rolling back to an older
+        /// one; the checksum and staging checks still run.
+        #[arg(long)]
+        reinstall: bool,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use clap::CommandFactory;
@@ -545,6 +625,40 @@ mod tests {
 
         assert!(cli.endpoint.is_none());
         assert!(cli.mode.is_none());
+    }
+
+    /// `remote add` must name exactly one kind. Without the group, a bare
+    /// `remote add x` would reach the handler with no spec at all, and adding
+    /// a third kind later would silently allow two at once.
+    #[test]
+    fn remote_add_requires_exactly_one_kind() {
+        assert!(Cli::try_parse_from(["zenmon", "remote", "add", "x"]).is_err());
+        assert!(Cli::try_parse_from([
+            "zenmon", "remote", "add", "x", "--github", "o/r", "--path", "D:/rel"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["zenmon", "remote", "add", "x", "--github", "o/r"]).is_ok());
+        assert!(Cli::try_parse_from(["zenmon", "remote", "add", "x", "--path", "D:/rel"]).is_ok());
+    }
+
+    #[test]
+    fn remote_subcommands_parse() {
+        assert!(Cli::try_parse_from(["zenmon", "remote", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["zenmon", "remote", "remove", "gh"]).is_ok());
+        assert!(Cli::try_parse_from(["zenmon", "remote", "default", "gh"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "zenmon",
+            "remote",
+            "add",
+            "gh",
+            "--github",
+            "o/r",
+            "--default"
+        ])
+        .is_ok());
+        // each of these takes a name
+        assert!(Cli::try_parse_from(["zenmon", "remote", "remove"]).is_err());
+        assert!(Cli::try_parse_from(["zenmon", "remote", "default"]).is_err());
     }
 
     #[test]

@@ -15,3 +15,7 @@ bitflags.workspace = true
 humantime.workspace = true
 base64.workspace = true
 rmpv.workspace = true
+# `remotes` only: the release-remote registry is a per-user TOML file in the
+# platform config directory. Not used by any Zenoh primitive in this crate.
+toml.workspace = true
+directories.workspace = true

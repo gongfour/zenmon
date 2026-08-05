@@ -1,0 +1,204 @@
+name: Release
+
+# Releases are cut by pushing a tag, and only this workflow creates them. That
+# is what lets `zenmon update` trust what it finds: every release it sees was
+# built here and carries a `zenmon.json` manifest. A hand-made GitHub release
+# has no manifest and is simply invisible to the updater rather than a trap.
+#
+# `workflow_dispatch` runs the whole matrix and uploads the archives as workflow
+# artifacts, but skips publishing — so the pipeline can be exercised without
+# burning a version number.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  guard:
+    name: version guard
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      # `cargo metadata` reads the version through workspace inheritance
+      # (`version.workspace = true`), which no plain-text parse of a member's
+      # Cargo.toml would resolve. The runner image ships Rust, but pinning the
+      # toolchain here keeps the guard from depending on that staying true.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The tag and the workspace version are two places that state the same
+      # fact, so they can disagree. Catching it here costs a few seconds;
+      # catching it later means a release whose assets are named after one
+      # version while the binary reports another, which is exactly the kind of
+      # mismatch a self-updater turns into an infinite "update available".
+      - name: resolve and check version
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name == "zenmon-cli") | .version')"
+          if [[ -z "$version" || "$version" == "null" ]]; then
+            echo "::error::could not resolve the zenmon-cli version from cargo metadata"
+            exit 1
+          fi
+          echo "workspace version: $version"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${version} (expected tag v${version})"
+              exit 1
+            fi
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build-cli:
+    name: cli (${{ matrix.manifest_target }})
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide whether the others build. The
+      # publish job needs every one of them, so a partial matrix never ships.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            manifest_target: windows-x86_64
+            binary: zenmon.exe
+            archive_format: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manifest_target: linux-x86_64
+            binary: zenmon
+            archive_format: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            manifest_target: macos-aarch64
+            binary: zenmon
+            archive_format: tar.gz
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      # Deliberately without `RUSTFLAGS: -D warnings`, which ci.yml does set.
+      # ci.yml gates lints on ubuntu, where every warning is a blocking review
+      # signal. Here the job is to ship a working binary: failing a tagged
+      # release because a new compiler emits a warning on macOS — a platform
+      # nothing else builds — would block shipping over a lint.
+      # `--locked` is what makes a tag mean something: rebuilding v0.1.0 next
+      # year resolves the dependency versions it was cut with, not whatever is
+      # newest. It also fails loudly if Cargo.lock was not committed alongside
+      # a Cargo.toml change, instead of quietly resolving something else.
+      - name: build
+        run: cargo build --release --locked -p zenmon-cli --target ${{ matrix.target }}
+
+      - name: package
+        shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          MANIFEST_TARGET: ${{ matrix.manifest_target }}
+          BINARY: ${{ matrix.binary }}
+          ARCHIVE_FORMAT: ${{ matrix.archive_format }}
+        run: bash scripts/release/package-cli.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.manifest_target }}
+          path: dist/
+          if-no-files-found: error
+
+  build-tray:
+    name: tray (windows)
+    needs: guard
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: tray/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install frontend deps
+        working-directory: tray
+        run: npm ci
+
+      # Must go through the Tauri CLI. A bare `cargo build -p zenmon-tray`
+      # yields a *dev* binary that looks for the vite dev server, and it lands
+      # on the same path — see CLAUDE.md and tray/README.md.
+      #
+      # `--bundles nsis` skips the MSI/WiX bundle: NSIS is what the updater
+      # (PR-4) consumes, and the WiX toolchain download is an extra failure
+      # surface on a job that must not flake during a release.
+      #
+      # The second `--` marks the start of arguments the Tauri CLI forwards to
+      # cargo, so the tray is built `--locked` like the CLI jobs are.
+      - name: tauri build
+        working-directory: tray
+        run: npm run tauri build -- --bundles nsis -- --locked
+
+      - name: collect installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/bundle/nsis/*-setup.exe dist/
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tray-windows
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: [guard, build-cli, build-tray]
+    # workflow_dispatch runs stop here: the matrix has proven itself and the
+    # archives are downloadable from the run, but nothing is released.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: collect build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: staged
+          merge-multiple: true
+
+      - name: build manifest
+        shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: bash scripts/release/build-manifest.sh staged
+
+      - name: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Fragments are build-time plumbing for build-manifest.sh; zenmon.json
+          # is the published contract. Shipping both would invite a consumer to
+          # depend on the wrong one.
+          rm -f staged/*.fragment.json
+          ls -l staged
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "zenmon ${VERSION}" \
+            --generate-notes \
+            staged/*

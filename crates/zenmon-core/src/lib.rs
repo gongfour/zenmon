@@ -82,13 +82,19 @@
 //!   set merging/diffing, capture files) but shaped by zenmon's own needs, so
 //!   expect more churn than the stable surface.
 //!
-//! - **zenmon application internals.** [`output`], [`contract`], [`scenario`].
-//!   These encode zenmon's own CLI behaviour — the stdout JSON envelope shapes,
-//!   the topic-contract YAML format, the `zenmon scenario` episode/track
-//!   aggregation and its named presets. They are `pub` only because
-//!   `zenmon-cli` needs them across the crate boundary. Treat them as private:
-//!   they are exempt from any stability promise and are the intended candidates
-//!   for moving into `zenmon-cli` outright.
+//! - **zenmon application internals.** [`output`], [`contract`], [`scenario`],
+//!   [`remotes`]. These encode zenmon's own CLI behaviour — the stdout JSON
+//!   envelope shapes, the topic-contract YAML format, the `zenmon scenario`
+//!   episode/track aggregation and its named presets, and the registry of
+//!   places `zenmon update` fetches releases from. They are `pub` only because
+//!   `zenmon-cli` and the tray app need them across the crate boundary. Treat
+//!   them as private: they are exempt from any stability promise and are the
+//!   intended candidates for moving into `zenmon-cli` outright.
+//!
+//!   [`remotes`] in particular is *not* a Zenoh concern at all — it names a
+//!   GitHub repository and a per-user config file. It lives here only because
+//!   the CLI and the tray must resolve the same registry, and this crate is
+//!   the one thing they share.
 
 // ---------------------------------------------------------------------------
 // Stable surface — general-purpose Zenoh primitives.
@@ -134,6 +140,8 @@ pub mod trace;
 
 pub mod contract;
 pub mod output;
+/// Named release-remote registry backing `zenmon update`.
+pub mod remotes;
 pub mod scenario;
 
 // ---------------------------------------------------------------------------

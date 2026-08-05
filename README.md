@@ -7,11 +7,39 @@ Lightweight terminal-based alternative to web dashboards for monitoring Zenoh ne
 
 ## Install
 
+### Download a release — no Rust toolchain needed
+
+Take the archive for your platform from the
+[latest release](https://github.com/gongfour/zenmon/releases/latest), unpack it,
+and put `zenmon` somewhere on your `PATH`.
+
+| Platform | Asset |
+|---|---|
+| Windows x86_64 | `zenmon-<version>-x86_64-pc-windows-msvc.zip` |
+| Linux x86_64 | `zenmon-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `zenmon-<version>-aarch64-apple-darwin.tar.gz` |
+
+Every release also carries **`zenmon.json`**, a manifest naming each asset with
+its SHA-256, so a download can be checked against it:
+
+```bash
+sha256sum zenmon-0.1.0-x86_64-unknown-linux-gnu.tar.gz   # macOS: shasum -a 256
+```
+
+The tray app ships in the same release as `zenmon-tray_<version>_x64-setup.exe`
+(Windows).
+
+Releases are built only by [`.github/workflows/release.yml`](.github/workflows/release.yml)
+from a `v<version>` tag. Other platforms — including Termux/Android — build from
+source; see [Build features](#build-features).
+
+### Build from source
+
 ```bash
 cargo install --path crates/zenmon-cli
 ```
 
-Or build from source:
+Or:
 
 ```bash
 cargo build --release
@@ -139,7 +167,73 @@ zenmon -n myfleet --contract mynet.contract.yaml sub "topic/**"
 zenmon config validate
 zenmon config show --effective
 zenmon --json config show --effective
+
+# Manage where releases are fetched from (no network access; edits a local file)
+zenmon remote list
+zenmon remote add gh --github gongfour/zenmon
+zenmon remote add usb --path E:/zenmon_releases --default
+zenmon remote default gh
+zenmon remote remove usb
+
+# Update zenmon itself
+zenmon update check                     # compare versions; downloads nothing
+zenmon update apply                     # download, verify, replace in place
+zenmon update apply --remote usb        # from a specific remote
+zenmon update apply --reinstall         # same version again, or roll back
 ```
+
+### Self-update (`update`)
+
+`zenmon update apply` downloads the release archive for your platform, checks
+it against the SHA-256 in `zenmon.json`, runs the new binary once to confirm it
+reports the version the manifest promised, and only then swaps it in. When the
+command returns the new binary is already installed — there is no background
+helper and nothing to wait for.
+
+The replacement is rename-only, so it works while zenmon is running: the old
+binary is moved to `zenmon.exe.old-N` and the new one takes its place. Windows
+refuses to *delete* a running executable but allows *renaming* it. Old files
+still being executed by a running process are left alone and swept by a later
+update; `apply` says so when that happens.
+
+`update` refuses to touch a binary in cargo's `bin` directory — cargo owns that
+file, and overwriting it would leave `.crates2.json` wrong and let the next
+`cargo install` silently revert the update. Install a release binary elsewhere
+on your `PATH` and update that one, or keep using `cargo install`.
+
+| Environment variable | Effect |
+|---|---|
+| `ZENMON_UPDATE_TOKEN` | Bearer token for the GitHub API. Only needed for a private fork, or when the 60-requests-per-hour anonymous limit is exhausted by others sharing your IP. |
+| `ZENMON_REMOTES` | Use a different remote registry file. |
+
+Builds made with `--no-default-features` have no updater (the `self-update`
+feature is off): releases are published for windows/linux/macos only, so a
+source-built Termux install could never have an artifact to update to.
+
+### Release remotes (`remote`)
+
+A *remote* names a place holding release manifests and artifacts — a GitHub
+repository, or a directory with the same file layout (local disk, a USB stick,
+a UNC share). The registry is a per-user TOML file, kept outside any checkout:
+
+| Platform | Registry |
+|---|---|
+| Windows | `%APPDATA%\zenmon\remotes.toml` |
+| Linux | `~/.config/zenmon/remotes.toml` |
+| macOS | `~/Library/Application Support/zenmon/remotes.toml` |
+
+`ZENMON_REMOTES` overrides the path outright, which is how to try things
+without touching your real registry.
+
+The first remote added becomes the default. With none configured, zenmon falls
+back to the built-in `gongfour/zenmon` — a fresh install can update itself
+before anything has been set up. Once you *have* configured remotes, zenmon
+never guesses: with no default set it asks rather than picking one.
+
+A remote whose `kind` this build does not recognise (added by a newer zenmon)
+is listed and preserved byte-for-byte rather than rejected, so an older binary
+cannot destroy a newer one's configuration — it fails only if you ask to use
+that remote.
 
 ### Global Options
 
