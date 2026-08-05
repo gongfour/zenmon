@@ -26,7 +26,7 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # `cargo metadata` reads the version through workspace inheritance
       # (`version.workspace = true`), which no plain-text parse of a member's
       # Cargo.toml would resolve. The runner image ships Rust, but pinning the
@@ -84,7 +84,7 @@ jobs:
             binary: zenmon
             archive_format: tar.gz
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -112,7 +112,7 @@ jobs:
           ARCHIVE_FORMAT: ${{ matrix.archive_format }}
         run: bash scripts/release/package-cli.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cli-${{ matrix.manifest_target }}
           path: dist/
@@ -123,8 +123,8 @@ jobs:
     needs: guard
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -158,7 +158,7 @@ jobs:
           cp target/release/bundle/nsis/*-setup.exe dist/
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tray-windows
           path: dist/
@@ -172,10 +172,10 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: collect build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: staged
           merge-multiple: true
