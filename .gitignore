@@ -2,7 +2,9 @@
 # Default OUT_DIR of scripts/release/package-cli.sh — release archives, their
 # manifest fragments, and the assembled zenmon.json.
 /dist
-Cargo.lock
+# Cargo.lock IS committed. This repository ships binaries: a tagged release must
+# rebuild months later from the same dependency versions, and `--locked` in CI
+# and the release workflow can only enforce that if the lockfile is tracked.
 .worktrees/
 .superpowers/
 

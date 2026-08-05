@@ -21,10 +21,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
         run: cargo fmt --all -- --check
+      # `--locked` throughout, so a Cargo.toml change that forgot to commit the
+      # updated Cargo.lock fails here rather than during a release — the
+      # release workflow builds `--locked` too, and that is a bad place to
+      # discover the lockfile is stale.
       - name: clippy
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --locked --workspace --all-targets
       - name: test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
   headless:
     name: headless build (Android-like, no X11)
@@ -42,10 +46,10 @@ jobs:
       # Without these gates, a change that recouples the CLI to the TUI, or the
       # TUI to arboard, would only surface on an actual Android build.
       - name: check headless CLI (--no-default-features)
-        run: cargo check -p zenmon-cli --no-default-features
+        run: cargo check --locked -p zenmon-cli --no-default-features
       - name: clippy headless CLI
-        run: cargo clippy -p zenmon-cli --no-default-features --all-targets
+        run: cargo clippy --locked -p zenmon-cli --no-default-features --all-targets
       - name: check TUI without clipboard (--features tui)
-        run: cargo check -p zenmon-cli --no-default-features --features tui
+        run: cargo check --locked -p zenmon-cli --no-default-features --features tui
       - name: clippy TUI without clipboard
-        run: cargo clippy -p zenmon-cli --no-default-features --features tui --all-targets
+        run: cargo clippy --locked -p zenmon-cli --no-default-features --features tui --all-targets

@@ -95,8 +95,12 @@ jobs:
       # signal. Here the job is to ship a working binary: failing a tagged
       # release because a new compiler emits a warning on macOS — a platform
       # nothing else builds — would block shipping over a lint.
+      # `--locked` is what makes a tag mean something: rebuilding v0.1.0 next
+      # year resolves the dependency versions it was cut with, not whatever is
+      # newest. It also fails loudly if Cargo.lock was not committed alongside
+      # a Cargo.toml change, instead of quietly resolving something else.
       - name: build
-        run: cargo build --release -p zenmon-cli --target ${{ matrix.target }}
+        run: cargo build --release --locked -p zenmon-cli --target ${{ matrix.target }}
 
       - name: package
         shell: bash
@@ -139,9 +143,12 @@ jobs:
       # `--bundles nsis` skips the MSI/WiX bundle: NSIS is what the updater
       # (PR-4) consumes, and the WiX toolchain download is an extra failure
       # surface on a job that must not flake during a release.
+      #
+      # The second `--` marks the start of arguments the Tauri CLI forwards to
+      # cargo, so the tray is built `--locked` like the CLI jobs are.
       - name: tauri build
         working-directory: tray
-        run: npm run tauri build -- --bundles nsis
+        run: npm run tauri build -- --bundles nsis -- --locked
 
       - name: collect installer
         shell: bash
