@@ -25,10 +25,21 @@ jobs:
       # updated Cargo.lock fails here rather than during a release — the
       # release workflow builds `--locked` too, and that is a bad place to
       # discover the lockfile is stale.
+      #
+      # `--exclude zenmon-tray`: the tray is a Tauri app, so on Linux it wants
+      # GTK/webkit development packages this runner does not have, and
+      # `--workspace` has failed on `glib-sys` ever since tray/src-tauri joined
+      # the workspace — this job had been red for a week without anyone
+      # noticing, which is worse than not running it. Installing the GTK stack
+      # to lint a Windows-only app is the wrong trade; the tray is compiled for
+      # real by the `build-tray` job in release.yml, on Windows, through the
+      # Tauri CLI (a bare cargo build of it produces a broken binary anyway —
+      # see tray/README.md). Excluding by name rather than relying on
+      # `default-members` keeps a future crate covered by default.
       - name: clippy
-        run: cargo clippy --locked --workspace --all-targets
+        run: cargo clippy --locked --workspace --exclude zenmon-tray --all-targets
       - name: test
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace --exclude zenmon-tray
 
   headless:
     name: headless build (Android-like, no X11)
