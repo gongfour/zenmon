@@ -5,8 +5,9 @@ name: Release
 # built here and carries a `zenmon.json` manifest. A hand-made GitHub release
 # has no manifest and is simply invisible to the updater rather than a trap.
 #
-# `workflow_dispatch` runs the whole matrix and uploads the archives as workflow
-# artifacts, but skips publishing — so the pipeline can be exercised without
+# `workflow_dispatch` runs everything except the final `gh release create`,
+# leaving the exact asset set a tag would publish as a `release-bundle`
+# workflow artifact — so the pipeline can be exercised end to end without
 # burning a version number.
 on:
   push:
@@ -26,7 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # `cargo metadata` reads the version through workspace inheritance
       # (`version.workspace = true`), which no plain-text parse of a member's
       # Cargo.toml would resolve. The runner image ships Rust, but pinning the
@@ -84,7 +85,7 @@ jobs:
             binary: zenmon
             archive_format: tar.gz
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -112,7 +113,7 @@ jobs:
           ARCHIVE_FORMAT: ${{ matrix.archive_format }}
         run: bash scripts/release/package-cli.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cli-${{ matrix.manifest_target }}
           path: dist/
@@ -123,8 +124,8 @@ jobs:
     needs: guard
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -166,7 +167,7 @@ jobs:
             bash scripts/release/package-tray.sh
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tray-windows
           path: dist/
@@ -177,8 +178,8 @@ jobs:
     needs: guard
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -222,24 +223,26 @@ jobs:
             bash scripts/release/package-tray.sh
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tray-macos
           path: dist/
           if-no-files-found: error
 
   publish:
-    name: publish release
+    name: assemble & publish
     needs: [guard, build-cli, build-tray, build-tray-macos]
-    # workflow_dispatch runs stop here: the matrix has proven itself and the
-    # archives are downloadable from the run, but nothing is released.
-    if: github.ref_type == 'tag'
+    # This job runs on workflow_dispatch too, and only its last step is
+    # tag-gated. Gating the whole job meant `download-artifact`, the manifest
+    # assembly and the fragment pruning were reachable *only* by tagging — so
+    # the one thing a dry run could not tell you was whether the release would
+    # actually assemble, which is most of what can go wrong here.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: collect build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: staged
           merge-multiple: true
@@ -250,18 +253,33 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
         run: bash scripts/release/build-manifest.sh staged
 
+      # Fragments are build-time plumbing for build-manifest.sh; zenmon.json is
+      # the published contract. Shipping both would invite a consumer to depend
+      # on the wrong one. Pruned before the bundle is uploaded so that what a
+      # dry run leaves behind is byte-for-byte the asset set a tag would
+      # publish.
+      - name: prune build-time fragments
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f staged/*.fragment.json
+          ls -l staged
+
+      - name: upload release bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle
+          path: staged/
+          if-no-files-found: error
+
       - name: publish
+        if: github.ref_type == 'tag'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          # Fragments are build-time plumbing for build-manifest.sh; zenmon.json
-          # is the published contract. Shipping both would invite a consumer to
-          # depend on the wrong one.
-          rm -f staged/*.fragment.json
-          ls -l staged
           gh release create "${GITHUB_REF_NAME}" \
             --title "zenmon ${VERSION}" \
             --generate-notes \
