@@ -89,9 +89,17 @@ export function App() {
   const capturing = status?.state === "running" || status?.state === "starting";
 
   const patchProfile = (patch: Partial<Profile>) => {
+    // A rename has to carry the selection with it. The backend only sees the
+    // finished config and can't tell a rename from a delete-plus-add, so it
+    // falls back to the first profile — selection would silently jump.
+    const renamingSelected =
+      patch.name !== undefined && config.profiles[editing]?.name === config.app.selected_profile;
     setConfig({
       ...config,
       profiles: config.profiles.map((p, i) => (i === editing ? { ...p, ...patch } : p)),
+      app: renamingSelected
+        ? { ...config.app, selected_profile: patch.name as string }
+        : config.app,
     });
   };
 
@@ -105,12 +113,34 @@ export function App() {
     }
   };
 
+  // Capture always runs on the *saved* config, so starting with edits still in
+  // the form would silently use the old endpoint. Commit them first; stopping
+  // needs no save, and saving there would restart the capture just to end it.
+  const onToggleCapture = async () => {
+    try {
+      if (!capturing && dirty) {
+        await saveConfig(config);
+        await load();
+      }
+      await toggleCapture();
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const onAddProfile = async () => {
     const used = new Set(config.profiles.map((p) => p.name));
     let n = config.profiles.length + 1;
     while (used.has(`profile-${n}`)) n += 1;
     const created = await newProfile(`profile-${n}`);
-    setConfig({ ...config, profiles: [...config.profiles, created] });
+    // Adding a profile means intending to use it. Leaving the selection behind
+    // makes capture run on the old profile even after the new one is saved.
+    setConfig({
+      ...config,
+      profiles: [...config.profiles, created],
+      app: { ...config.app, selected_profile: created.name },
+    });
     setEditing(config.profiles.length);
   };
 
@@ -431,10 +461,7 @@ export function App() {
       </div>
 
       <div className="footbar">
-        <button
-          className="btn"
-          onClick={() => toggleCapture().catch((e) => setError(String(e)))}
-        >
+        <button className="btn" onClick={onToggleCapture}>
           {capturing ? "Stop capture" : "Start capture"}
         </button>
         <button
@@ -445,6 +472,7 @@ export function App() {
           Delete profile
         </button>
         <span className="grow" />
+        {dirty && <span className="unsaved">unsaved — starting capture applies them</span>}
         <button className="btn" onClick={() => hideSettings()}>
           Close
         </button>

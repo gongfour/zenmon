@@ -59,6 +59,9 @@ button,input,select{font-family:inherit}
 .footbar{display:flex;align-items:center;gap:10px;padding:14px 24px;
   border-top:1px solid var(--line);flex:0 0 auto}
 .footbar .grow{flex:1}
+/* --dim, not --warn: unsaved is a state of the form, and warn is reserved for
+   capture status (§ status = go/warn/stop) */
+.unsaved{font-family:var(--mono);font-size:11px;color:var(--dim);white-space:nowrap}
 
 /* ─── capture status pill (topbar) ───────────────────────────── */
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:600;letter-spacing:.06em;
