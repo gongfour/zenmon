@@ -7544,7 +7544,7 @@ dependencies = [
 
 [[package]]
 name = "zenmon-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -7567,7 +7567,7 @@ dependencies = [
 
 [[package]]
 name = "zenmon-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.1",
@@ -7586,7 +7586,7 @@ dependencies = [
 
 [[package]]
 name = "zenmon-tray"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "directories",
  "serde",
@@ -7605,7 +7605,7 @@ dependencies = [
 
 [[package]]
 name = "zenmon-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "color-eyre",
