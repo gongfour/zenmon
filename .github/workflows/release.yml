@@ -152,10 +152,18 @@ jobs:
 
       - name: collect installer
         shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
           cp target/release/bundle/nsis/*-setup.exe dist/
+          # Registers the installer in the manifest's trayArtifacts so
+          # `zenmon update` can drive it. BINARY is the installer itself:
+          # there is nothing to extract, the updater runs it with /S.
+          setup="$(basename "$(ls dist/*-setup.exe)")"
+          MANIFEST_TARGET=windows-x86_64 ARTIFACT="dist/${setup}" BINARY="${setup}" \
+            bash scripts/release/package-tray.sh
           ls -l dist
 
       - uses: actions/upload-artifact@v4
@@ -205,8 +213,13 @@ jobs:
           mkdir -p dist
           # tar.gz, not zip: the .app is a directory tree whose executable
           # bits and symlinks must survive, and the updater side will untar.
-          tar czf "dist/zenmon-tray-${VERSION}-aarch64-apple-darwin.app.tar.gz" \
+          archive="zenmon-tray-${VERSION}-aarch64-apple-darwin.app.tar.gz"
+          tar czf "dist/${archive}" \
             -C target/release/bundle/macos zenmon-tray.app
+          # Registers the archive in the manifest's trayArtifacts; BINARY names
+          # the .app directory `zenmon update` untars and swaps into place.
+          MANIFEST_TARGET=macos-aarch64 ARTIFACT="dist/${archive}" BINARY=zenmon-tray.app \
+            bash scripts/release/package-tray.sh
           ls -l dist
 
       - uses: actions/upload-artifact@v4

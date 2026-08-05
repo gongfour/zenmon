@@ -112,6 +112,7 @@ sum="$(sha256_of "$archive")"
 # stick, so the same file set works for every remote kind without a rewrite.
 cat > "${OUT_DIR}/${base}.fragment.json" <<EOF
 {
+  "kind": "cli",
   "target": "${MANIFEST_TARGET}",
   "url": "$(basename "$archive")",
   "sha256": "${sum}",
