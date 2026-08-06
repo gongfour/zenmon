@@ -47,7 +47,10 @@ export const getStatus = () => invoke<CaptureStatus>("get_status");
 export const toggleCapture = () => invoke<void>("toggle_capture");
 export const selectProfile = (name: string) =>
   invoke<void>("select_profile", { name });
-export const openStoreFolder = () => invoke<void>("open_store_folder");
+/** Open a capture directory — the edited profile's when given, else the
+ *  selected profile's. */
+export const openStoreFolder = (dir?: string) =>
+  invoke<void>("open_store_folder", { dir: dir ?? null });
 export const newProfile = (name: string) => invoke<Profile>("new_profile", { name });
 export const hideSettings = () => invoke<void>("hide_settings");
 

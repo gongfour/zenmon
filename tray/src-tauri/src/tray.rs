@@ -65,7 +65,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 }
                 ID_SETTINGS => crate::state::show_settings(&app),
                 ID_OPEN_FOLDER => {
-                    if let Err(err) = crate::state::open_store_folder(&app) {
+                    if let Err(err) = crate::state::open_store_folder(&app, None) {
                         tracing::error!(error = %err, "open store folder failed");
                     }
                 }

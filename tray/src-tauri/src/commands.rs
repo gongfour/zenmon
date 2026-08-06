@@ -34,9 +34,12 @@ pub fn select_profile(app: AppHandle, name: String) -> Result<(), String> {
     crate::state::select_profile(&app, &name)
 }
 
+/// `dir` is the output directory of the profile currently shown in the form —
+/// possibly unsaved, possibly not the selected profile. Omitted (tray menu),
+/// it falls back to the selected profile's directory.
 #[tauri::command]
-pub fn open_store_folder(app: AppHandle) -> Result<(), String> {
-    crate::state::open_store_folder(&app)
+pub fn open_store_folder(app: AppHandle, dir: Option<String>) -> Result<(), String> {
+    crate::state::open_store_folder(&app, dir.as_deref())
 }
 
 /// A fresh profile pre-filled with the same defaults first-run uses, so the

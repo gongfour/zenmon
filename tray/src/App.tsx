@@ -108,6 +108,7 @@ export function App() {
   const [cliMessage, setCliMessage] = useState<string | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
   const [confirmUpdate, setConfirmUpdate] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
 
   const load = useCallback(async () => {
     const cfg = await getConfig();
@@ -253,6 +254,35 @@ export function App() {
     update?.phase === "downloading" ||
     update?.phase === "installing";
 
+  // Close hides to the tray; edits would sit unsaved in the hidden webview
+  // and die with the process. Ask instead of losing them silently.
+  const onCloseRequested = () => {
+    if (dirty) setConfirmClose(true);
+    else hideSettings();
+  };
+
+  const onDiscardAndClose = () => {
+    if (saved) {
+      setConfig(saved);
+      setEditing(Math.max(0, Math.min(editing, saved.profiles.length - 1)));
+    }
+    setConfirmClose(false);
+    hideSettings();
+  };
+
+  const onSaveAndClose = async () => {
+    setConfirmClose(false);
+    try {
+      await saveConfig(config);
+      await load();
+      setError(null);
+      hideSettings();
+    } catch (e) {
+      // Validation refused it — stay open with the reason showing.
+      setError(String(e));
+    }
+  };
+
   return (
     <div className="app">
       <div className="topbar">
@@ -323,6 +353,7 @@ export function App() {
                 <label>Name</label>
                 <div className="inp">
                   <input
+                    aria-label="Profile name"
                     value={profile.name}
                     onChange={(e) => patchProfile({ name: e.target.value })}
                   />
@@ -336,6 +367,7 @@ export function App() {
                 </label>
                 <div className="inp">
                   <input
+                    aria-label="Endpoint"
                     value={profile.endpoint}
                     onChange={(e) => patchProfile({ endpoint: e.target.value })}
                   />
@@ -352,6 +384,7 @@ export function App() {
                     <button
                       key={m}
                       className={profile.mode === m ? "on" : ""}
+                      aria-pressed={profile.mode === m}
                       onClick={() => patchProfile({ mode: m })}
                     >
                       {m}
@@ -367,6 +400,7 @@ export function App() {
                 </label>
                 <div className="inp">
                   <input
+                    aria-label="Namespace"
                     value={profile.namespace ?? ""}
                     placeholder="(none)"
                     onChange={(e) =>
@@ -383,6 +417,7 @@ export function App() {
                 </label>
                 <div className="inp">
                   <input
+                    aria-label="Key expression"
                     value={profile.key_expr}
                     onChange={(e) => patchProfile({ key_expr: e.target.value })}
                   />
@@ -394,7 +429,12 @@ export function App() {
               <div className="fs-h">
                 <span className="lbl">Storage</span>
                 <span className="grow" />
-                <button className="btn sm" onClick={() => openStoreFolder().catch((e) => setError(String(e)))}>
+                <button
+                  className="btn sm"
+                  onClick={() =>
+                    openStoreFolder(profile.output_dir).catch((e) => setError(String(e)))
+                  }
+                >
                   Open folder
                 </button>
               </div>
@@ -403,6 +443,7 @@ export function App() {
                 <label>Output directory</label>
                 <div className="inp wide">
                   <input
+                    aria-label="Output directory"
                     value={profile.output_dir}
                     onChange={(e) => patchProfile({ output_dir: e.target.value })}
                   />
@@ -418,6 +459,7 @@ export function App() {
                   <input
                     type="number"
                     min={1}
+                    aria-label="Rotate size in megabytes"
                     value={Math.round(profile.rotate_size_bytes / MB)}
                     onChange={(e) =>
                       patchProfile({ rotate_size_bytes: Math.max(1, +e.target.value) * MB })
@@ -436,6 +478,7 @@ export function App() {
                   <input
                     type="number"
                     min={1}
+                    aria-label="Rotate interval in minutes"
                     value={Math.round(profile.rotate_interval_secs / 60)}
                     onChange={(e) =>
                       patchProfile({ rotate_interval_secs: Math.max(1, +e.target.value) * 60 })
@@ -454,6 +497,7 @@ export function App() {
                   <input
                     type="number"
                     min={1}
+                    aria-label="Maximum total size in megabytes"
                     value={Math.round(profile.max_total_size_bytes / MB)}
                     onChange={(e) =>
                       patchProfile({ max_total_size_bytes: Math.max(1, +e.target.value) * MB })
@@ -472,6 +516,7 @@ export function App() {
                   <input
                     type="number"
                     min={1}
+                    aria-label="Maximum age in days"
                     value={Math.round(profile.max_age_secs / 86400)}
                     onChange={(e) =>
                       patchProfile({ max_age_secs: Math.max(1, +e.target.value) * 86400 })
@@ -529,6 +574,7 @@ export function App() {
                 <button
                   key={m}
                   className={theme === m ? "on" : ""}
+                  aria-pressed={theme === m}
                   onClick={() => onThemeChange(m)}
                 >
                   {m}
@@ -551,7 +597,7 @@ export function App() {
             <label>
               zenmon-tray
               <span className="hint">
-                v{update?.current_version ?? cli?.tray_version ?? "?"}
+                {`v${update?.current_version ?? cli?.tray_version ?? "?"}`}
               </span>
             </label>
             <span
@@ -616,7 +662,7 @@ export function App() {
           Delete profile
         </button>
         <span className="grow" />
-        <button className="btn" onClick={() => hideSettings()}>
+        <button className="btn" onClick={onCloseRequested}>
           Close
         </button>
         <button className="btn" disabled={!dirty} onClick={() => saved && setConfig(saved)}>
@@ -629,8 +675,14 @@ export function App() {
 
       {confirmUpdate && (
         <div className="modal-scrim" onClick={() => setConfirmUpdate(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">Update zenmon-tray</div>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-update-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-title" id="modal-update-title">Update zenmon-tray</div>
             <div className="modal-body">
               Capture is running. It will be stopped cleanly — the current segment is
               closed — and resumed automatically after the update restarts the app.
@@ -647,10 +699,45 @@ export function App() {
         </div>
       )}
 
+      {confirmClose && (
+        <div className="modal-scrim" onClick={() => setConfirmClose(false)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-close-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-title" id="modal-close-title">Unsaved changes</div>
+            <div className="modal-body">
+              The settings window closes to the tray, and unsaved edits would be
+              lost when the app exits. Save them first?
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setConfirmClose(false)}>
+                Keep editing
+              </button>
+              <button className="btn danger" onClick={onDiscardAndClose}>
+                Discard &amp; close
+              </button>
+              <button className="btn primary" onClick={onSaveAndClose}>
+                Save &amp; close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirmDelete && profile && (
         <div className="modal-scrim" onClick={() => setConfirmDelete(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">Delete profile</div>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-delete-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-title" id="modal-delete-title">Delete profile</div>
             <div className="modal-body">
               Remove <span className="strong mono">{profile.name}</span> from the profile
               list? Captured files under its output directory are left untouched.

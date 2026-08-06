@@ -111,10 +111,30 @@ pub fn spawn(zenmon_config: ZenmonConfig, profile: Profile) -> CaptureHandle {
     }
 }
 
+/// Trim an error down to the sentence a tray user can act on.
+///
+/// Zenoh error strings append their own source location ("… at
+/// C:\…\zenoh-1.9.0\src\net\runtime\orchestrator.rs:386.") — a pointer into
+/// zenoh's internals, not at the user's router or endpoint — and can run to
+/// several lines. Keep the first line and drop the location suffix; callers
+/// log the raw error so nothing is lost, just not shown in the status line.
+fn humanize_error(message: &str) -> String {
+    let first = message.lines().next().unwrap_or(message).trim();
+    match first.rfind(" at ") {
+        // Only strip when the tail is a source location — " at " can also be
+        // ordinary message content.
+        Some(idx) if first[idx..].contains(".rs:") => first[..idx].trim_end().to_string(),
+        _ => first.to_string(),
+    }
+}
+
 fn fail(status_tx: &watch::Sender<CaptureStatus>, message: impl ToString) {
+    let raw = message.to_string();
+    tracing::warn!(error = %raw, "capture failed");
+    let shown = humanize_error(&raw);
     status_tx.send_modify(|s| {
         s.state = CaptureState::Failed;
-        s.last_error = Some(message.to_string());
+        s.last_error = Some(shown);
     });
 }
 
@@ -176,12 +196,16 @@ async fn run_capture(
                     let line = match serde_json::to_string(&record) {
                         Ok(line) => line,
                         Err(err) => {
-                            status_tx.send_modify(|s| s.last_error = Some(err.to_string()));
+                            tracing::warn!(error = %err, "capture record serialization failed");
+                            let shown = humanize_error(&err.to_string());
+                            status_tx.send_modify(|s| s.last_error = Some(shown));
                             continue;
                         }
                     };
                     if let Err(err) = writer.write_line(&line, now) {
-                        status_tx.send_modify(|s| s.last_error = Some(err.to_string()));
+                        tracing::warn!(error = %err, "capture write failed");
+                        let shown = humanize_error(&err.to_string());
+                        status_tx.send_modify(|s| s.last_error = Some(shown));
                         continue;
                     }
 
@@ -219,7 +243,8 @@ async fn run_capture(
 
     status_tx.send_modify(|s| {
         if let Some(err) = end.error() {
-            s.last_error = Some(err.to_string());
+            tracing::warn!(error = %err, "capture subscription ended with error");
+            s.last_error = Some(humanize_error(&err.to_string()));
         }
         s.state = if end.is_error() {
             CaptureState::Failed
@@ -227,4 +252,38 @@ async fn run_capture(
             CaptureState::Idle
         };
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::humanize_error;
+
+    #[test]
+    fn strips_zenoh_source_location_suffix() {
+        // Verbatim shape of a live failure (router down, client mode).
+        let raw = concat!(
+            "failed to open Zenoh session: Unable to connect to any of [tcp/localhost:7447]!",
+            " at C:\\Users\\runneradmin\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f",
+            "\\zenoh-1.9.0\\src\\net\\runtime\\orchestrator.rs:386."
+        );
+        assert_eq!(
+            humanize_error(raw),
+            "failed to open Zenoh session: Unable to connect to any of [tcp/localhost:7447]!"
+        );
+    }
+
+    #[test]
+    fn keeps_messages_without_a_source_location() {
+        assert_eq!(humanize_error("disk full"), "disk full");
+        // " at " can be ordinary content, not a location suffix
+        assert_eq!(
+            humanize_error("no segment at index 3"),
+            "no segment at index 3"
+        );
+    }
+
+    #[test]
+    fn keeps_only_the_first_line() {
+        assert_eq!(humanize_error("top level\ncaused by: deeper"), "top level");
+    }
 }

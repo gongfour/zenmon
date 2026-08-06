@@ -61,10 +61,25 @@ fn persist(state: &AppState, inner: &Inner) {
     }
 }
 
+/// A handle whose task has already ended — Failed, or Idle once the stream
+/// closed on its own — is a report, not a running capture.
+fn is_live(handle: &CaptureHandle) -> bool {
+    matches!(
+        handle.status().state,
+        CaptureState::Starting | CaptureState::Running
+    )
+}
+
 /// Start capture on the selected profile. No-op if already running.
 pub fn start_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut inner = state.inner.lock().expect("state poisoned");
+    // Clear a dead handle so "Start capture" after a failure retries in one
+    // click — previously the first click went to the toggle's stop path and
+    // only disposed of the zombie (and wiped the error message with it).
+    if inner.capture.as_ref().is_some_and(|h| !is_live(h)) {
+        inner.capture.take();
+    }
     if inner.capture.is_some() {
         return Ok(());
     }
@@ -102,10 +117,13 @@ pub fn stop_capture(app: &AppHandle) {
 }
 
 pub fn toggle_capture(app: &AppHandle) -> Result<(), String> {
+    // Judged by the task's actual state, not by handle presence — the UI's
+    // button label does the same, and the two disagreeing is exactly the
+    // "Start capture that actually stops" bug.
     let running = {
         let state = app.state::<AppState>();
         let inner = state.inner.lock().expect("state poisoned");
-        inner.capture.is_some()
+        inner.capture.as_ref().is_some_and(is_live)
     };
     if running {
         stop_capture(app);
@@ -142,9 +160,46 @@ pub fn select_profile(app: &AppHandle, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject configs that would save fine and then fail at capture start.
+///
+/// Without this, an empty key expression (say) is accepted silently and the
+/// failure surfaces minutes or days later when capture is toggled — far from
+/// the edit that caused it. The error belongs next to the Save button.
+fn validate_config(config: &AppConfig) -> Result<(), String> {
+    if config.profiles.is_empty() {
+        return Err("at least one profile is required".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for profile in &config.profiles {
+        let name = profile.name.trim();
+        if name.is_empty() {
+            return Err("a profile has an empty name".to_string());
+        }
+        if !seen.insert(name.to_lowercase()) {
+            return Err(format!("two profiles are named \"{name}\""));
+        }
+        if profile.key_expr.trim().is_empty() {
+            return Err(format!(
+                "profile \"{name}\": key expression is empty — nothing would be \
+                 recorded. Use ** to record everything"
+            ));
+        }
+        if profile.mode == "client" && profile.endpoint.trim().is_empty() {
+            return Err(format!(
+                "profile \"{name}\": an endpoint is required in client mode"
+            ));
+        }
+        if profile.output_dir.as_os_str().is_empty() {
+            return Err(format!("profile \"{name}\": output directory is empty"));
+        }
+    }
+    Ok(())
+}
+
 /// Replace the whole config (settings window "Save"). Restarts a live capture
 /// so edits to the active profile take effect immediately.
 pub fn replace_config(app: &AppHandle, mut new_config: AppConfig) -> Result<(), String> {
+    validate_config(&new_config)?;
     let was_running = {
         let state = app.state::<AppState>();
         let mut inner = state.inner.lock().expect("state poisoned");
@@ -175,15 +230,24 @@ pub fn replace_config(app: &AppHandle, mut new_config: AppConfig) -> Result<(), 
     Ok(())
 }
 
-pub fn open_store_folder(app: &AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let inner = state.inner.lock().expect("state poisoned");
-    let profile = inner
-        .config
-        .selected_profile()
-        .ok_or_else(|| "no profile selected".to_string())?;
-    let dir = profile.output_dir.clone();
-    drop(inner);
+/// Open a capture directory in the file manager. The settings window passes
+/// the *edited* profile's directory — which may differ from the selected
+/// profile's and may not be saved yet; `None` (the tray menu) falls back to
+/// the selected profile. Without the parameter, the button inside profile-2's
+/// Storage section silently opened profile-1's folder.
+pub fn open_store_folder(app: &AppHandle, dir: Option<&str>) -> Result<(), String> {
+    let dir: std::path::PathBuf = match dir.map(str::trim) {
+        Some(explicit) if !explicit.is_empty() => explicit.into(),
+        _ => {
+            let state = app.state::<AppState>();
+            let inner = state.inner.lock().expect("state poisoned");
+            let profile = inner
+                .config
+                .selected_profile()
+                .ok_or_else(|| "no profile selected".to_string())?;
+            profile.output_dir.clone()
+        }
+    };
 
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     #[cfg(windows)]
@@ -253,4 +317,75 @@ fn spawn_status_watcher(app: AppHandle) {
         // final state lands even if it arrived inside the throttle window.
         push_status(&app);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::validate_config;
+    use crate::config::{AppConfig, AppSettings, Profile};
+
+    fn config_with(profiles: Vec<Profile>) -> AppConfig {
+        AppConfig {
+            schema_version: 1,
+            app: AppSettings {
+                selected_profile: profiles.first().map(|p| p.name.clone()).unwrap_or_default(),
+                resume_capture_on_launch: false,
+                last_capture_running: false,
+            },
+            profiles,
+        }
+    }
+
+    fn seed(name: &str) -> Profile {
+        Profile::seed(name, Path::new("C:/tmp/zenmon-test"))
+    }
+
+    #[test]
+    fn accepts_a_seed_profile() {
+        assert!(validate_config(&config_with(vec![seed("default")])).is_ok());
+    }
+
+    #[test]
+    fn rejects_an_empty_profile_list() {
+        assert!(validate_config(&config_with(vec![])).is_err());
+    }
+
+    #[test]
+    fn rejects_an_empty_key_expression() {
+        let mut profile = seed("default");
+        profile.key_expr = "  ".to_string();
+        let err = validate_config(&config_with(vec![profile])).unwrap_err();
+        assert!(err.contains("key expression"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_a_missing_endpoint_in_client_mode() {
+        let mut profile = seed("default");
+        profile.endpoint = String::new();
+        let err = validate_config(&config_with(vec![profile])).unwrap_err();
+        assert!(err.contains("endpoint"), "got: {err}");
+    }
+
+    #[test]
+    fn allows_a_missing_endpoint_in_peer_mode() {
+        let mut profile = seed("default");
+        profile.endpoint = String::new();
+        profile.mode = "peer".to_string();
+        assert!(validate_config(&config_with(vec![profile])).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_names_case_insensitively() {
+        let err = validate_config(&config_with(vec![seed("Prod"), seed("prod")])).unwrap_err();
+        assert!(err.contains("named"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_an_empty_name() {
+        let mut profile = seed("default");
+        profile.name = " ".to_string();
+        assert!(validate_config(&config_with(vec![profile])).is_err());
+    }
 }

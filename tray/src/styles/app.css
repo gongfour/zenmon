@@ -120,6 +120,12 @@ button,input,select{font-family:inherit}
    is the full --stop, not --stop-line: it is both boundary and meaning */
 .btn.danger{height:36px;color:var(--stop);border-color:var(--stop)}
 .btn.danger:hover:not(:disabled){background:var(--stop-wash)}
+/* Disabled must read as disabled in every variant. Without these two, .primary
+   and .danger out-specificity .btn:disabled and keep their full-color idle
+   look — a disabled Save stayed vivid accent and the only cue was the cursor,
+   while accent/status colors are exactly the ones that promise interactivity. */
+.btn.primary:disabled{background:var(--sunken);border-color:var(--line-soft);color:var(--faint)}
+.btn.danger:disabled{background:var(--surface);border-color:var(--line-soft);color:var(--faint)}
 .btn.sm{height:28px;padding:0 10px;font-size:12px}
 
 /* ─── profile strip ──────────────────────────────────────────── */
