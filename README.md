@@ -490,6 +490,15 @@ Requires Node 20+. **Build it with the Tauri CLI, never with bare `cargo`** —
 a blank page when run standalone. Full notes, dev workflow and layout in
 [`tray/README.md`](tray/README.md).
 
+Updates flow **both ways through one release** (single version, single tag):
+`zenmon update apply` updates an installed tray alongside the CLI on every
+platform, and on Windows the tray returns the favor — the release installer
+bundles the `zenmon` CLI, and *Settings → Updates* updates the tray in place
+(capture is stopped cleanly and resumed after the restart), refreshing the
+bundled CLI in the same step. The same section puts the bundled CLI on your
+`PATH` ("Install CLI") and drives `zenmon update apply` for a CLI installed
+elsewhere. Whichever app you drive, both end up current.
+
 ## Architecture
 
 Cargo workspace with 3 crates plus the tray app:

@@ -89,6 +89,21 @@ Full notes in `tray/README.md`; the load-bearing ones:
   `Shell_NotifyIcon(NIM_MODIFY)` that repaints the tray, so driving them at message
   rate makes the icon strobe. `state.rs` coalesces to 1 Hz, `tray.rs` skips no-op
   icon writes, and state transitions bypass both.
+- **Updates flow both ways through one release.** CLI-driven:
+  `zenmon update apply` updates an installed tray alongside the CLI
+  (`crates/zenmon-cli/src/update/tray.rs`, `trayArtifacts` in zenmon.json —
+  all platforms). Tray-driven (`update.rs`/`cli.rs`, Windows only): the tray
+  self-updates via `tauri-plugin-updater` (signed NSIS, endpoint `latest.json`
+  on the GitHub release), and the release installer bundles `zenmon.exe` as an
+  externalBin so a tray update updates the CLI too; "Install CLI" just adds
+  the install dir to the user PATH. All tray updater logic is Rust-side — no
+  `updater:*` capability needed. `bundle.createUpdaterArtifacts` +
+  `externalBin` live in the CI-only overlay
+  `tray/src-tauri/tauri.release.conf.json`, NOT tauri.conf.json, so local
+  builds need neither the signing key (`TAURI_SIGNING_PRIVATE_KEY` secret;
+  private key outside the repo, see tray/README.md § Updater signing) nor a
+  prebuilt CLI. Dev builds refuse self-update and CLI install; non-Windows
+  builds refuse self-update with a pointer to `zenmon update`.
 
 ## Key Patterns
 

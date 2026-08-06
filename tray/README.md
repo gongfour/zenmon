@@ -84,6 +84,11 @@ quits the running tray, swaps it, and relaunches (`crates/zenmon-cli/src/update/
 No tray installed means the whole topic is skipped; the updater never installs
 a tray you didn't choose to have.
 
+This is one of **two directions through the same release**: the CLI updates the
+tray (this section, all platforms), and the tray updates itself and the CLI
+(*Settings → Updates*, Windows — see [Updates](#updates) below). Whichever app
+you drive, both end up on the release's single version.
+
 First install is manual, per platform:
 
 - **Windows**: run the `*-setup.exe` from the release. It registers the
@@ -113,7 +118,86 @@ src-tauri/src/
   config.rs         profile schema, load/save, bridge into zenmon-core
   tray.rs           tray icon, menu, click handling, status visuals
   commands.rs       #[tauri::command] wrappers
+  update.rs         tray self-update (tauri-plugin-updater), status events
+  cli.rs            the zenmon CLI as seen from the tray: detect / install
+                    (user PATH) / drive `zenmon update apply --json`
 ```
+
+---
+
+## Updates
+
+*Settings → Updates* (or the tray menu's **Check for Updates…**) drives two
+things through one release feed — the workspace has a single version, one tag,
+one release, so one check answers for both apps:
+
+- **The tray itself** — `tauri-plugin-updater` against
+  `releases/latest/download/latest.json`. "Update & restart" downloads the
+  signed NSIS installer, stops a running capture *cleanly* (segment closed,
+  `last_capture_running` saved as true), and hands over to the installer, which
+  relaunches the app (`/P /R`); resume-on-launch then brings capture back.
+  A failed download changes nothing — capture keeps running through it.
+- **The `zenmon` CLI** — the release installer bundles `zenmon.exe` next to
+  `zenmon-tray.exe` (externalBin), so a tray update *is* a CLI update for that
+  copy. "Install CLI" merely appends the install directory to the user `PATH`
+  (HKCU\Environment + `WM_SETTINGCHANGE`; new terminals see it, running ones
+  don't). A CLI found elsewhere on `PATH` is updated by running its own
+  `zenmon update apply --json` and surfacing the verdict — version gate,
+  checksum pipeline and the cargo-bin refusal all stay in the CLI.
+
+Known limits, on purpose:
+
+- **Tray self-update is Windows-only.** `latest.json` carries only the NSIS
+  build, and both entry points say so instead of surfacing the plugin's
+  "platform not found". The macOS tray is updated by `zenmon update apply`
+  (see "Installing & updating a release build" above), which also means the
+  macOS .app carries no bundled CLI — externalBin lives in the Windows-only
+  release overlay.
+- Dev builds refuse both self-update (a release must never overwrite a dev
+  binary) and "Install CLI" (the neighbor would be `target/debug/zenmon.exe`).
+- Uninstalling the tray removes the bundled CLI but leaves the `PATH` entry
+  behind — harmless (the directory is gone), fix is manual.
+- No background/auto update. Checks and installs are always user-initiated.
+
+## Updater signing
+
+`tauri-plugin-updater` refuses unsigned installers — signature verification
+cannot be disabled. Therefore:
+
+- `tauri.conf.json` carries the **public** key; the private key lives outside
+  the repo (conventionally `~/.tauri/zenmon-tray.key`) and in the repository
+  secret **`TAURI_SIGNING_PRIVATE_KEY`** (plus
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has one). Generate with:
+
+  ```bash
+  npm run tauri signer generate -- -w ~/.tauri/zenmon-tray.key
+  ```
+
+- **Losing the private key strands every installed tray** — a new key can't
+  sign updates the old pubkey will accept, so users would have to reinstall by
+  hand. Back the key file up; rotating it means shipping a release signed with
+  the old key that carries the new pubkey.
+- `bundle.createUpdaterArtifacts` (which is what demands the key at build
+  time) is **not** in `tauri.conf.json` — it lives in the release overlay
+  `src-tauri/tauri.release.conf.json` together with the bundled-CLI
+  `externalBin`. A plain local `npm run tauri build` therefore needs neither
+  the key nor a prebuilt `zenmon.exe`. To reproduce the release build locally:
+
+  ```bash
+  cargo build --release --locked -p zenmon-cli
+  mkdir -p tray/src-tauri/binaries
+  cp target/release/zenmon.exe tray/src-tauri/binaries/zenmon-x86_64-pc-windows-msvc.exe
+  cd tray
+  TAURI_SIGNING_PRIVATE_KEY=~/.tauri/zenmon-tray.key \
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD= \
+    npm run tauri build -- --config src-tauri/tauri.release.conf.json --bundles nsis -- --locked
+  ```
+
+  Set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` even when the key has no password:
+  without the variable the signer *prompts* for one, which in a redirected or
+  CI-like shell looks like the build hanging forever after "Finished 1 bundle".
+  (CI is immune only because referencing an unset secret still defines the env
+  var as an empty string.)
 
 ## Things worth knowing before changing this
 
@@ -147,6 +231,12 @@ src-tauri/src/
 - **Tauri v2 grants no plugin permissions without
   `src-tauri/capabilities/default.json`.** Without it `emit`/`listen` fail
   silently and capture status never reaches the settings window.
+- **The updater has no capability entry, deliberately.** Capabilities gate the
+  *webview's* access to plugin APIs, and the webview never calls the updater —
+  check/download/install all run in Rust (`update.rs`), shared by the tray
+  menu and the settings window like every other operation, and the frontend
+  only listens for `update-status` events (covered by `core:default`). Add
+  `updater:default` only if some JS ever calls the plugin directly.
 - **Styling is ported from dotori's launcher** (`dotori_rcs/gui/src/styles/app.css`,
   spec `docs/gui_design.md`) so the two apps read as one toolchain: flat
   surfaces separated by lines, accent blue means *interactive* and never status,

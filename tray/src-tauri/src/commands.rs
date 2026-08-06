@@ -53,3 +53,37 @@ pub fn hide_settings(app: AppHandle) {
         let _ = window.hide();
     }
 }
+
+#[tauri::command]
+pub async fn check_updates(app: AppHandle) -> Result<crate::update::UpdateStatus, String> {
+    crate::update::check(&app).await
+}
+
+/// `confirmed` acknowledges that a running capture will be stopped (and
+/// resumed by the relaunched app). Without it, a running capture makes this
+/// return the "capture-running" sentinel instead of proceeding.
+#[tauri::command]
+pub async fn apply_tray_update(app: AppHandle, confirmed: bool) -> Result<(), String> {
+    crate::update::apply(&app, confirmed).await
+}
+
+/// Last pushed update status — what the settings window paints on (re)open.
+#[tauri::command]
+pub fn get_update_status(app: AppHandle) -> crate::update::UpdateStatus {
+    crate::update::current_status(&app)
+}
+
+#[tauri::command]
+pub async fn cli_status() -> crate::cli::CliStatus {
+    crate::cli::status().await
+}
+
+#[tauri::command]
+pub async fn install_cli() -> Result<crate::cli::CliStatus, String> {
+    crate::cli::install().await
+}
+
+#[tauri::command]
+pub async fn update_cli() -> Result<serde_json::Value, String> {
+    crate::cli::update().await
+}

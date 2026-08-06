@@ -20,21 +20,30 @@ tauri-build = { version = "2", features = [] }
 zenmon-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+# `process` on top of the workspace set: the updater UI runs `zenmon update
+# apply --json` as a child process and needs kill-on-timeout, which
+# std::process can't do without a watcher thread.
+tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 toml = "1"
 directories = "6"
+semver = "1"
 
 # Release builds are GUI-subsystem (see main.rs), which means no console and no
 # std handles — these are what reattach one when a terminal launched us.
+# WindowsAndMessaging is for the WM_SETTINGCHANGE broadcast after editing the
+# user PATH (cli.rs); winreg is that edit.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_UI_WindowsAndMessaging",
 ] }
+winreg = "0.55"

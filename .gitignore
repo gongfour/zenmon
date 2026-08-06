@@ -6,6 +6,9 @@
 # rebuild months later from the same dependency versions, and `--locked` in CI
 # and the release workflow can only enforce that if the lockfile is tracked.
 .worktrees/
+# CI staging area for the CLI binary the release installer bundles as an
+# externalBin (see tauri.release.conf.json); never committed.
+/tray/src-tauri/binaries/
 .superpowers/
 
 # Internal design/plan docs and project contracts (may reference proprietary systems)

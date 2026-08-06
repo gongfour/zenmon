@@ -30,5 +30,16 @@
       "icons/icon.ico",
       "icons/icon.icns"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVENjdENDI4NkVBQzQyOEUKUldTT1FxeHVLTlJuWFE3bWg0dy82czQweElIYkNZbGhvZ2huQ2NDMGVaOHVqSThxRXNWZXhIOFUK",
+      "endpoints": [
+        "https://github.com/gongfour/zenmon/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

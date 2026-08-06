@@ -56,3 +56,58 @@ export const CAPTURE_STATUS_EVENT = "capture-status";
 /** Subscribe to backend status pushes. Returns an unlisten function. */
 export const onCaptureStatus = (handler: (status: CaptureStatus) => void) =>
   listen<CaptureStatus>(CAPTURE_STATUS_EVENT, (e) => handler(e.payload));
+
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "up_to_date"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "error";
+
+export interface UpdateStatus {
+  phase: UpdatePhase;
+  current_version: string;
+  available_version: string | null;
+  downloaded: number | null;
+  total: number | null;
+  message: string | null;
+}
+
+export interface CliStatus {
+  tray_version: string;
+  path: string | null;
+  version: string | null;
+  managed_by: "tray" | "cargo" | "external" | null;
+  bundled_available: boolean;
+  pending_path: boolean;
+  update_available: boolean;
+}
+
+/** `zenmon update apply --json` verdict, passed through verbatim. */
+export interface CliUpdateResult {
+  ok?: boolean;
+  installed?: boolean;
+  from?: string;
+  to?: string;
+  reason?: string;
+  current?: string;
+  available?: string;
+  path?: string;
+}
+
+export const checkUpdates = () => invoke<UpdateStatus>("check_updates");
+/** Rejects with "capture-running" when capture is on and `confirmed` is false. */
+export const applyTrayUpdate = (confirmed: boolean) =>
+  invoke<void>("apply_tray_update", { confirmed });
+export const getUpdateStatus = () => invoke<UpdateStatus>("get_update_status");
+export const getCliStatus = () => invoke<CliStatus>("cli_status");
+export const installCli = () => invoke<CliStatus>("install_cli");
+export const updateCli = () => invoke<CliUpdateResult>("update_cli");
+
+export const UPDATE_STATUS_EVENT = "update-status";
+
+/** Subscribe to updater status pushes. Returns an unlisten function. */
+export const onUpdateStatus = (handler: (status: UpdateStatus) => void) =>
+  listen<UpdateStatus>(UPDATE_STATUS_EVENT, (e) => handler(e.payload));

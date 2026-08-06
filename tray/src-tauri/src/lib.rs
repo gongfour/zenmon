@@ -1,8 +1,10 @@
 pub mod capture;
+pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod state;
 pub mod tray;
+pub mod update;
 
 use tauri::{AppHandle, Manager};
 
@@ -62,11 +64,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .manage(AppState::new(paths, app_config))
+        .manage(update::UpdateState::default())
         .setup(move |app| {
             let handle = app.handle().clone();
             tray::build(&handle)?;
@@ -96,6 +100,12 @@ pub fn run() {
             commands::open_store_folder,
             commands::new_profile,
             commands::hide_settings,
+            commands::check_updates,
+            commands::apply_tray_update,
+            commands::get_update_status,
+            commands::cli_status,
+            commands::install_cli,
+            commands::update_cli,
         ])
         .run(tauri::generate_context!())
         .expect("error while running zenmon-tray");

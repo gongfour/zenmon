@@ -15,6 +15,7 @@ pub const TRAY_ID: &str = "main";
 const ID_CAPTURE: &str = "capture";
 const ID_SETTINGS: &str = "settings";
 const ID_OPEN_FOLDER: &str = "open_folder";
+const ID_CHECK_UPDATES: &str = "check_updates";
 const ID_QUIT: &str = "quit";
 const PROFILE_PREFIX: &str = "profile:";
 
@@ -67,6 +68,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                     if let Err(err) = crate::state::open_store_folder(&app) {
                         tracing::error!(error = %err, "open store folder failed");
                     }
+                }
+                // Same operation the settings window's button runs; the
+                // window is raised so the result has somewhere to land.
+                ID_CHECK_UPDATES => {
+                    crate::state::show_settings(&app);
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(err) = crate::update::check(&app).await {
+                            tracing::error!(error = %err, "update check failed");
+                        }
+                    });
                 }
                 ID_QUIT => crate::quit(&app),
                 other => {
@@ -133,6 +144,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
     let open_folder =
         MenuItem::with_id(app, ID_OPEN_FOLDER, "Open Store Folder", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        ID_CHECK_UPDATES,
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -143,6 +161,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &sep1,
         &settings,
         &open_folder,
+        &check_updates,
         &sep2,
         &quit,
     ];

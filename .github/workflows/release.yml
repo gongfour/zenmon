@@ -133,23 +133,63 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # The release overlay config turns on createUpdaterArtifacts, and that
+      # makes `tauri build` *require* the signing key. Catch its absence here,
+      # with instructions, instead of twenty minutes into the build.
+      - name: check signing secret
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Generate a keypair with 'npm run tauri signer generate' and add the private key as a repository secret — see tray/README.md § Updater signing."
+            exit 1
+          fi
+
       - name: install frontend deps
         working-directory: tray
         run: npm ci
+
+      # The NSIS installer carries the CLI as an externalBin (see
+      # tauri.release.conf.json), so one installer run installs *and updates*
+      # both apps — the tray's updater is thereby the CLI's updater too for
+      # tray-managed installs. Built here rather than downloaded from the
+      # build-cli job because that job uploads packaged archives, and
+      # unpacking one to get at the exe would couple this job to the archive
+      # layout for no gain — the compile is cache-warm anyway.
+      - name: build cli for bundling
+        run: cargo build --release --locked -p zenmon-cli
+
+      # externalBin resolves `binaries/zenmon` + the host target triple.
+      - name: stage cli as external binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tray/src-tauri/binaries
+          cp target/release/zenmon.exe tray/src-tauri/binaries/zenmon-x86_64-pc-windows-msvc.exe
 
       # Must go through the Tauri CLI. A bare `cargo build -p zenmon-tray`
       # yields a *dev* binary that looks for the vite dev server, and it lands
       # on the same path — see CLAUDE.md and tray/README.md.
       #
+      # `--config tauri.release.conf.json` layers createUpdaterArtifacts and
+      # the bundled CLI on top of the committed config. They live in the
+      # overlay, not tauri.conf.json, so a plain local `npm run tauri build`
+      # keeps working without the signing key or a prebuilt zenmon.exe.
+      #
       # `--bundles nsis` skips the MSI/WiX bundle: NSIS is what the updater
-      # (PR-4) consumes, and the WiX toolchain download is an extra failure
+      # consumes, and the WiX toolchain download is an extra failure
       # surface on a job that must not flake during a release.
       #
       # The second `--` marks the start of arguments the Tauri CLI forwards to
       # cargo, so the tray is built `--locked` like the CLI jobs are.
       - name: tauri build
         working-directory: tray
-        run: npm run tauri build -- --bundles nsis -- --locked
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --config src-tauri/tauri.release.conf.json --bundles nsis -- --locked
 
       - name: collect installer
         shell: bash
@@ -159,9 +199,13 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp target/release/bundle/nsis/*-setup.exe dist/
-          # Registers the installer in the manifest's trayArtifacts so
-          # `zenmon update` can drive it. BINARY is the installer itself:
-          # there is nothing to extract, the updater runs it with /S.
+          # Same installer, two update contracts. The minisign .sig feeds
+          # latest.json (tray-driven updates via tauri-plugin-updater)…
+          cp target/release/bundle/nsis/*-setup.exe.sig dist/
+          # …and the fragment registers the installer in zenmon.json's
+          # trayArtifacts so `zenmon update` can drive it too. BINARY is the
+          # installer itself: there is nothing to extract, the updater runs
+          # it with /S.
           setup="$(basename "$(ls dist/*-setup.exe)")"
           MANIFEST_TARGET=windows-x86_64 ARTIFACT="dist/${setup}" BINARY="${setup}" \
             bash scripts/release/package-tray.sh
@@ -252,6 +296,16 @@ jobs:
         env:
           VERSION: ${{ needs.guard.outputs.version }}
         run: bash scripts/release/build-manifest.sh staged
+
+      # latest.json is the tray updater's contract, as zenmon.json is the
+      # CLI's. `github.repository` rather than a hardcoded name so a fork's
+      # dry run points at the fork's own releases.
+      - name: build updater manifest
+        shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/release/build-updater-manifest.sh staged
 
       # Fragments are build-time plumbing for build-manifest.sh; zenmon.json is
       # the published contract. Shipping both would invite a consumer to depend

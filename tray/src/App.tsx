@@ -6,17 +6,26 @@ import {
 } from "@tauri-apps/plugin-autostart";
 
 import {
+  applyTrayUpdate,
+  checkUpdates,
+  getCliStatus,
   getConfig,
   getStatus,
+  getUpdateStatus,
   hideSettings,
+  installCli,
   newProfile,
   onCaptureStatus,
+  onUpdateStatus,
   openStoreFolder,
   saveConfig,
   toggleCapture,
+  updateCli,
   type AppConfig,
   type CaptureStatus,
+  type CliStatus,
   type Profile,
+  type UpdateStatus,
 } from "./api";
 import { loadMode, setThemeMode, type ThemeMode } from "./theme";
 
@@ -43,6 +52,48 @@ function formatBytes(n: number): string {
   return `${(n / MB).toFixed(1)} MB`;
 }
 
+/** One line summarizing the tray updater's state. */
+function trayUpdateText(u: UpdateStatus | null): string {
+  switch (u?.phase) {
+    case "checking":
+      return "checking…";
+    case "up_to_date":
+      return "up to date";
+    case "available":
+      return `v${u.available_version} available`;
+    case "downloading": {
+      const got = formatBytes(u.downloaded ?? 0);
+      return u.total ? `downloading ${got} / ${formatBytes(u.total)}` : `downloading ${got}`;
+    }
+    case "installing":
+      return "installing — the app restarts by itself";
+    case "error":
+      return u.message ?? "update check failed";
+    default:
+      return "not checked yet";
+  }
+}
+
+/** One line summarizing the CLI install state. */
+function cliText(cli: CliStatus | null): string {
+  if (!cli) return "…";
+  if (!cli.path) {
+    return cli.bundled_available
+      ? "not on PATH — Install puts the copy bundled with this app on your user PATH"
+      : "not installed — only installer builds bundle the CLI";
+  }
+  const where =
+    cli.managed_by === "tray"
+      ? "bundled with the tray, updates with it"
+      : cli.managed_by === "cargo"
+        ? "managed by cargo install — update by rebuilding from source"
+        : cli.update_available
+          ? "update available"
+          : "up to date";
+  const pending = cli.pending_path ? " · PATH change pending, open a new terminal" : "";
+  return `${cli.path} · ${where}${pending}`;
+}
+
 export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [saved, setSaved] = useState<AppConfig | null>(null);
@@ -52,6 +103,11 @@ export function App() {
   const [theme, setTheme] = useState<ThemeMode>(loadMode());
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [cli, setCli] = useState<CliStatus | null>(null);
+  const [cliMessage, setCliMessage] = useState<string | null>(null);
+  const [cliBusy, setCliBusy] = useState(false);
+  const [confirmUpdate, setConfirmUpdate] = useState(false);
 
   const load = useCallback(async () => {
     const cfg = await getConfig();
@@ -65,9 +121,13 @@ export function App() {
     load().catch((e) => setError(String(e)));
     getStatus().then(setStatus).catch(() => {});
     autostartEnabled().then(setLaunchOnLogin).catch(() => {});
+    getUpdateStatus().then(setUpdate).catch(() => {});
+    getCliStatus().then(setCli).catch(() => {});
     const unlisten = onCaptureStatus(setStatus);
+    const unlistenUpdate = onUpdateStatus(setUpdate);
     return () => {
       unlisten.then((f) => f()).catch(() => {});
+      unlistenUpdate.then((f) => f()).catch(() => {});
     };
   }, [load]);
 
@@ -143,6 +203,55 @@ export function App() {
     setThemeMode(mode);
     setTheme(mode);
   };
+
+  const onCheckUpdates = () => {
+    setCliMessage(null);
+    // Failures surface through the update-status events, not the promise.
+    checkUpdates().catch(() => {});
+    getCliStatus().then(setCli).catch(() => {});
+  };
+
+  const onApplyUpdate = (confirmed: boolean) => {
+    setConfirmUpdate(false);
+    applyTrayUpdate(confirmed).catch((e) => {
+      if (String(e).includes("capture-running")) setConfirmUpdate(true);
+      else setError(String(e));
+    });
+  };
+
+  const onInstallCli = async () => {
+    try {
+      setCli(await installCli());
+      setCliMessage("added to your user PATH — new terminals will find `zenmon`");
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onUpdateCli = async () => {
+    setCliBusy(true);
+    setCliMessage(null);
+    try {
+      const res = await updateCli();
+      setCliMessage(
+        res.installed
+          ? `CLI updated ${res.from} → ${res.to}`
+          : `nothing to do — installed ${res.current}, available ${res.available}`,
+      );
+      setCli(await getCliStatus());
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCliBusy(false);
+    }
+  };
+
+  const updateBusy =
+    update?.phase === "checking" ||
+    update?.phase === "downloading" ||
+    update?.phase === "installing";
 
   return (
     <div className="app">
@@ -428,6 +537,68 @@ export function App() {
             </div>
           </div>
         </div>
+
+        <div className="fieldset">
+          <div className="fs-h">
+            <span className="lbl">Updates</span>
+            <span className="grow" />
+            <button className="btn sm" disabled={updateBusy} onClick={onCheckUpdates}>
+              Check for updates
+            </button>
+          </div>
+
+          <div className="row">
+            <label>
+              zenmon-tray
+              <span className="hint">
+                v{update?.current_version ?? cli?.tray_version ?? "?"}
+              </span>
+            </label>
+            <span
+              className="mono"
+              style={{
+                color: update?.phase === "error" ? "var(--stop, #b91c1c)" : "var(--dim)",
+                fontSize: 11,
+                minWidth: 0,
+              }}
+            >
+              {trayUpdateText(update)}
+            </span>
+            {update?.phase === "available" && (
+              <button className="btn sm primary" onClick={() => onApplyUpdate(false)}>
+                Update &amp; restart
+              </button>
+            )}
+          </div>
+
+          <div className="row">
+            <label>
+              zenmon CLI
+              <span className="hint">{cli?.version ? `v${cli.version}` : "not installed"}</span>
+            </label>
+            <span className="mono" style={{ color: "var(--dim)", fontSize: 11, minWidth: 0 }}>
+              {cliText(cli)}
+            </span>
+            {cli && !cli.path && cli.bundled_available && (
+              <button className="btn sm" onClick={onInstallCli}>
+                Install CLI
+              </button>
+            )}
+            {cli?.path && cli.managed_by === "external" && cli.update_available && (
+              <button className="btn sm" disabled={cliBusy} onClick={onUpdateCli}>
+                {cliBusy ? "Updating…" : "Update CLI"}
+              </button>
+            )}
+          </div>
+
+          {cliMessage && (
+            <div className="row">
+              <span className="mono" style={{ color: "var(--dim)", fontSize: 11 }}>
+                {cliMessage}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="footbar">
@@ -455,6 +626,26 @@ export function App() {
           Save
         </button>
       </div>
+
+      {confirmUpdate && (
+        <div className="modal-scrim" onClick={() => setConfirmUpdate(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">Update zenmon-tray</div>
+            <div className="modal-body">
+              Capture is running. It will be stopped cleanly — the current segment is
+              closed — and resumed automatically after the update restarts the app.
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setConfirmUpdate(false)}>
+                Cancel
+              </button>
+              <button className="btn primary" onClick={() => onApplyUpdate(true)}>
+                Stop capture &amp; update
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmDelete && profile && (
         <div className="modal-scrim" onClick={() => setConfirmDelete(false)}>
