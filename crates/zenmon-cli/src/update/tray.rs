@@ -14,7 +14,11 @@
 //!   installer owns the file layout, uninstall registry entries and shortcuts,
 //!   so re-running it *is* the update path.
 
-use std::path::{Path, PathBuf};
+// `Path` is only touched by the .app unpack/swap helpers, which are gated the
+// same way — an unconditional import warns on every Windows build.
+#[cfg(any(target_os = "macos", test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 use semver::Version;
@@ -232,7 +236,17 @@ fn parse_reg_sz(output: &str, name: &str) -> Option<String> {
             // The value may itself contain spaces (`C:\Program Files\...`),
             // so it is everything after the REG_SZ column, not one token.
             let value = parts.collect::<Vec<_>>().join(" ");
-            value.trim().to_owned()
+            let value = value.trim();
+            // Tauri's NSIS installer registers InstallLocation as `"$INSTDIR"`
+            // — quotes included. A PathBuf built from the quoted string fails
+            // `is_file()`, which silently skipped the tray on every real
+            // Windows install. Only a wrapping *pair* is stripped, so a value
+            // with a quote anywhere else survives intact.
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            value.to_owned()
         })
     })
 }
@@ -341,6 +355,19 @@ mod tests {
             Some(r"C:\Program Files\zenmon tray")
         );
         assert_eq!(parse_reg_sz(output, "Missing"), None);
+    }
+
+    #[test]
+    fn strips_the_quotes_nsis_writes_around_install_location() {
+        // What `reg query` actually shows for a Tauri NSIS install — the
+        // template writes `"$INSTDIR"`, quotes and all. 0.2.0 shipped without
+        // the stripping, so detect() missed every real Windows tray install.
+        let output =
+            "\x20   InstallLocation    REG_SZ    \"C:\\Users\\k\\AppData\\Local\\zenmon-tray\"\r\n";
+        assert_eq!(
+            parse_reg_sz(output, "InstallLocation").as_deref(),
+            Some(r"C:\Users\k\AppData\Local\zenmon-tray")
+        );
     }
 
     fn tar_gz_of_app(app_name: &str) -> Vec<u8> {
