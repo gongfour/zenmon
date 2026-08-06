@@ -1,37 +1,106 @@
 # zenmon
 
-Zenoh network monitor and debugger. CLI + TUI tool built with Rust, plus
-`zenmon-tray`, a desktop app that records traffic from the system tray.
+[![CI](https://github.com/gongfour/zenmon/actions/workflows/ci.yml/badge.svg)](https://github.com/gongfour/zenmon/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/gongfour/zenmon)](https://github.com/gongfour/zenmon/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-Lightweight terminal-based alternative to web dashboards for monitoring Zenoh networks. Uses native Zenoh API directly (not REST), so features like attachments are fully supported.
+**Zenoh network monitor and debugger.** One `zenmon` binary with CLI
+subcommands and an interactive TUI dashboard, plus **zenmon-tray**, a desktop
+app that records traffic from the system tray.
+
+A lightweight terminal-based alternative to web dashboards: zenmon speaks the
+native Zenoh API directly (not the REST plugin), so attachments and binary
+payloads are first-class — and every command has a stable `--json` contract
+designed to be driven by scripts and AI agents.
+
+- **Live** — `sub` / `pub` / `query` / `nodes` with attachments, MessagePack
+  auto-decode, and bounded runs (`--count`, `--duration`) that always terminate
+- **TUI dashboard** — five views: overview, topics with live values, message
+  stream, interactive query, node table
+- **Time-shifted** — a rotating capture store (`capture --dir`, or the tray)
+  plus pure offline readers (`trace stats` / `trace read`): see what happened
+  while you were away, without a live session
+- **Diagnosis episodes** — `scenario` triggers an actuation, observes a bounded
+  window, and correlates it all into one episode JSON to reason over
+- **Contract-aware** — annotate observed traffic against the
+  `*.contract.yaml` your project declares
+- **Self-updating** — `zenmon update` keeps the CLI *and* an installed tray
+  current; on Windows the tray updates itself (and its bundled CLI) from
+  *Settings → Updates*
 
 ## Install
 
-### Download a release — no Rust toolchain needed
+Prebuilt binaries for every release are on the
+[releases page](https://github.com/gongfour/zenmon/releases/latest) — no Rust
+toolchain needed. Releases are built only by
+[`release.yml`](.github/workflows/release.yml) from a `v<version>` tag; each one
+carries a `zenmon.json` manifest naming every asset with its SHA-256.
 
-Take the archive for your platform from the
-[latest release](https://github.com/gongfour/zenmon/releases/latest), unpack it,
-and put `zenmon` somewhere on your `PATH`.
+### Windows
 
-| Platform | Asset |
-|---|---|
-| Windows x86_64 | `zenmon-<version>-x86_64-pc-windows-msvc.zip` |
-| Linux x86_64 | `zenmon-<version>-x86_64-unknown-linux-gnu.tar.gz` |
-| macOS Apple Silicon | `zenmon-<version>-aarch64-apple-darwin.tar.gz` |
+The quickest path is the tray installer — it bundles the CLI:
 
-Every release also carries **`zenmon.json`**, a manifest naming each asset with
-its SHA-256, so a download can be checked against it:
+1. Download and run `zenmon-tray_<version>_x64-setup.exe` (per-user install,
+   no admin prompt). zenmon-tray lands in the Start menu and the system tray.
+2. Right-click the tray icon → **Settings…** → **Updates** → **Install CLI**.
+   This puts the bundled `zenmon.exe` on your user `PATH`; newly opened
+   terminals see it.
+
+CLI only: download `zenmon-<version>-x86_64-pc-windows-msvc.zip`, unpack, and
+put `zenmon.exe` in a folder on your `PATH` (for example
+`%LOCALAPPDATA%\Programs\Zenmon\bin`). Avoid `%USERPROFILE%\.cargo\bin` —
+`zenmon update` refuses to manage a binary cargo owns.
+
+### Linux (x86_64)
 
 ```bash
-sha256sum zenmon-0.1.0-x86_64-unknown-linux-gnu.tar.gz   # macOS: shasum -a 256
+# replace 0.3.0 with the latest release version
+curl -LO https://github.com/gongfour/zenmon/releases/download/v0.3.0/zenmon-0.3.0-x86_64-unknown-linux-gnu.tar.gz
+tar xzf zenmon-0.3.0-x86_64-unknown-linux-gnu.tar.gz -C ~/.local/bin zenmon
+zenmon --version
 ```
 
-The tray app ships in the same release as `zenmon-tray_<version>_x64-setup.exe`
-(Windows).
+### macOS (Apple Silicon)
 
-Releases are built only by [`.github/workflows/release.yml`](.github/workflows/release.yml)
-from a `v<version>` tag. Other platforms — including Termux/Android — build from
-source; see [Build features](#build-features).
+```bash
+# CLI — replace 0.3.0 with the latest release version
+curl -LO https://github.com/gongfour/zenmon/releases/download/v0.3.0/zenmon-0.3.0-aarch64-apple-darwin.tar.gz
+tar xzf zenmon-0.3.0-aarch64-apple-darwin.tar.gz -C ~/.local/bin zenmon
+
+# tray (optional) — download with curl/gh, not a browser: the bundle is
+# ad-hoc signed, not notarized, and a browser download gets quarantined
+curl -LO https://github.com/gongfour/zenmon/releases/download/v0.3.0/zenmon-tray-0.3.0-aarch64-apple-darwin.app.tar.gz
+tar xzf zenmon-tray-0.3.0-aarch64-apple-darwin.app.tar.gz -C /Applications
+```
+
+If a browser did fetch the tray:
+`xattr -dr com.apple.quarantine /Applications/zenmon-tray.app`.
+
+Other platforms — including Termux/Android — build from source; see
+[Build features](#build-features).
+
+### Verify a download (optional)
+
+Every release's `zenmon.json` lists the SHA-256 of each asset:
+
+```bash
+sha256sum zenmon-0.3.0-x86_64-unknown-linux-gnu.tar.gz   # macOS: shasum -a 256
+```
+
+### Keeping it updated
+
+One release carries both apps at one version, and either side updates both:
+
+```bash
+zenmon update check     # compare versions; downloads nothing
+zenmon update apply     # download, verify, swap — CLI and an installed tray
+```
+
+On Windows the tray offers the same from **Settings → Updates**: it updates
+itself with a signed installer (a running capture is stopped cleanly and
+resumed after the restart) and refreshes its bundled CLI in the same step.
+Details in [Self-update](#self-update-update) and
+[`tray/README.md`](tray/README.md).
 
 ### Build from source
 
@@ -102,6 +171,18 @@ Notes:
 
 [Termux]: https://termux.dev
 [`cargo-ndk`]: https://github.com/bbqsrc/cargo-ndk
+
+## Quick start
+
+```bash
+zenohd                                    # a Zenoh router to talk to (brew install zenoh)
+zenmon tui                                # interactive dashboard
+zenmon sub "demo/**"                      # stream matching traffic
+zenmon pub demo/hello '{"msg":"world"}'   # publish from another terminal
+```
+
+The full command surface is under [CLI Usage](#cli-usage); TUI keys are under
+[TUI Dashboard](#tui-dashboard).
 
 ## CLI Usage
 
@@ -478,6 +559,9 @@ Interactive terminal dashboard with 5 views:
 segment store `zenmon capture --dir` writes and `zenmon trace` reads — so a
 session can be captured for post-incident debugging without keeping a terminal
 open. Left click toggles capture, right click opens the menu.
+
+To *install* it, use the release installer — see [Install](#install). To build
+it from source:
 
 ```bash
 cd tray
