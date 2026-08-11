@@ -1453,8 +1453,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     println!("{}", serde_json::to_string(&report)?);
                 } else {
                     println!(
-                        "{} topics, {} types, {} services",
-                        report.topics, report.types, report.services
+                        "{} topics, {} endpoints, {} types, {} services",
+                        report.topics, report.endpoints, report.types, report.services
                     );
                     if report.warnings.is_empty() {
                         println!("no warnings");
@@ -1478,6 +1478,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                                 "key": t.key,
                                 "pattern": t.pattern,
                                 "encoding": contract.effective_encoding(t),
+                                "endpoints": t.endpoints.len(),
                             })
                         })
                         .collect();
@@ -1485,10 +1486,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 } else {
                     for t in &contract.topics {
                         println!(
-                            "{:<44} {:<10} {}",
+                            "{:<44} {:<10} {:<24} {}",
                             t.key,
                             t.pattern,
-                            contract.effective_encoding(t)
+                            contract.effective_encoding(t),
+                            t.endpoints.len()
                         );
                     }
                     println!("\n{} topic(s)", contract.topics.len());
@@ -1513,9 +1515,31 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         "pattern": topic.pattern,
                         "encoding": contract.effective_encoding(topic),
                         "enveloped": contract.effective_enveloped(topic),
-                        "producers": topic.producers,
-                        "consumers": topic.consumers,
+                        "producers": topic.producer_names(),
+                        "consumers": topic.consumer_names(),
                     });
+                    if !topic.endpoints.is_empty() {
+                        obj["endpoints"] = serde_json::json!(topic
+                            .endpoints
+                            .iter()
+                            .map(|e| {
+                                let mut o = serde_json::json!({
+                                    "service": e.service,
+                                    "role": e.role,
+                                });
+                                if let Some(t) = &e.message_type {
+                                    o["type"] = serde_json::json!(t);
+                                }
+                                if let Some(q) = &e.qos {
+                                    o["qos"] = q.clone();
+                                }
+                                if let Some(g) = &e.origin {
+                                    o["origin"] = serde_json::json!(g);
+                                }
+                                o
+                            })
+                            .collect::<Vec<_>>());
+                    }
                     if let Some(s) = &topic.status {
                         obj["status"] = serde_json::json!(s);
                     }
@@ -1548,11 +1572,24 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     if let Some(s) = &topic.status {
                         println!("status:      {}", s);
                     }
-                    if !topic.producers.is_empty() {
-                        println!("producers:   {}", topic.producers.join(", "));
+                    let producers = topic.producer_names();
+                    if !producers.is_empty() {
+                        println!("producers:   {}", producers.join(", "));
                     }
-                    if !topic.consumers.is_empty() {
-                        println!("consumers:   {}", topic.consumers.join(", "));
+                    let consumers = topic.consumer_names();
+                    if !consumers.is_empty() {
+                        println!("consumers:   {}", consumers.join(", "));
+                    }
+                    if !topic.endpoints.is_empty() {
+                        println!("endpoints:");
+                        for e in &topic.endpoints {
+                            let ty = e.message_type.as_deref().unwrap_or("-");
+                            let origin = e.origin.as_deref().unwrap_or("-");
+                            println!("  {:<28} {:<13} {:<26} {}", e.service, e.role, ty, origin);
+                            if let Some(q) = &e.qos {
+                                println!("  {:<28} qos: {}", "", q);
+                            }
+                        }
                     }
                     if let Some(d) = &topic.description {
                         println!("description: {}", d);

@@ -1,0 +1,106 @@
+# Self-contained v0.2 contract fixture for zenmon tests.
+#
+# Endpoint-centric: each participant carries its own payload type and QoS, so
+# disagreements between participants on one key are representable. Each topic
+# below deliberately exercises one lint path — see the comments.
+version: "0.2"
+project: sample_v2
+
+encoding:
+  default: application/json
+  default_enveloped: true
+
+types:
+  Pose2D:
+    x: f64
+    y: f64
+    theta: f64
+
+services:
+  - pose_publisher
+  - orchestrator
+  - safety_manager
+  # Participants that no source extractor can see still belong in the roster —
+  # otherwise every hand-declared endpoint trips the undeclared-service check.
+  - external_viewer
+
+topics:
+  # Clean: every endpoint agrees on type, single producer. No warnings.
+  - key: topic/navigation/robot_pose
+    pattern: pub-sub
+    description: Robot 2D pose
+    payload: { $ref: Pose2D }
+    endpoints:
+      - service: pose_publisher
+        role: publisher
+        type: sample::Pose2D
+        qos: { congestion_control: Drop, priority: DataHigh, reliability: BestEffort }
+        origin: generated
+      - service: orchestrator
+        role: subscriber
+        type: sample::Pose2D
+        qos: { congestion_control: Drop, priority: Data, reliability: Reliable }
+        origin: generated
+      # A participant no source extractor can see (another language, external tool).
+      - service: external_viewer
+        role: subscriber
+        origin: declared
+
+  # Lint: type mismatch — producer writes untyped JSON, consumer expects a struct.
+  - key: topic/state/mixed_type
+    pattern: pub-sub
+    description: Type disagreement across endpoints
+    endpoints:
+      - service: pose_publisher
+        role: publisher
+        type: nlohmann::json
+        origin: generated
+      - service: orchestrator
+        role: subscriber
+        type: sample::Pose2D
+        origin: generated
+
+  # Lint: two producers on one key declaring different QoS.
+  - key: topic/state/mixed_qos
+    pattern: pub-sub
+    description: Producer QoS disagreement
+    endpoints:
+      - service: pose_publisher
+        role: publisher
+        qos: { congestion_control: Block, priority: RealTime }
+        origin: generated
+      - service: safety_manager
+        role: publisher
+        qos: { congestion_control: Drop, priority: Data }
+        origin: generated
+      # Consumers differing from producers is NOT linted — congestion control and
+      # priority are publisher-side in Zenoh, so the difference means nothing here.
+      - service: orchestrator
+        role: subscriber
+        qos: { congestion_control: Drop, priority: Data }
+        origin: generated
+
+  # Lint: unknown role, and a service absent from `services`.
+  - key: topic/state/bad_role
+    pattern: pub-sub
+    endpoints:
+      - service: orchestrator
+        role: listener
+        origin: generated
+      - service: ghost_service
+        role: subscriber
+        origin: generated
+
+  # call: producer is the client (it puts the request on the wire first),
+  # consumer is the server — matching how v0.1 contracts read producers/consumers.
+  - key: call/mission/pause
+    pattern: call
+    description: Pause mission
+    request: {}
+    endpoints:
+      - service: orchestrator
+        role: call_client
+        origin: generated
+      - service: safety_manager
+        role: call_server
+        origin: generated

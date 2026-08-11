@@ -59,6 +59,49 @@ fn default_true() -> bool {
     true
 }
 
+/// One participant on a topic (contract v0.2).
+///
+/// A contract's atom is the endpoint, not the topic: two services on the same
+/// key can disagree on payload type and QoS, and that disagreement is exactly
+/// what is worth reporting. `producers`/`consumers` (v0.1) can only name who is
+/// present, so they have nowhere to put per-participant detail.
+///
+/// `qos` is kept as a loose [`Value`] for the same reason payload schemas are —
+/// zenmon displays and compares it, but does not interpret Zenoh's QoS model.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Endpoint {
+    /// Service that owns this endpoint. Should appear in the contract's `services`.
+    pub service: String,
+    /// One of [`ENDPOINT_ROLES`].
+    #[serde(default)]
+    pub role: String,
+    /// Payload/message type as the service declares it (e.g. `dotori::SafetyState`).
+    #[serde(default, rename = "type")]
+    pub message_type: Option<String>,
+    /// QoS as declared by this endpoint. Shape is project-defined.
+    #[serde(default)]
+    pub qos: Option<Value>,
+    /// `generated` (extracted from source) or `declared` (hand-authored, e.g. a
+    /// participant written in another language that no extractor can see).
+    #[serde(default)]
+    pub origin: Option<String>,
+}
+
+/// Roles an endpoint may declare. The producing roles are the ones that put the
+/// first bytes on the wire — a call/task *client* produces the request, so it is
+/// a producer, matching how v0.1 contracts used `producers` for call/task.
+pub const ENDPOINT_ROLES: &[&str] = &[
+    "publisher",
+    "subscriber",
+    "call_server",
+    "call_client",
+    "task_server",
+    "task_client",
+];
+
+const PRODUCING_ROLES: &[&str] = &["publisher", "call_client", "task_client"];
+const CONSUMING_ROLES: &[&str] = &["subscriber", "call_server", "task_server"];
+
 /// One topic's contract entry. Known metadata is typed; the payload schema body
 /// is kept raw for display.
 #[derive(Debug, Clone, Deserialize)]
@@ -74,10 +117,16 @@ pub struct TopicContract {
     pub status: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// v0.1 participant list. Prefer [`TopicContract::producer_names`], which
+    /// derives from `endpoints` when a v0.2 contract supplies them.
     #[serde(default)]
     pub producers: Vec<String>,
+    /// v0.1 participant list. See [`TopicContract::consumer_names`].
     #[serde(default)]
     pub consumers: Vec<String>,
+    /// v0.2 participants, with per-endpoint type and QoS.
+    #[serde(default)]
+    pub endpoints: Vec<Endpoint>,
     #[serde(default)]
     pub payload: Option<Value>,
     #[serde(default)]
@@ -86,6 +135,42 @@ pub struct TopicContract {
     pub request: Option<Value>,
     #[serde(default)]
     pub response: Option<Value>,
+}
+
+impl TopicContract {
+    /// Services that originate traffic on this topic.
+    ///
+    /// Derived from `endpoints` when present (v0.2), else the v0.1 `producers`
+    /// list. Names are deduplicated and keep declaration order.
+    pub fn producer_names(&self) -> Vec<String> {
+        self.names_for(PRODUCING_ROLES, &self.producers)
+    }
+
+    /// Services that receive traffic on this topic. See [`Self::producer_names`].
+    pub fn consumer_names(&self) -> Vec<String> {
+        self.names_for(CONSUMING_ROLES, &self.consumers)
+    }
+
+    fn names_for(&self, roles: &[&str], legacy: &[String]) -> Vec<String> {
+        if self.endpoints.is_empty() {
+            return legacy.to_vec();
+        }
+        let mut out: Vec<String> = Vec::new();
+        for e in &self.endpoints {
+            if roles.contains(&e.role.as_str()) && !out.contains(&e.service) {
+                out.push(e.service.clone());
+            }
+        }
+        out
+    }
+
+    /// Endpoints in the producing direction, for checks that need the records
+    /// themselves rather than just the names.
+    pub fn producing_endpoints(&self) -> impl Iterator<Item = &Endpoint> {
+        self.endpoints
+            .iter()
+            .filter(|e| PRODUCING_ROLES.contains(&e.role.as_str()))
+    }
 }
 
 /// Contract context for a single observed message. Fields are omitted from JSON
@@ -118,12 +203,36 @@ fn encoding_matches(expected: &str, observed: &str) -> Option<bool> {
     Some(base(expected) == base(observed))
 }
 
+/// Render a value with object keys sorted, so two structurally equal QoS blocks
+/// compare equal regardless of the order they were written in the YAML.
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let body = keys
+                .iter()
+                .map(|k| format!("{}:{}", k, canonical_json(&map[*k])))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{body}}}")
+        }
+        Value::Array(items) => {
+            let body = items.iter().map(canonical_json).collect::<Vec<_>>().join(",");
+            format!("[{body}]")
+        }
+        other => other.to_string(),
+    }
+}
+
 /// Result of a structural lint over a contract.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LintReport {
     pub topics: usize,
     pub types: usize,
     pub services: usize,
+    /// Total endpoints across all topics (v0.2). Zero for a v0.1 contract.
+    pub endpoints: usize,
     pub warnings: Vec<String>,
 }
 
@@ -256,12 +365,81 @@ impl Contract {
                     warnings.push(format!("unresolved $ref '{}' in {}", name, t.key));
                 }
             }
+            self.lint_endpoints(t, &mut warnings);
         }
         LintReport {
             topics: self.topics.len(),
             types: self.types.len(),
             services: self.services.len(),
+            endpoints: self.topics.iter().map(|t| t.endpoints.len()).sum(),
             warnings,
+        }
+    }
+
+    /// Endpoint-level checks (v0.2). Only unambiguous disagreements are reported.
+    ///
+    /// Deliberately *not* checked: QoS differences between a producer and a
+    /// consumer, or among consumers. In Zenoh, congestion control and priority
+    /// are publisher-side concerns, so a difference there does not by itself
+    /// mean anything is wrong — reporting it would be noise. Producers of the
+    /// same key disagreeing with each other has no such excuse.
+    ///
+    /// Also not checked: a topic with no producer or no consumer. Real systems
+    /// legitimately have participants a source extractor cannot see (other
+    /// languages, external tools); that belongs in a coverage pass once such
+    /// participants are declared, not here.
+    fn lint_endpoints(&self, t: &TopicContract, warnings: &mut Vec<String>) {
+        for e in &t.endpoints {
+            if !e.role.is_empty() && !ENDPOINT_ROLES.contains(&e.role.as_str()) {
+                warnings.push(format!(
+                    "unknown role '{}' on {} ({})",
+                    e.role, t.key, e.service
+                ));
+            }
+            if !self.services.is_empty() && !self.services.contains(&e.service) {
+                warnings.push(format!(
+                    "undeclared service '{}' on {}",
+                    e.service, t.key
+                ));
+            }
+        }
+
+        // Payload type must agree across every participant on a key: a producer
+        // writing an untyped payload while consumers expect a struct is a real
+        // defect that a per-topic `payload` schema cannot express.
+        let mut types: Vec<(&str, &str)> = Vec::new();
+        for e in &t.endpoints {
+            if let Some(ty) = e.message_type.as_deref() {
+                if !types.iter().any(|(_, seen)| *seen == ty) {
+                    types.push((e.service.as_str(), ty));
+                }
+            }
+        }
+        if types.len() > 1 {
+            let detail = types
+                .iter()
+                .map(|(svc, ty)| format!("{svc}={ty}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            warnings.push(format!("type mismatch on {}: {}", t.key, detail));
+        }
+
+        let mut qos: Vec<(&str, String)> = Vec::new();
+        for e in t.producing_endpoints() {
+            if let Some(q) = &e.qos {
+                let rendered = canonical_json(q);
+                if !qos.iter().any(|(_, seen)| *seen == rendered) {
+                    qos.push((e.service.as_str(), rendered));
+                }
+            }
+        }
+        if qos.len() > 1 {
+            let detail = qos
+                .iter()
+                .map(|(svc, q)| format!("{svc}={q}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            warnings.push(format!("producer QoS mismatch on {}: {}", t.key, detail));
         }
     }
 
@@ -780,5 +958,126 @@ topics:
         assert_eq!(t.pattern, "pub-sub");
         assert_eq!(t.description.as_deref(), Some("Robot 2D pose"));
         assert_eq!(t.producers, vec!["pose_publisher"]);
+    }
+
+    // ── v0.2 endpoints ───────────────────────────────────────────────────
+
+    const V2: &str = r#"
+project: v2
+services: [alpha, beta]
+topics:
+  - key: topic/clean
+    pattern: pub-sub
+    endpoints:
+      - { service: alpha, role: publisher,  type: T, qos: { a: 1, b: 2 }, origin: generated }
+      - { service: beta,  role: subscriber, type: T, qos: { a: 9 },       origin: generated }
+  - key: topic/mixed_type
+    pattern: pub-sub
+    endpoints:
+      - { service: alpha, role: publisher,  type: nlohmann::json }
+      - { service: beta,  role: subscriber, type: T }
+  - key: topic/mixed_qos
+    pattern: pub-sub
+    endpoints:
+      - { service: alpha, role: publisher, qos: { congestion_control: Block } }
+      - { service: beta,  role: publisher, qos: { congestion_control: Drop } }
+  - key: topic/bad
+    pattern: pub-sub
+    endpoints:
+      - { service: alpha,  role: listener }
+      - { service: ghost,  role: subscriber }
+  - key: call/thing
+    pattern: call
+    endpoints:
+      - { service: alpha, role: call_client }
+      - { service: beta,  role: call_server }
+"#;
+
+    fn warnings_for(key: &str, c: &Contract) -> Vec<String> {
+        c.lint()
+            .warnings
+            .into_iter()
+            .filter(|w| w.contains(key))
+            .collect()
+    }
+
+    #[test]
+    fn v2_derives_producers_and_consumers_from_endpoints() {
+        let c = Contract::from_yaml_str(V2).unwrap();
+        let t = c.lookup("topic/clean").unwrap();
+        assert_eq!(t.producer_names(), vec!["alpha"]);
+        assert_eq!(t.consumer_names(), vec!["beta"]);
+    }
+
+    /// A call/task client puts the request on the wire first, so it is the
+    /// producer — the same reading v0.1 contracts used.
+    #[test]
+    fn v2_call_client_is_the_producer() {
+        let c = Contract::from_yaml_str(V2).unwrap();
+        let t = c.lookup("call/thing").unwrap();
+        assert_eq!(t.producer_names(), vec!["alpha"]);
+        assert_eq!(t.consumer_names(), vec!["beta"]);
+    }
+
+    /// v0.1 files have no endpoints; the legacy lists must still be returned.
+    #[test]
+    fn v1_falls_back_to_legacy_producer_lists() {
+        let c = Contract::from_yaml_str(SAMPLE).unwrap();
+        let t = &c.topics[0];
+        assert!(t.endpoints.is_empty());
+        assert_eq!(t.producer_names(), vec!["pose_publisher"]);
+    }
+
+    #[test]
+    fn v2_lints_type_mismatch() {
+        let c = Contract::from_yaml_str(V2).unwrap();
+        let w = warnings_for("topic/mixed_type", &c);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].starts_with("type mismatch on topic/mixed_type"), "{}", w[0]);
+    }
+
+    #[test]
+    fn v2_lints_producer_qos_mismatch() {
+        let c = Contract::from_yaml_str(V2).unwrap();
+        let w = warnings_for("topic/mixed_qos", &c);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].starts_with("producer QoS mismatch"), "{}", w[0]);
+    }
+
+    /// Producer-vs-consumer QoS differences are deliberately not reported:
+    /// congestion control and priority are publisher-side in Zenoh.
+    #[test]
+    fn v2_does_not_lint_consumer_qos_difference() {
+        let c = Contract::from_yaml_str(V2).unwrap();
+        assert!(warnings_for("topic/clean", &c).is_empty());
+    }
+
+    #[test]
+    fn v2_lints_unknown_role_and_undeclared_service() {
+        let c = Contract::from_yaml_str(V2).unwrap();
+        let w = warnings_for("topic/bad", &c);
+        assert!(w.iter().any(|x| x.contains("unknown role 'listener'")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("undeclared service 'ghost'")), "{w:?}");
+    }
+
+    /// QoS blocks that differ only in key order are the same QoS.
+    #[test]
+    fn v2_qos_comparison_ignores_key_order() {
+        let yaml = r#"
+topics:
+  - key: topic/t
+    endpoints:
+      - { service: a, role: publisher, qos: { x: 1, y: 2 } }
+      - { service: b, role: publisher, qos: { y: 2, x: 1 } }
+"#;
+        let c = Contract::from_yaml_str(yaml).unwrap();
+        assert!(warnings_for("topic/t", &c).is_empty());
+    }
+
+    #[test]
+    fn lint_counts_endpoints() {
+        let c = Contract::from_yaml_str(V2).unwrap();
+        assert_eq!(c.lint().endpoints, 10);
+        assert_eq!(Contract::from_yaml_str(SAMPLE).unwrap().lint().endpoints, 0);
     }
 }

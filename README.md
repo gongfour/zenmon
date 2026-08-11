@@ -469,6 +469,45 @@ zenmon -n myfleet --contract mynet.contract.yaml --json sub "topic/**"
 > Contract keys are relative to the fleet namespace, so pass `-n <fleet>` — the
 > observed keys are then relative and match the contract's keys.
 
+### Endpoints (contract v0.2)
+
+`producers: [a]` / `consumers: [b]` name who is on a topic, but they cannot say
+*how* each participant is on it. Two services on one key can disagree on payload
+type or QoS, and that disagreement is usually the bug. So the contract's atom is
+the **endpoint**, not the topic — a topic is just the key its endpoints share:
+
+```yaml
+- key: topic/safety/safety_state
+  pattern: pub-sub
+  description: Safety verdict (10 Hz)
+  endpoints:
+    - { service: safety_manager, role: publisher, type: SafetyState,
+        qos: { congestion_control: Block, priority: RealTime }, origin: generated }
+    - { service: planner, role: subscriber, type: SafetyState,
+        qos: { congestion_control: Drop, priority: Data }, origin: generated }
+    - { service: sim, role: subscriber, origin: declared }
+```
+
+- `role` — `publisher` · `subscriber` · `call_server` · `call_client` ·
+  `task_server` · `task_client`. The **producer is whoever puts the first bytes
+  on the wire**, so a call/task *client* counts as a producer.
+- `origin` — `generated` (extracted from source) or `declared` (hand-written).
+  A generator can then overwrite its own output while preserving participants it
+  cannot see: services in another language, external tools, operator UIs. Those
+  still belong in the contract's `services` roster.
+- `qos` — shape is project-defined; zenmon displays and compares it without
+  interpreting it.
+
+`contract lint` reports disagreements it can be sure about: a `type` that differs
+across endpoints on one key, and a `qos` that differs **among producers**. It
+deliberately stays quiet about producer-vs-consumer QoS — congestion control and
+priority are publisher-side in Zenoh, so a difference there means nothing on its
+own, and a noisy lint gets ignored.
+
+**`endpoints` is additive.** A contract using `producers`/`consumers` keeps
+working; `contract show` derives those names from endpoints when they are present
+and falls back to the legacy lists when they are not.
+
 ## Scenario — correlated diagnostic sessions
 
 `zenmon scenario` records a correlated, multi-topic session and emits **one episode

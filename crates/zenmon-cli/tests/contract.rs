@@ -151,3 +151,97 @@ fn unreadable_contract_path_is_invalid_input() {
     let v: serde_json::Value = serde_json::from_str(stderr.trim()).expect("json error");
     assert_eq!(v["error"]["kind"], "invalid_input");
 }
+
+// ── v0.2 endpoint-centric contracts ─────────────────────────────────────────
+
+const FIXTURE_V2: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/sample_v2.contract.yaml"
+);
+
+/// A v0.1 contract must keep working unchanged — `endpoints` is additive.
+#[test]
+fn v1_contract_reports_zero_endpoints() {
+    let out = zenmon()
+        .args(["--json", "contract", "lint", FIXTURE])
+        .output()
+        .expect("run zenmon");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["endpoints"], 0);
+}
+
+#[test]
+fn v2_lint_counts_endpoints_and_flags_disagreements() {
+    let out = zenmon()
+        .args(["--json", "contract", "lint", FIXTURE_V2])
+        .output()
+        .expect("run zenmon");
+    assert!(out.status.success(), "lint should exit 0");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["topics"], 5);
+    assert_eq!(v["endpoints"], 12);
+
+    let warnings: Vec<&str> = v["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    let has = |needle: &str| warnings.iter().any(|w| w.contains(needle));
+
+    assert!(has("type mismatch on topic/state/mixed_type"), "{warnings:?}");
+    assert!(has("producer QoS mismatch on topic/state/mixed_qos"), "{warnings:?}");
+    assert!(has("unknown role 'listener'"), "{warnings:?}");
+    assert!(has("undeclared service 'ghost_service'"), "{warnings:?}");
+
+    // The clean topic differs between producer and consumer QoS on purpose;
+    // that is publisher-side in Zenoh and must not be reported.
+    assert!(
+        !has("topic/navigation/robot_pose"),
+        "clean topic must produce no warnings: {warnings:?}"
+    );
+}
+
+#[test]
+fn v2_show_emits_endpoints_and_derived_participants() {
+    let out = zenmon()
+        .args([
+            "--json",
+            "contract",
+            "show",
+            "topic/navigation/robot_pose",
+            FIXTURE_V2,
+        ])
+        .output()
+        .expect("run zenmon");
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+
+    // Derived from endpoint roles, not from any producers/consumers key.
+    assert_eq!(v["producers"], serde_json::json!(["pose_publisher"]));
+    assert_eq!(
+        v["consumers"],
+        serde_json::json!(["orchestrator", "external_viewer"])
+    );
+
+    let eps = v["endpoints"].as_array().expect("endpoints array");
+    assert_eq!(eps.len(), 3);
+    assert_eq!(eps[0]["service"], "pose_publisher");
+    assert_eq!(eps[0]["type"], "sample::Pose2D");
+    assert_eq!(eps[0]["qos"]["priority"], "DataHigh");
+    // A hand-declared participant carries no type/qos, only its origin.
+    assert_eq!(eps[2]["origin"], "declared");
+    assert!(eps[2].get("type").is_none());
+}
+
+/// A call topic's client is the producer — it puts the request on the wire.
+#[test]
+fn v2_show_treats_call_client_as_producer() {
+    let out = zenmon()
+        .args(["--json", "contract", "show", "call/mission/pause", FIXTURE_V2])
+        .output()
+        .expect("run zenmon");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["producers"], serde_json::json!(["orchestrator"]));
+    assert_eq!(v["consumers"], serde_json::json!(["safety_manager"]));
+}
