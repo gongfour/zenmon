@@ -268,13 +268,18 @@ pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static s
             "Connecting to the network…",
             "Waiting for the session to come up.",
         ),
+        // These point at `:`, `d` and `?` rather than naming the keys for
+        // "switch mode" or "scan ports". Those moved into the command palette
+        // during the two-space redesign and the old text kept advertising `m`
+        // and `P`, which have not been bound since. The palette is the stable
+        // address; what it contains can change without stranding this copy.
         EmptyReason::Disconnected => (
             "Not connected.",
-            "Check the endpoint; press m to change mode or P to scan domains.",
+            "Check the endpoint, or press : for commands — switch mode, change scout port.",
         ),
         EmptyReason::NoDataYet => (
             "Connected, but no messages observed yet.",
-            "Topics appear as messages arrive. Try Query (4) or Nodes (5), or ? for help.",
+            "Keys appear as messages arrive. Press d to run doctor, or ? for the keys.",
         ),
         EmptyReason::FilteredOut => (
             "Nothing matches the current filter.",

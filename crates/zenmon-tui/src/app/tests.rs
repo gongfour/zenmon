@@ -81,6 +81,47 @@ fn empty_reason_reflects_connection_state() {
 }
 
 #[test]
+fn empty_states_do_not_advertise_keys_that_no_longer_exist() {
+    // This copy went stale silently: it kept pointing at `m`, `P` and the
+    // numbered tabs `(4)`/`(5)` for a year after the two-space redesign removed
+    // all of them, and nothing failed. Anything a user is told to press has to
+    // still be bound.
+    let bound = |c: char| {
+        let mut app = App::new("test".into());
+        let before = format!("{:?}", (app.space, app.overlay, app.topics_filtering));
+        app.handle_key(key(KeyCode::Char(c)));
+        format!("{:?}", (app.space, app.overlay, app.topics_filtering)) != before
+    };
+
+    for reason in [
+        EmptyReason::Connecting,
+        EmptyReason::Disconnected,
+        EmptyReason::NoDataYet,
+        EmptyReason::FilteredOut,
+    ] {
+        let (why, action) = empty_state_text(reason);
+        for text in [why, action] {
+            assert!(
+                !text.contains("(4)") && !text.contains("(5)"),
+                "{text:?} names a tab the redesign removed"
+            );
+            for c in ['m', 'P'] {
+                assert!(
+                    !text.contains(&format!("press {c} ")),
+                    "{text:?} names `{c}`, which is not bound"
+                );
+            }
+        }
+    }
+
+    // And the keys the copy does name are real.
+    assert!(bound(':'), "the palette key must work");
+    assert!(bound('d'), "the doctor key must work");
+    assert!(bound('?'), "the help key must work");
+    assert!(bound('/'), "the filter key must work");
+}
+
+#[test]
 fn empty_reason_distinguishes_filter_from_no_data() {
     let mut app = App::new("test".into());
     app.connection_state = ConnectionState::Connected("zid".into());
