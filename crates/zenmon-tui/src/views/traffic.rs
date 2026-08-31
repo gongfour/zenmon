@@ -1,11 +1,16 @@
 //! Traffic space — master/detail view over live key expressions.
 //!
-//! Left (master): a flat, sorted key list with Hz + a tiny bandwidth sparkbar.
-//! Right (detail): the selected key in **Live** mode (latest payload + scrolling
-//! history scoped to that key) or **Query** mode (results of a `get`).
+//! Left (master): the key hierarchy, one segment per row, with Hz and a tiny
+//! bandwidth sparkbar on the keys and a count on the branches.
+//! Right (detail): a key in **Live** mode (latest payload + scrolling history)
+//! or **Query** mode (results of a `get`); a branch gets a subtree summary.
 
-use crate::app::{format_bytes_per_sec, App, BodyLayout, DetailMode, PaneFocus, QueryStatus};
-use crate::views::stream::format_stream_timestamp;
+use crate::app::{
+    format_bytes_per_sec, format_idle, App, BodyLayout, DetailMode, KeyFreshness, PaneFocus,
+    QueryStatus,
+};
+use crate::tree::{RowKind, TreeRow};
+use crate::views::fmt::format_stream_timestamp;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -55,42 +60,129 @@ fn sparkbar(series: &[u64], width: usize) -> String {
         .collect()
 }
 
+fn plural_keys(n: usize) -> String {
+    if n == 1 {
+        "1 key".to_string()
+    } else {
+        format!("{n} keys")
+    }
+}
+
+/// One row's leading indent and expander glyph.
+///
+/// The glyph column is always present, so keys and branches at the same depth
+/// line up instead of the text shifting by one when a row happens to be a leaf.
+fn row_prefix(row: &TreeRow) -> String {
+    let indent = "  ".repeat(row.depth as usize);
+    let glyph = match row.kind {
+        RowKind::Branch { expanded: true } => "▾ ",
+        RowKind::Branch { expanded: false } => "▸ ",
+        RowKind::Leaf => "  ",
+        RowKind::FoldSummary { .. } => "  ",
+    };
+    format!("{indent}{glyph}")
+}
+
 fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
-    let filtered = app.filtered_topics();
-    let n = filtered.len();
+    app.refresh_tree_rows();
+    let n = app.tree_rows().len();
+    let keys = app.key_tree.len();
 
     let title = if app.topics_filtering {
-        format!(" Traffic — keys ({}) · /{}_ ", n, app.topic_filter)
+        format!(" Traffic — {} keys · /{}_ ", keys, app.topic_filter)
     } else if !app.topic_filter.is_empty() {
-        format!(" Traffic — keys ({}) · /{} ", n, app.topic_filter)
+        format!(" Traffic — {} keys · /{} ", keys, app.topic_filter)
     } else {
-        format!(" Traffic — keys ({}) ", n)
+        format!(" Traffic — {} keys ", keys)
     };
 
-    let items: Vec<ListItem> = filtered
+    // Indentation makes every row a different length, so the rate column would
+    // stagger down the pane. Pad the labels to the widest visible one (bounded,
+    // so one deep key cannot push the rates off-screen).
+    let label_width = app
+        .tree_rows()
         .iter()
-        .map(|topic| {
-            let key = &topic.key_expr;
-            let has_data = app.topic_latest.contains_key(key);
-            let hz = app.topic_hz.get(key).copied().unwrap_or(0.0);
-            let hz_str = if hz > 0.0 {
-                format!("{:>6.1} Hz", hz)
-            } else {
-                "      — ".to_string()
-            };
-            let spark = sparkbar(&app.topic_rate_series(key), 8);
-            let key_style = if has_data {
-                Style::default().fg(Color::White)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(key.clone(), key_style),
-                Span::raw("  "),
-                Span::styled(hz_str, Style::default().fg(Color::Green)),
-                Span::raw(" "),
-                Span::styled(spark, Style::default().fg(Color::Cyan)),
-            ]))
+        .map(|r| row_prefix(r).chars().count() + r.segment.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(area.width.saturating_sub(20) as usize);
+
+    let items: Vec<ListItem> = app
+        .tree_rows()
+        .iter()
+        .map(|row| {
+            let prefix = row_prefix(row);
+            match row.kind {
+                // A folded group stands in for children the user chose not to
+                // see; it says how to get at one of them rather than just how
+                // many there are.
+                RowKind::FoldSummary { hidden } => ListItem::new(Line::from(vec![
+                    Span::raw(prefix),
+                    Span::styled(
+                        format!("… {hidden} more — l to list, / to search"),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ])),
+                RowKind::Branch { .. } => {
+                    // One less pad than a leaf: the trailing `/` already took a
+                    // column, so the counts line up with the rates.
+                    let pad = label_width
+                        .saturating_sub(prefix.chars().count() + row.segment.chars().count());
+                    ListItem::new(Line::from(vec![
+                        Span::raw(prefix),
+                        Span::styled(
+                            format!("{}/", row.segment),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" ".repeat(pad + 1)),
+                        // Rate for a branch would mean summing every descendant
+                        // on every frame; the count is the cheap, honest summary
+                        // here, and the detail pane aggregates the selected one.
+                        Span::styled(
+                            plural_keys(row.key_count),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]))
+                }
+                RowKind::Leaf => {
+                    let freshness = app.key_freshness(&row.path);
+                    let hz = app.topic_hz.get(&row.path).copied().unwrap_or(0.0);
+                    // An idle key shows how long it has been quiet instead of a
+                    // dash: "stopped" and "stopped an hour ago" are different
+                    // findings, and the dash alone cannot tell them apart.
+                    let (hz_str, rate_color) = match (freshness, hz > 0.0) {
+                        (_, true) => (format!("{:>6.1} Hz", hz), Color::Green),
+                        (KeyFreshness::Idle, false) => {
+                            let idle = app.idle_secs(&row.path).unwrap_or(0);
+                            // Not a rate, so not the rate colour — a quiet key
+                            // should not read as if it were still publishing.
+                            (format!("{:>6} ", format_idle(idle)), Color::DarkGray)
+                        }
+                        _ => ("      — ".to_string(), Color::DarkGray),
+                    };
+                    let spark = sparkbar(&app.topic_rate_series(&row.path), 8);
+                    let key_style = match freshness {
+                        KeyFreshness::Live => Style::default().fg(Color::White),
+                        KeyFreshness::Idle | KeyFreshness::NoData => {
+                            Style::default().fg(Color::DarkGray)
+                        }
+                    };
+                    let pad = label_width
+                        .saturating_sub(prefix.chars().count() + row.segment.chars().count());
+                    ListItem::new(Line::from(vec![
+                        Span::raw(prefix),
+                        Span::styled(row.segment.clone(), key_style),
+                        Span::raw(" ".repeat(pad + 2)),
+                        Span::styled(hz_str, Style::default().fg(rate_color)),
+                        Span::raw(" "),
+                        Span::styled(spark, Style::default().fg(Color::Cyan)),
+                    ]))
+                }
+            }
         })
         .collect();
 
@@ -102,19 +194,19 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
 
-    // Record list geometry for phase-6 mouse hit-testing.
+    // Record list geometry for mouse hit-testing.
     app.list_rect = Some(area);
     app.list_first_item_row = area.y + 1;
     let visible = area.height.saturating_sub(2) as usize;
-    app.list_scroll_offset = if visible > 0 && app.topic_selected >= visible {
-        app.topic_selected + 1 - visible
+    app.list_scroll_offset = if visible > 0 && app.tree_selected >= visible {
+        app.tree_selected + 1 - visible
     } else {
         0
     };
 
     let mut state = ListState::default();
     if n > 0 {
-        state.select(Some(app.topic_selected.min(n - 1)));
+        state.select(Some(app.tree_selected.min(n - 1)));
     }
     frame.render_stateful_widget(list, area, &mut state);
 
@@ -130,10 +222,17 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
-    let key = app
-        .filtered_topics()
-        .get(app.topic_selected)
-        .map(|t| t.key_expr.clone());
+    // A branch names a prefix, not a key, so there is no payload to show. It
+    // gets a subtree summary instead — the "how busy is all of agv/** right
+    // now" question the flat list could not answer at all.
+    if let Some(row) = app.selected_row() {
+        if row.kind != RowKind::Leaf {
+            render_subtree_summary(app, frame, area, row);
+            return;
+        }
+    }
+
+    let key = app.selected_topic_key();
 
     let Some(key) = key else {
         let block = Block::default().borders(Borders::ALL).title(" Detail ");
@@ -175,6 +274,13 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
         header.push_str(&format!(" · {}", enc));
     }
     header.push_str(&format!(" · {} msgs", history.len()));
+    // The master row dims when a key goes quiet; the detail says for how long,
+    // since a stopped publisher is usually the thing being investigated.
+    if app.key_freshness(&key) == KeyFreshness::Idle {
+        if let Some(idle) = app.idle_secs(&key) {
+            header.push_str(&format!(" · silent {}", format_idle(idle)));
+        }
+    }
 
     let active = Style::default()
         .fg(Color::Black)
@@ -217,6 +323,80 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
         .wrap(Wrap { trim: false })
         .scroll((app.topic_detail_scroll, 0));
     frame.render_widget(para, body_area);
+}
+
+/// The detail pane for a branch row: what the whole subtree under it is doing.
+fn render_subtree_summary(app: &App, frame: &mut Frame, area: Rect, row: &TreeRow) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {}/ ", row.path));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height < 2 {
+        return;
+    }
+
+    let (hz, bytes) = app.subtree_totals(&row.path);
+    let dim = Style::default().fg(Color::DarkGray);
+    let value = Style::default().fg(Color::White);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("keys        ", dim),
+            Span::styled(row.key_count.to_string(), value),
+        ]),
+        Line::from(vec![
+            Span::styled("rate        ", dim),
+            Span::styled(
+                format!("{hz:.1} Hz"),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("bandwidth   ", dim),
+            Span::styled(format_bytes_per_sec(bytes), value),
+        ]),
+        Line::from(""),
+    ];
+
+    // The busiest descendants, so a hot key inside a large collapsed subtree is
+    // findable without expanding the whole thing.
+    let prefix = format!("{}/", row.path);
+    let mut busiest: Vec<(&String, f64)> = app
+        .topic_hz
+        .iter()
+        .filter(|(k, _)| k.starts_with(&prefix))
+        .map(|(k, v)| (k, *v))
+        .filter(|(_, v)| *v > 0.0)
+        .collect();
+    // Ties break on the key name. `topic_hz` is a HashMap rewritten every
+    // second, so without this the equal-rate keys — which is most of a fleet
+    // publishing on a schedule — would reshuffle on every update.
+    busiest.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+
+    if busiest.is_empty() {
+        lines.push(Line::from(Span::styled("(nothing active below)", dim)));
+    } else {
+        lines.push(Line::from(Span::styled("busiest", dim)));
+        for (key, hz) in busiest.iter().take(8) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {hz:>6.1} Hz  "),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(key.trim_start_matches(&prefix).to_string(), value),
+            ]));
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.topic_detail_scroll, 0)),
+        inner,
+    );
 }
 
 /// Truncate a single-line payload snippet for the history/results list.

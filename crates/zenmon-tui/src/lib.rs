@@ -1,5 +1,6 @@
 pub mod app;
 pub mod event;
+pub mod tree;
 pub mod views;
 
 use app::{App, ConnectionState, QueryStatus};
@@ -83,8 +84,31 @@ enum QueryResult {
     Err(String),
 }
 
+/// Minimum spacing between full repaints (~15 fps). The event loop coalesces
+/// whatever arrives inside one interval into a single frame.
 const REDRAW_INTERVAL_MS: u64 = 66;
 const MAX_PENDING_EVENTS_PER_BATCH: usize = 512;
+
+/// Whether the event loop should paint this iteration.
+///
+/// Draining a batch already collapses a burst of messages into one frame, but a
+/// stream arriving slower than a repaint takes still bought one full repaint per
+/// message. Spacing frames by [`REDRAW_INTERVAL_MS`] bounds that, at the cost of
+/// showing a value up to one frame late.
+///
+/// `immediate` opts out of the spacing: a keypress must never wait on the frame
+/// budget, or the UI feels like it is lagging behind the keyboard.
+fn should_draw(
+    needs_redraw: bool,
+    has_toast: bool,
+    since_last_draw: Duration,
+    immediate: bool,
+) -> bool {
+    if !needs_redraw && !has_toast {
+        return false;
+    }
+    immediate || since_last_draw >= Duration::from_millis(REDRAW_INTERVAL_MS)
+}
 
 fn spawn_connect(config: ZenmonConfig, tx: mpsc::UnboundedSender<ConnectResult>) {
     tokio::spawn(async move {
@@ -213,10 +237,15 @@ async fn run_loop(
 ) -> Result<()> {
     let mut refresh_interval = tokio::time::interval(Duration::from_secs(5));
     refresh_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Wakes the loop so a frame deferred by `should_draw` still gets painted
+    // once the traffic that deferred it stops arriving.
     let mut redraw_interval = tokio::time::interval(Duration::from_millis(REDRAW_INTERVAL_MS));
     redraw_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut reconnect_pending = true;
     let mut needs_redraw = true;
+    // Start one interval in the past so the first frame paints immediately.
+    let mut last_draw = std::time::Instant::now() - Duration::from_millis(REDRAW_INTERVAL_MS);
+    let mut draw_immediately = false;
 
     let tx = events.sender();
     // Owns the "**" stream subscription for as long as the session it belongs to.
@@ -290,16 +319,26 @@ async fn run_loop(
             needs_redraw = true;
         }
 
-        if needs_redraw || app.toast.is_some() {
+        if should_draw(
+            needs_redraw,
+            app.toast.is_some(),
+            last_draw.elapsed(),
+            draw_immediately,
+        ) {
             terminal.draw(|frame| app.render(frame))?;
             needs_redraw = false;
+            draw_immediately = false;
+            last_draw = std::time::Instant::now();
         }
 
         tokio::select! {
             event = events.next() => {
-                app.handle_event(event?);
-                drain_pending_events(events, app, MAX_PENDING_EVENTS_PER_BATCH)?;
+                let event = event?;
+                let mut saw_key = matches!(event, AppEvent::Key(_));
+                app.handle_event(event);
+                saw_key |= drain_pending_events(events, app, MAX_PENDING_EVENTS_PER_BATCH)?;
                 needs_redraw = true;
+                draw_immediately |= saw_key;
             }
             Some(result) = query_rx.recv() => {
                 match result {
@@ -365,12 +404,57 @@ async fn run_loop(
     Ok(())
 }
 
-fn drain_pending_events(events: &mut EventHandler, app: &mut App, limit: usize) -> Result<()> {
+/// Feed up to `limit` already-queued events into `app` without yielding, so a
+/// burst collapses into one frame instead of one frame each.
+///
+/// Returns whether the batch contained a keypress, which the caller uses to
+/// bypass the frame gate.
+fn drain_pending_events(events: &mut EventHandler, app: &mut App, limit: usize) -> Result<bool> {
+    let mut saw_key = false;
     for _ in 0..limit {
         let Some(event) = events.try_next()? else {
             break;
         };
+        saw_key |= matches!(event, AppEvent::Key(_));
         app.handle_event(event);
     }
-    Ok(())
+    Ok(saw_key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_draw, REDRAW_INTERVAL_MS};
+    use std::time::Duration;
+
+    const PERIOD: Duration = Duration::from_millis(REDRAW_INTERVAL_MS);
+
+    #[test]
+    fn nothing_to_paint_never_draws() {
+        // Even a long-idle loop stays dark when no state changed.
+        assert!(!should_draw(false, false, Duration::from_secs(10), false));
+        // …and an "immediate" request cannot conjure a frame out of nothing.
+        assert!(!should_draw(false, false, Duration::from_secs(10), true));
+    }
+
+    #[test]
+    fn pending_repaint_waits_out_the_frame_interval() {
+        assert!(!should_draw(true, false, PERIOD / 2, false));
+        assert!(should_draw(true, false, PERIOD, false));
+        assert!(should_draw(true, false, PERIOD * 2, false));
+    }
+
+    #[test]
+    fn keypress_bypasses_the_frame_interval() {
+        // Typing must not wait on the frame budget, however recent the last
+        // frame was — this is what keeps the UI feeling attached to the keyboard.
+        assert!(should_draw(true, false, Duration::ZERO, true));
+    }
+
+    #[test]
+    fn a_visible_toast_keeps_the_frame_gate() {
+        // A toast redraws on its own so it can expire, but at the frame rate,
+        // not once per loop iteration.
+        assert!(!should_draw(false, true, PERIOD / 2, false));
+        assert!(should_draw(false, true, PERIOD, false));
+    }
 }

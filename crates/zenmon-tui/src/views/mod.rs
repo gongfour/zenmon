@@ -1,16 +1,7 @@
-// Active spaces (phase 1 redesign).
+// The two spaces the app dispatches to, plus their shared formatting helpers.
+pub mod fmt;
 pub mod network;
 pub mod traffic;
-
-// Legacy per-tab views, kept in-tree for phases 3–5 to cannibalize. They are no
-// longer dispatched to; `#![allow(dead_code)]` in each keeps the build clean.
-pub mod dashboard;
-pub mod liveliness;
-pub mod network_legacy;
-pub mod nodes;
-pub mod query;
-pub mod stream;
-pub mod topics;
 
 use crate::app::{empty_state_text, EmptyReason};
 use ratatui::layout::Rect;

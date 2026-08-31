@@ -19,6 +19,11 @@
 #[cfg(any(target_os = "macos", test))]
 use std::path::Path;
 use std::path::PathBuf;
+// Every `Command` here shells out to a platform tool — `pgrep`/`pkill`/`open`
+// on macOS, `reg`/`taskkill`/`tasklist` and the NSIS installer on Windows. On
+// any other target the whole module is the no-op stub at the bottom of the
+// file, so an unconditional import fails CI's `-D warnings` clippy on Linux.
+#[cfg(any(target_os = "macos", windows))]
 use std::process::Command;
 
 use semver::Version;
