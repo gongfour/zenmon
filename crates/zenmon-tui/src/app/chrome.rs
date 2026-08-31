@@ -155,7 +155,7 @@ impl App {
                 "{} sessions · {} services · {} keys · {:.0} msg/s · {}",
                 self.nodes.len(),
                 self.liveliness_tokens.len(),
-                self.topics.len(),
+                self.key_tree.len(),
                 self.total_hz,
                 format_bytes_per_sec(self.total_bytes_per_sec()),
             );
@@ -169,7 +169,7 @@ impl App {
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = match self.space {
             Space::Traffic => {
-                "Tab space  / filter  j/k move  Enter open  L live  Q query  y/Y copy  : cmds  d doctor  ? help  q quit"
+                "Tab space  j/k move  h/l fold  E/C all  / filter  L live  Q query  y/Y copy  : cmds  ? help  q quit"
             }
             Space::Network => {
                 "Tab space  j/k move  Enter drill  s scout  y copy  : cmds  d doctor  ? help  q quit"
@@ -213,6 +213,25 @@ impl App {
                 ])
             })
             .collect();
+        // The tree keys have no palette entry (they act on the cursor, not the
+        // app), so they are listed here explicitly.
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Traffic tree",
+            Style::default().fg(Color::Cyan),
+        )));
+        for (keys, what) in [
+            ("h/←", "collapse, or go to the parent"),
+            ("l/→", "expand, descend, or open a folded group"),
+            ("z", "toggle the branch under the cursor"),
+            ("E/C", "expand / collapse everything"),
+            ("/", "filter (searches inside folded groups)"),
+        ] {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<6}", keys), Style::default().fg(Color::Yellow)),
+                Span::styled(what.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "`:` opens the command palette · j/k or ↑↓ to scroll · Esc/q/? to close",

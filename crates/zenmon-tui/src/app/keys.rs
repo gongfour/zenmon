@@ -98,8 +98,11 @@ impl App {
             KeyCode::Tab => self.switch_space(self.space.next()),
             KeyCode::Char('1') => self.switch_space(Space::Traffic),
             KeyCode::Char('2') => self.switch_space(Space::Network),
-            KeyCode::Enter | KeyCode::Right => self.pane_focus = PaneFocus::Detail,
-            KeyCode::Esc | KeyCode::Left => self.pane_focus = PaneFocus::Master,
+            // Left/Right are NOT global: in Traffic they walk the tree, where
+            // that reading is much stronger than "move pane focus". Enter/Esc
+            // move focus in both spaces, and Network keeps the arrows too.
+            KeyCode::Enter => self.pane_focus = PaneFocus::Detail,
+            KeyCode::Esc => self.pane_focus = PaneFocus::Master,
             _ => self.handle_space_key(key),
         }
     }
@@ -120,9 +123,17 @@ impl App {
             self.topic_detail_scroll = apply_detail_scroll(self.topic_detail_scroll, action);
             return;
         }
+        // Every key below reads or moves within the visible rows, and the last
+        // key may have changed them, so bring the cache up to date once here.
+        self.refresh_tree_rows();
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.move_topic_selection(1),
-            KeyCode::Char('k') | KeyCode::Up => self.move_topic_selection(-1),
+            KeyCode::Char('j') | KeyCode::Down => self.move_tree_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_tree_selection(-1),
+            KeyCode::Char('l') | KeyCode::Right => self.tree_expand_or_descend(),
+            KeyCode::Char('h') | KeyCode::Left => self.tree_collapse_or_ascend(),
+            KeyCode::Char('z') => self.tree_toggle_at_cursor(),
+            KeyCode::Char('E') => self.tree_expand_all(),
+            KeyCode::Char('C') => self.tree_collapse_all(),
             KeyCode::Char('/') => self.topics_filtering = true,
             KeyCode::Char('L') => self.detail_mode = DetailMode::Live,
             KeyCode::Char('Q') => {
@@ -143,23 +154,123 @@ impl App {
         }
     }
 
-    /// Move the master cursor within `filtered_topics()`, clamped to bounds, and
-    /// reset the detail scroll so the new selection starts at the top.
-    pub(crate) fn move_topic_selection(&mut self, delta: isize) {
-        let len = self.filtered_topics().len();
+    /// Move the master cursor over the visible rows, clamped, resetting the
+    /// detail scroll so the new selection starts at the top.
+    pub(crate) fn move_tree_selection(&mut self, delta: isize) {
+        self.refresh_tree_rows();
+        let len = self.tree_rows().len();
         if len == 0 {
             return;
         }
-        let cur = self.topic_selected.min(len - 1) as isize;
-        self.topic_selected = (cur + delta).clamp(0, len as isize - 1) as usize;
+        let cur = self.tree_selected.min(len - 1) as isize;
+        self.tree_selected = (cur + delta).clamp(0, len as isize - 1) as usize;
         self.topic_detail_scroll = 0;
     }
 
-    /// The key expression currently selected in the Traffic master, if any.
-    fn selected_topic_key(&self) -> Option<String> {
-        self.filtered_topics()
-            .get(self.topic_selected)
-            .map(|t| t.key_expr.clone())
+    /// `l` / `→`: open a closed branch, step into an open one, list a folded
+    /// group, or — on a key, where there is nothing left to open — hand focus
+    /// to the detail pane, which is what the arrow used to do everywhere.
+    fn tree_expand_or_descend(&mut self) {
+        let Some(row) = self.selected_row() else {
+            return;
+        };
+        match row.kind {
+            RowKind::Branch { expanded: false } => {
+                let path = row.path.clone();
+                self.tree_expanded.insert(path);
+                self.mark_tree_touched();
+                self.refresh_tree_rows();
+            }
+            RowKind::Branch { expanded: true } => self.move_tree_selection(1),
+            RowKind::FoldSummary { .. } => {
+                let path = row.path.clone();
+                self.tree_unfolded.insert(path);
+                self.mark_tree_touched();
+                self.refresh_tree_rows();
+            }
+            RowKind::Leaf => self.pane_focus = PaneFocus::Detail,
+        }
+    }
+
+    /// `h` / `←`: close an open branch, else climb to the parent row.
+    fn tree_collapse_or_ascend(&mut self) {
+        let Some(row) = self.selected_row() else {
+            return;
+        };
+        if let RowKind::Branch { expanded: true } = row.kind {
+            let path = row.path.clone();
+            self.tree_expanded.remove(&path);
+            // Re-folding on collapse means reopening a huge branch does not dump
+            // every child back on screen because it was unfolded once before.
+            self.tree_unfolded.remove(&path);
+            self.mark_tree_touched();
+            self.refresh_tree_rows();
+            return;
+        }
+        self.select_parent_row();
+    }
+
+    /// Move the cursor to the nearest row above that is shallower than this one.
+    fn select_parent_row(&mut self) {
+        let Some(depth) = self.selected_row().map(|r| r.depth) else {
+            return;
+        };
+        if depth == 0 {
+            return;
+        }
+        let rows = self.tree_rows();
+        if let Some(idx) = rows[..self.tree_selected]
+            .iter()
+            .rposition(|r| r.depth < depth)
+        {
+            self.tree_selected = idx;
+            self.topic_detail_scroll = 0;
+        }
+    }
+
+    pub(crate) fn tree_toggle_at_cursor(&mut self) {
+        let Some(row) = self.selected_row() else {
+            return;
+        };
+        match row.kind {
+            RowKind::Branch { expanded: true } => self.tree_collapse_or_ascend(),
+            RowKind::Branch { expanded: false } | RowKind::FoldSummary { .. } => {
+                self.tree_expand_or_descend()
+            }
+            RowKind::Leaf => {}
+        }
+    }
+
+    /// `E`: open everything, folded groups included.
+    ///
+    /// Leaving the fold in place would make "expand all" stop at a summary row
+    /// saying there is more — which is not what the key says it does. The row
+    /// count can get large; `C` is right there.
+    fn tree_expand_all(&mut self) {
+        for path in self.key_tree.branch_paths() {
+            self.tree_expanded.insert(path.clone());
+            self.tree_unfolded.insert(path);
+        }
+        self.mark_tree_touched();
+        self.refresh_tree_rows();
+    }
+
+    fn tree_collapse_all(&mut self) {
+        self.tree_expanded.clear();
+        self.tree_unfolded.clear();
+        self.tree_selected = 0;
+        self.mark_tree_touched();
+        self.refresh_tree_rows();
+    }
+
+    /// The key expression currently selected, if the selection is a key.
+    ///
+    /// A branch row names a prefix, not a key: querying or copying it would act
+    /// on something the network never published.
+    pub(crate) fn selected_topic_key(&self) -> Option<String> {
+        self.selected_row()
+            .filter(|r| r.kind == RowKind::Leaf)
+            .map(|r| r.path.clone())
     }
 
     fn copy_selected_payload(&mut self) {
@@ -190,6 +301,10 @@ impl App {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.move_network_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_network_selection(-1),
+            // Network has no hierarchy, so the arrows keep their old
+            // pane-focus meaning here even though Traffic reassigned them.
+            KeyCode::Right => self.pane_focus = PaneFocus::Detail,
+            KeyCode::Left => self.pane_focus = PaneFocus::Master,
             KeyCode::Char('s') => {
                 if !self.scout_in_progress {
                     self.pending_scout_request = true;

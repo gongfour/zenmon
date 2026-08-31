@@ -207,6 +207,45 @@ impl KeyTree {
         self.find(path).is_some_and(|n| !n.children.is_empty())
     }
 
+    /// Every path that has children, in no particular order.
+    ///
+    /// Used to open a small tree completely, so a handful of keys looks like the
+    /// flat list it effectively is rather than making the user expand to reach
+    /// anything.
+    pub fn branch_paths(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        Self::collect_branches(&self.root, &mut out);
+        out
+    }
+
+    fn collect_branches(node: &TreeNode, out: &mut Vec<String>) {
+        for child in node.children.values() {
+            if !child.children.is_empty() {
+                out.push(child.path.clone());
+                Self::collect_branches(child, out);
+            }
+        }
+    }
+
+    /// The run of branches from the root down while each has exactly one child.
+    ///
+    /// A namespace under a single common prefix (`agv/...` and nothing else)
+    /// would otherwise open on one useless row; this opens through the shared
+    /// stem to the first point where there is actually a choice to make.
+    pub fn single_child_chain(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut node = &self.root;
+        while node.children.len() == 1 {
+            let child = node.children.values().next().expect("len checked");
+            if child.children.is_empty() {
+                break;
+            }
+            out.push(child.path.clone());
+            node = child;
+        }
+        out
+    }
+
     /// The visible rows, in display order.
     ///
     /// Two rules make the filter and the fold compose:
@@ -542,6 +581,34 @@ mod tests {
         assert_eq!(t.len(), 1);
         let (e, u) = (set(&["a"]), set(&[]));
         assert_eq!(paths(&t.flatten(&opts(&e, &u, ""))), vec!["a", "a/b"]);
+    }
+
+    #[test]
+    fn branch_paths_lists_every_node_with_children() {
+        let t = tree(&["agv/f1/pose", "agv/f2/pose", "srv/health"]);
+        let mut got = t.branch_paths();
+        got.sort();
+        assert_eq!(got, vec!["agv", "agv/f1", "agv/f2", "srv"]);
+    }
+
+    #[test]
+    fn single_child_chain_stops_at_the_first_real_choice() {
+        let t = tree(&["agv/f1/pose", "agv/f2/pose"]);
+        // `agv` is the only root child, but under it there are two vehicles, so
+        // opening past `agv` would be a guess.
+        assert_eq!(t.single_child_chain(), vec!["agv"]);
+    }
+
+    #[test]
+    fn single_child_chain_walks_a_long_stem() {
+        let t = tree(&["a/b/c/d"]);
+        assert_eq!(t.single_child_chain(), vec!["a", "a/b", "a/b/c"]);
+    }
+
+    #[test]
+    fn single_child_chain_is_empty_when_the_root_branches() {
+        let t = tree(&["a/x", "b/x"]);
+        assert!(t.single_child_chain().is_empty());
     }
 
     #[test]

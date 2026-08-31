@@ -9,6 +9,7 @@ use super::keys::{apply_detail_scroll, detail_scroll_action, DetailScroll};
 use super::mouse::{list_hit, space_tab_hit};
 use super::*;
 use crate::event::AppEvent;
+use crate::tree::RowKind;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use std::time::Duration;
@@ -86,9 +87,7 @@ fn empty_reason_distinguishes_filter_from_no_data() {
     // No data at all → NoDataYet.
     assert_eq!(app.topics_empty_reason(), EmptyReason::NoDataYet);
     // Data exists but the filter hides it → FilteredOut.
-    app.topics.push(TopicInfo {
-        key_expr: "a/b".into(),
-    });
+    app.key_tree.insert("a/b");
     app.topic_filter = "zzz".into();
     assert_eq!(app.topics_empty_reason(), EmptyReason::FilteredOut);
 }
@@ -336,7 +335,7 @@ fn clear_network_state_clears_topics_messages_and_nodes() {
     app.handle_zenoh_message(make("b"));
     app.total_msg_count = 7;
     app.total_hz = 3.5;
-    app.topic_selected = 1;
+    app.tree_selected = 1;
     app.topic_detail_scroll = 4;
     app.list_scroll_offset = 5;
     app.sub_selected = 1;
@@ -364,13 +363,13 @@ fn clear_network_state_clears_topics_messages_and_nodes() {
 
     app.clear_network_state();
 
-    assert!(app.topics.is_empty());
+    assert!(app.key_tree.is_empty());
     assert!(app.topic_latest.is_empty());
     assert!(app.topic_msg_counts.is_empty());
     assert!(app.topic_hz.is_empty());
     assert_eq!(app.total_msg_count, 0);
     assert_eq!(app.total_hz, 0.0);
-    assert_eq!(app.topic_selected, 0);
+    assert_eq!(app.tree_selected, 0);
     assert_eq!(app.topic_detail_scroll, 0);
     assert_eq!(app.list_scroll_offset, 0);
 
@@ -416,13 +415,15 @@ fn clear_network_state_preserves_query_history_and_filters() {
     assert!(app.sub_paused);
 }
 
+/// Seed the key tree and bring the row cache up to date, as a burst of
+/// messages would. Single-segment keys give one leaf row each, so tests about
+/// cursor movement keep indexing rows directly.
 fn seed_topics(app: &mut App, keys: &[&str]) {
     for k in keys {
-        app.topics.push(TopicInfo {
-            key_expr: (*k).into(),
-        });
+        app.key_tree.insert(k);
     }
-    app.topics.sort_by(|a, b| a.key_expr.cmp(&b.key_expr));
+    app.auto_expand();
+    app.refresh_tree_rows();
 }
 
 #[test]
@@ -430,7 +431,8 @@ fn traffic_q_runs_query_on_selected_key() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     seed_topics(&mut app, &["demo/a", "demo/b"]);
-    app.topic_selected = 1; // demo/b
+    // Rows are [demo/, demo/a, demo/b] — the shared branch takes row 0.
+    app.tree_selected = 2; // demo/b
     app.handle_key(key(KeyCode::Char('Q')));
     assert_eq!(app.detail_mode, DetailMode::Query);
     assert_eq!(app.pending_query, Some("demo/b".to_string()));
@@ -451,20 +453,20 @@ fn traffic_jk_move_and_clamp_selection() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     seed_topics(&mut app, &["a", "b", "c"]);
-    assert_eq!(app.topic_selected, 0);
+    assert_eq!(app.tree_selected, 0);
     app.handle_key(key(KeyCode::Char('j')));
-    assert_eq!(app.topic_selected, 1);
+    assert_eq!(app.tree_selected, 1);
     app.handle_key(key(KeyCode::Char('j')));
-    assert_eq!(app.topic_selected, 2);
+    assert_eq!(app.tree_selected, 2);
     // Clamp at the bottom.
     app.handle_key(key(KeyCode::Char('j')));
-    assert_eq!(app.topic_selected, 2);
+    assert_eq!(app.tree_selected, 2);
     app.handle_key(key(KeyCode::Char('k')));
     app.handle_key(key(KeyCode::Char('k')));
-    assert_eq!(app.topic_selected, 0);
+    assert_eq!(app.tree_selected, 0);
     // Clamp at the top.
     app.handle_key(key(KeyCode::Char('k')));
-    assert_eq!(app.topic_selected, 0);
+    assert_eq!(app.tree_selected, 0);
 }
 
 #[test]
@@ -474,8 +476,162 @@ fn traffic_move_resets_detail_scroll() {
     seed_topics(&mut app, &["a", "b"]);
     app.topic_detail_scroll = 9;
     app.handle_key(key(KeyCode::Char('j')));
-    assert_eq!(app.topic_selected, 1);
+    assert_eq!(app.tree_selected, 1);
     assert_eq!(app.topic_detail_scroll, 0);
+}
+
+/// Seed enough keys that the automatic expansion does *not* open everything,
+/// so expand/collapse can be exercised against a genuinely closed tree.
+fn seed_fleet(app: &mut App, vehicles: usize) {
+    for i in 0..vehicles {
+        app.key_tree.insert(&format!("agv/f{i:03}/pose"));
+    }
+    app.auto_expand();
+    app.refresh_tree_rows();
+}
+
+#[test]
+fn l_opens_a_branch_and_h_closes_it() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_fleet(&mut app, 30);
+    // `agv` is the only root child, so the automatic opening walked into it and
+    // stopped where the vehicles fan out.
+    assert_eq!(app.tree_rows()[0].path, "agv");
+
+    app.handle_key(key(KeyCode::Char('h')));
+    assert_eq!(app.tree_rows().len(), 1, "closing agv leaves only its row");
+
+    app.handle_key(key(KeyCode::Char('l')));
+    // 30 children is over the fold threshold, so opening shows a summary row.
+    assert_eq!(app.tree_rows().len(), 2);
+    assert!(matches!(
+        app.tree_rows()[1].kind,
+        RowKind::FoldSummary { hidden: 30 }
+    ));
+}
+
+#[test]
+fn l_on_a_fold_summary_lists_the_children() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_fleet(&mut app, 30);
+    app.handle_key(key(KeyCode::Char('j'))); // onto the summary row
+    assert!(matches!(
+        app.selected_row().map(|r| r.kind),
+        Some(RowKind::FoldSummary { .. })
+    ));
+    app.handle_key(key(KeyCode::Char('l')));
+    assert_eq!(app.tree_rows().len(), 31, "agv plus its 30 vehicles");
+}
+
+#[test]
+fn collapsing_a_branch_also_refolds_it() {
+    // Otherwise reopening a 200-vehicle branch dumps every child back on screen
+    // because it was unfolded once, minutes ago.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_fleet(&mut app, 30);
+    app.handle_key(key(KeyCode::Char('j')));
+    app.handle_key(key(KeyCode::Char('l'))); // unfold
+    assert_eq!(app.tree_rows().len(), 31);
+
+    app.tree_selected = 0;
+    app.handle_key(key(KeyCode::Char('h'))); // collapse agv
+    app.handle_key(key(KeyCode::Char('l'))); // and reopen it
+    assert_eq!(app.tree_rows().len(), 2, "back to the summary row");
+}
+
+#[test]
+fn h_on_a_closed_branch_climbs_to_the_parent() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["agv/f1/pose", "agv/f2/pose"]);
+    // Rows: agv/, agv/f1/, agv/f1/pose, agv/f2/, agv/f2/pose
+    app.tree_selected = 2; // the pose key under f1
+    app.handle_key(key(KeyCode::Char('h')));
+    assert_eq!(app.selected_row().unwrap().path, "agv/f1");
+    app.handle_key(key(KeyCode::Char('h'))); // f1 is open, so this closes it
+    app.handle_key(key(KeyCode::Char('h'))); // now it climbs
+    assert_eq!(app.selected_row().unwrap().path, "agv");
+}
+
+#[test]
+fn expand_all_and_collapse_all() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_fleet(&mut app, 30);
+    app.handle_key(key(KeyCode::Char('C')));
+    assert_eq!(app.tree_rows().len(), 1);
+    app.handle_key(key(KeyCode::Char('E')));
+    // Every branch open: agv, 30 vehicles, and a pose key under each.
+    assert_eq!(app.tree_rows().len(), 61);
+}
+
+#[test]
+fn a_small_namespace_opens_completely() {
+    // Under the fold threshold the tree should look like the flat list it
+    // effectively is, not make the user expand to reach anything.
+    let mut app = App::new("test".into());
+    seed_topics(&mut app, &["a/b/c", "a/b/d"]);
+    assert_eq!(
+        app.tree_rows()
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "a/b", "a/b/c", "a/b/d"]
+    );
+}
+
+#[test]
+fn a_new_key_never_reopens_what_the_user_closed() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["agv/f1/pose"]);
+    app.tree_selected = 0;
+    app.handle_key(key(KeyCode::Char('C')));
+    assert_eq!(app.tree_rows().len(), 1);
+
+    // A message on a brand-new key arrives while the tree is closed.
+    app.handle_zenoh_message(ZenohMessage {
+        key_expr: "agv/f2/pose".into(),
+        payload: MessagePayload::from_json(&serde_json::json!(null)),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+    app.refresh_tree_rows();
+    assert_eq!(app.tree_rows().len(), 1, "the tree stayed closed");
+}
+
+#[test]
+fn a_branch_row_is_not_a_queryable_key() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["agv/f1/pose"]);
+    app.tree_selected = 0; // the `agv/` branch
+    assert_eq!(app.selected_topic_key(), None);
+    app.handle_key(key(KeyCode::Char('Q')));
+    assert_eq!(app.pending_query, None, "a prefix is not a key to query");
+}
+
+#[test]
+fn filtering_reaches_inside_a_folded_group() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_fleet(&mut app, 30);
+    app.topic_filter = "f017".into();
+    app.refresh_tree_rows();
+    assert_eq!(
+        app.tree_rows()
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["agv", "agv/f017", "agv/f017/pose"]
+    );
 }
 
 #[test]
@@ -486,9 +642,8 @@ fn render_traffic_with_data_wide_and_narrow_shows_key() {
         let mut app = App::new("tcp/127.0.0.1:7447".into());
         app.space = Space::Traffic;
         app.connection_state = ConnectionState::Connected("zid".into());
-        app.topics.push(TopicInfo {
-            key_expr: "demo/robot/pose".into(),
-        });
+        app.key_tree.insert("demo/robot/pose");
+        app.auto_expand();
         let msg = ZenohMessage {
             key_expr: "demo/robot/pose".into(),
             payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
@@ -505,16 +660,24 @@ fn render_traffic_with_data_wide_and_narrow_shows_key() {
         app.topic_hz.insert("demo/robot/pose".into(), 12.0);
 
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        // Wide → master; narrow default focus is Master → master shows the key.
+        // Wide → master; narrow default focus is Master → master shows the tree.
         terminal.draw(|f| app.render(f)).unwrap();
         let text = buffer_text(terminal.backend().buffer());
-        assert!(
-            text.contains("demo/robot/pose"),
-            "key missing at {}x{}: {}",
-            w,
-            h,
-            text
-        );
+        // The master draws one segment per row, not the whole key expression —
+        // the hierarchy is what carries the context now.
+        for segment in ["demo/", "robot/", "pose"] {
+            assert!(
+                text.contains(segment),
+                "segment {} missing at {}x{}: {}",
+                segment,
+                w,
+                h,
+                text
+            );
+        }
+        // A single key is under the fold threshold, so it opens all the way
+        // down rather than showing one collapsed row.
+        assert!(text.contains("▾"), "expected an open branch at {}x{}", w, h);
     }
 }
 
@@ -526,9 +689,8 @@ fn render_traffic_narrow_detail_pane_does_not_panic() {
     app.space = Space::Traffic;
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
-    app.topics.push(TopicInfo {
-        key_expr: "demo/robot/pose".into(),
-    });
+    app.key_tree.insert("demo/robot/pose");
+    app.auto_expand();
     let msg = ZenohMessage {
         key_expr: "demo/robot/pose".into(),
         payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
@@ -543,10 +705,40 @@ fn render_traffic_narrow_detail_pane_does_not_panic() {
         .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
     app.sub_messages.push_front(msg);
 
+    // Put the cursor on the key itself; rows 0 and 1 are the `demo/` and
+    // `robot/` branches, which get a subtree summary rather than a payload.
+    app.refresh_tree_rows();
+    app.tree_selected = 2;
+
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
     let text = buffer_text(terminal.backend().buffer());
     assert!(text.contains("demo/robot/pose"), "detail key missing");
+}
+
+#[test]
+fn a_branch_selection_shows_a_subtree_summary_not_a_payload() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.key_tree.insert("agv/f1/pose");
+    app.key_tree.insert("agv/f2/pose");
+    app.auto_expand();
+    app.topic_hz.insert("agv/f1/pose".into(), 10.0);
+    app.topic_hz.insert("agv/f2/pose".into(), 5.0);
+
+    app.refresh_tree_rows();
+    app.tree_selected = 0; // the `agv/` branch
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    // The aggregate is the thing a flat list could never answer.
+    assert!(text.contains("15.0 Hz"), "subtree rate missing: {}", text);
+    assert!(text.contains("busiest"), "busiest list missing: {}", text);
 }
 
 /// Headless render smoke test: drive `render()` through ratatui's in-memory
@@ -602,7 +794,7 @@ fn dump_frames() {
             ("demo/sensor/lidar", 30.0),
             ("sys/health", 0.0),
         ] {
-            app.topics.push(TopicInfo { key_expr: k.into() });
+            app.key_tree.insert(k);
             app.topic_hz.insert(k.into(), hz);
         }
         let msg = ZenohMessage {
@@ -642,6 +834,37 @@ fn dump_frames() {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== {label} =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // A fleet-sized namespace: the case the tree and the fold exist for, and
+    // the one no synthetic four-key seed shows anything about.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        for i in 0..200 {
+            for (topic, hz) in [("pose", 10.0), ("battery", 1.0), ("state", 1.0)] {
+                let key = format!("agv/f{i:03}/{topic}");
+                app.key_tree.insert(&key);
+                app.topic_hz.insert(key, hz);
+            }
+        }
+        app.key_tree.insert("srv/fleet/health");
+        app.auto_expand();
+        app.total_hz = 2400.0;
+
+        let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC 200 vehicles / 601 keys, collapsed =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+
+        // And the same tree with a filter, which is the documented way into a
+        // folded group.
+        app.topic_filter = "f017".into();
+        app.refresh_tree_rows();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC 601 keys, filtered to /f017 =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 
@@ -1102,7 +1325,7 @@ fn traffic_click_selects_row_and_drills() {
     app.list_scroll_offset = 0;
     // Row 5 == first_item_row(3) + 2 → index 2.
     app.handle_click(5, 5);
-    assert_eq!(app.topic_selected, 2);
+    assert_eq!(app.tree_selected, 2);
     assert_eq!(app.topic_detail_scroll, 0);
     assert_eq!(app.pane_focus, PaneFocus::Detail);
 }
@@ -1112,12 +1335,12 @@ fn traffic_click_outside_list_is_ignored() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     seed_topics(&mut app, &["a", "b", "c"]);
-    app.topic_selected = 1;
+    app.tree_selected = 1;
     app.list_rect = Some(Rect::new(0, 2, 40, 10));
     app.list_first_item_row = 3;
     // Row 1 is above the list rect (y == 2) → no change.
     app.handle_click(5, 1);
-    assert_eq!(app.topic_selected, 1);
+    assert_eq!(app.tree_selected, 1);
 }
 
 #[test]
@@ -1161,16 +1384,16 @@ fn wheel_moves_traffic_selection_and_clamps() {
     app.space = Space::Traffic;
     seed_topics(&mut app, &["a", "b", "c"]);
     app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
-    assert_eq!(app.topic_selected, 1);
+    assert_eq!(app.tree_selected, 1);
     // Clamp at the bottom.
     app.wheel(1);
     app.wheel(1);
-    assert_eq!(app.topic_selected, 2);
+    assert_eq!(app.tree_selected, 2);
     // Scroll back up and clamp at the top.
     app.handle_mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
     app.wheel(-1);
     app.wheel(-1);
-    assert_eq!(app.topic_selected, 0);
+    assert_eq!(app.tree_selected, 0);
 }
 
 #[test]
@@ -1195,5 +1418,5 @@ fn wheel_ignored_while_overlay_open() {
     seed_topics(&mut app, &["a", "b", "c"]);
     app.overlay = Overlay::Help;
     app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
-    assert_eq!(app.topic_selected, 0);
+    assert_eq!(app.tree_selected, 0);
 }

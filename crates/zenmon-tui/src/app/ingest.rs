@@ -5,7 +5,7 @@ use super::*;
 use crate::event::AppEvent;
 use std::time::Instant;
 use zenmon_core::merge::merge_nodes;
-use zenmon_core::types::{NodeInfo, TopicInfo, ZenohMessage};
+use zenmon_core::types::{NodeInfo, ZenohMessage};
 
 /// How many 1-second buckets of rate history to keep for sparklines.
 pub(crate) const RATE_WINDOW_SECS: usize = 30;
@@ -143,11 +143,11 @@ impl App {
     }
 
     pub(crate) fn handle_zenoh_message(&mut self, msg: ZenohMessage) {
-        if !self.topics.iter().any(|t| t.key_expr == msg.key_expr) {
-            self.topics.push(TopicInfo {
-                key_expr: msg.key_expr.clone(),
-            });
-            self.topics.sort_by(|a, b| a.key_expr.cmp(&b.key_expr));
+        // `insert` reports only genuinely new keys, so the steady state of a
+        // running stream does no work here at all — no sort, no cache
+        // invalidation, no reconsidering the automatic expansion.
+        if self.key_tree.insert(&msg.key_expr) {
+            self.auto_expand();
         }
 
         self.topic_latest

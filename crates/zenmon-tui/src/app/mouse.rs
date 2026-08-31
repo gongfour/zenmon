@@ -59,7 +59,7 @@ impl App {
     /// with `j`/`k`). Both movers clamp and reset the detail scroll.
     pub(crate) fn wheel(&mut self, delta: isize) {
         match self.space {
-            Space::Traffic => self.move_topic_selection(delta),
+            Space::Traffic => self.move_tree_selection(delta),
             Space::Network => self.move_network_selection(delta),
         }
     }
@@ -76,7 +76,7 @@ impl App {
 
         // A click inside the master list selects the row under the cursor. Each
         // space maps a display row to a selection differently: Traffic rows are
-        // 1:1 with `filtered_topics()`, while Network interleaves non-selectable
+        // 1:1 with the flattened tree, while Network interleaves non-selectable
         // headers, so its click goes through `network_click_map`.
         let Some(rect) = self.list_rect else {
             return;
@@ -91,18 +91,24 @@ impl App {
 
         match self.space {
             Space::Traffic => {
+                self.refresh_tree_rows();
                 if let Some(idx) = list_hit(
                     rect,
                     row,
                     self.list_scroll_offset,
-                    self.filtered_topics().len(),
+                    self.tree_rows().len(),
                     self.list_first_item_row,
                 ) {
-                    self.topic_selected = idx;
+                    self.tree_selected = idx;
                     self.topic_detail_scroll = 0;
-                    // Drill into the detail pane; a no-op visually in wide mode
-                    // (both panes show) but the intended action when narrow.
-                    self.pane_focus = PaneFocus::Detail;
+                    // Clicking a branch opens it — a click on a closed folder is
+                    // how every tree behaves, and drilling into the detail pane
+                    // would show a subtree summary the user did not ask for.
+                    match self.selected_row().map(|r| r.kind) {
+                        Some(RowKind::Leaf) => self.pane_focus = PaneFocus::Detail,
+                        Some(_) => self.tree_toggle_at_cursor(),
+                        None => {}
+                    }
                 }
             }
             Space::Network => {

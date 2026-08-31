@@ -18,14 +18,33 @@ mod tests;
 // `App` fields that hold it are declared here.
 use ingest::{RateWindow, RATE_WINDOW_SECS};
 
+use crate::tree::{FlattenOpts, KeyTree, RowKind, TreeRow};
 use ratatui::layout::{Constraint, Layout, Rect};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Instant, SystemTime};
 use zenmon_core::config::ConnectMode;
 use zenmon_core::doctor::DoctorReport;
 use zenmon_core::types::{
-    LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, TopicInfo, ZenohMessage,
+    LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, ZenohMessage,
 };
+
+/// How many children an expanded branch may list before it folds to a summary.
+pub(crate) const DEFAULT_FOLD_THRESHOLD: usize = 12;
+
+/// The flattened rows, kept until something they depend on changes.
+///
+/// Flattening is cheap per node but runs over every visible row, and the frame
+/// gate only helps if the work behind a frame is bounded. A steady stream on
+/// known keys changes none of these three, so it costs nothing.
+#[derive(Debug, Default, Clone)]
+struct TreeViewCache {
+    rows: Vec<TreeRow>,
+    tree_version: u64,
+    expanded_version: u64,
+    filter: String,
+    /// Distinguishes "cached an empty tree" from "never built".
+    built: bool,
+}
 
 fn payload_to_string(p: &MessagePayload) -> String {
     p.pretty()
@@ -260,7 +279,23 @@ pub struct App {
     pub endpoint: String,
     pub space_tab_rects: [Option<ratatui::layout::Rect>; 2],
 
-    pub topics: Vec<TopicInfo>,
+    /// The key hierarchy shown in the Traffic master pane.
+    pub key_tree: KeyTree,
+    /// Branches the user has opened.
+    pub tree_expanded: HashSet<String>,
+    /// Over-threshold branches the user has asked to list in full.
+    pub tree_unfolded: HashSet<String>,
+    /// Bumped on every change to `tree_expanded`/`tree_unfolded` so the row
+    /// cache can distinguish "same tree, different expansion" from no change.
+    pub tree_expanded_version: u64,
+    /// Set once the user expands or collapses anything, which switches off the
+    /// automatic opening in [`App::auto_expand`] — after that the tree is
+    /// theirs and new keys must not reopen what they closed.
+    pub tree_user_touched: bool,
+    /// Children above which an expanded branch shows a summary row instead.
+    pub fold_threshold: usize,
+    tree_cache: TreeViewCache,
+
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
     pub admin_nodes: Vec<NodeInfo>,
     pub scout_nodes: Vec<NodeInfo>,
@@ -278,7 +313,8 @@ pub struct App {
     pub stream_filtering: bool,
 
     pub topic_filter: String,
-    pub topic_selected: usize,
+    /// Cursor over the visible rows of [`App::tree_rows`].
+    pub tree_selected: usize,
     pub topics_filtering: bool,
     pub topic_detail_scroll: u16,
 
@@ -376,7 +412,13 @@ impl App {
             connection_state: ConnectionState::Connecting,
             endpoint,
             space_tab_rects: [None; 2],
-            topics: Vec::new(),
+            key_tree: KeyTree::new(),
+            tree_expanded: HashSet::new(),
+            tree_unfolded: HashSet::new(),
+            tree_expanded_version: 0,
+            tree_user_touched: false,
+            fold_threshold: DEFAULT_FOLD_THRESHOLD,
+            tree_cache: TreeViewCache::default(),
             topic_latest: HashMap::new(),
             admin_nodes: Vec::new(),
             scout_nodes: Vec::new(),
@@ -390,7 +432,7 @@ impl App {
             stream_key_filter: None,
             stream_filtering: false,
             topic_filter: String::new(),
-            topic_selected: 0,
+            tree_selected: 0,
             topics_filtering: false,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
@@ -471,13 +513,19 @@ impl App {
     /// Does NOT clear query results, history, or user-entered filters, which
     /// are session-scoped user inputs that should survive a reconnect.
     pub fn clear_network_state(&mut self) {
-        self.topics.clear();
+        self.key_tree = KeyTree::new();
+        self.tree_expanded.clear();
+        self.tree_unfolded.clear();
+        self.tree_expanded_version = self.tree_expanded_version.wrapping_add(1);
+        // A reconnect rebuilds the namespace from scratch, so the automatic
+        // opening should get another go at it.
+        self.tree_user_touched = false;
         self.topic_latest.clear();
         self.topic_msg_counts.clear();
         self.topic_hz.clear();
         self.total_msg_count = 0;
         self.total_hz = 0.0;
-        self.topic_selected = 0;
+        self.tree_selected = 0;
         self.topic_detail_scroll = 0;
         self.list_scroll_offset = 0;
 
@@ -526,7 +574,7 @@ impl App {
         if let Some(r) = self.connection_empty_reason() {
             return r;
         }
-        if !self.topic_filter.is_empty() && !self.topics.is_empty() {
+        if !self.topic_filter.is_empty() && !self.key_tree.is_empty() {
             EmptyReason::FilteredOut
         } else {
             EmptyReason::NoDataYet
@@ -541,15 +589,101 @@ impl App {
         EmptyReason::NoDataYet
     }
 
-    pub fn filtered_topics(&self) -> Vec<&TopicInfo> {
-        if self.topic_filter.is_empty() {
-            self.topics.iter().collect()
-        } else {
-            self.topics
-                .iter()
-                .filter(|t| t.key_expr.contains(&self.topic_filter))
-                .collect()
+    /// Rebuild the flattened rows if the tree, the expansion state or the filter
+    /// changed. Cheap and idempotent, so callers that need current rows can just
+    /// call it rather than reason about who rendered last.
+    pub(crate) fn refresh_tree_rows(&mut self) {
+        let tree_version = self.key_tree.version();
+        let expanded_version = self.tree_expanded_version;
+        if self.tree_cache.built
+            && self.tree_cache.tree_version == tree_version
+            && self.tree_cache.expanded_version == expanded_version
+            && self.tree_cache.filter == self.topic_filter
+        {
+            return;
         }
+        let rows = self.key_tree.flatten(&FlattenOpts {
+            expanded: &self.tree_expanded,
+            unfolded: &self.tree_unfolded,
+            filter: &self.topic_filter,
+            fold_threshold: self.fold_threshold,
+        });
+        self.tree_cache = TreeViewCache {
+            rows,
+            tree_version,
+            expanded_version,
+            filter: self.topic_filter.clone(),
+            built: true,
+        };
+        self.clamp_tree_selection();
+    }
+
+    /// The visible rows as of the last [`App::refresh_tree_rows`].
+    pub(crate) fn tree_rows(&self) -> &[TreeRow] {
+        &self.tree_cache.rows
+    }
+
+    pub(crate) fn selected_row(&self) -> Option<&TreeRow> {
+        self.tree_cache.rows.get(self.tree_selected)
+    }
+
+    fn clamp_tree_selection(&mut self) {
+        let len = self.tree_cache.rows.len();
+        self.tree_selected = if len == 0 {
+            0
+        } else {
+            self.tree_selected.min(len - 1)
+        };
+    }
+
+    /// Note that the expansion state changed, so the row cache rebuilds and the
+    /// automatic opening stands down.
+    pub(crate) fn mark_tree_touched(&mut self) {
+        self.tree_expanded_version = self.tree_expanded_version.wrapping_add(1);
+        self.tree_user_touched = true;
+    }
+
+    /// Open the tree far enough to be useful on a namespace the user has not
+    /// touched yet.
+    ///
+    /// A tree that opens fully collapsed shows one row and looks broken; one
+    /// that opens fully expanded is the flat list this replaced. So: a small
+    /// namespace opens completely, and a large one opens through whatever
+    /// single-child stem it shares. Stops for good at the first manual
+    /// expand or collapse — new keys must never reopen what the user closed.
+    pub(crate) fn auto_expand(&mut self) {
+        if self.tree_user_touched {
+            return;
+        }
+        let paths = if self.key_tree.len() <= self.fold_threshold {
+            self.key_tree.branch_paths()
+        } else {
+            self.key_tree.single_child_chain()
+        };
+        let added = paths
+            .into_iter()
+            .filter(|p| self.tree_expanded.insert(p.clone()))
+            .count();
+        if added > 0 {
+            // Not `mark_tree_touched`: this is not the user's doing.
+            self.tree_expanded_version = self.tree_expanded_version.wrapping_add(1);
+        }
+    }
+
+    /// Aggregate rate and bandwidth for every key at or below `path`.
+    ///
+    /// Scans `topic_hz`, so it is O(keys) and is only ever called for the one
+    /// selected branch — never per visible row.
+    pub(crate) fn subtree_totals(&self, path: &str) -> (f64, u64) {
+        let mut hz = 0.0;
+        let mut bytes = 0;
+        for (key, rate) in &self.topic_hz {
+            if key == path || key.starts_with(&format!("{path}/")) {
+                hz += rate;
+                bytes += self.topic_bytes_per_sec(key);
+            }
+        }
+        (hz, bytes)
     }
 
     pub fn filtered_sub_messages(&self) -> Vec<&ZenohMessage> {
@@ -575,24 +709,6 @@ impl App {
                 .as_ref()
                 .map(|att| payload_to_string(att).contains(&self.stream_filter))
                 .unwrap_or(false)
-    }
-
-    #[allow(dead_code)]
-    fn open_selected_topic_in_stream(&mut self) {
-        let key = self
-            .filtered_topics()
-            .get(self.topic_selected)
-            .map(|topic| topic.key_expr.clone());
-        let Some(key) = key else {
-            return;
-        };
-
-        self.stream_filter.clear();
-        self.stream_key_filter = Some(key.clone());
-        self.stream_filtering = false;
-        self.follow_stream();
-        self.space = Space::Traffic;
-        self.set_toast(format!("Stream filtered to exact topic: {}", key));
     }
 
     fn clamp_stream_selection(&mut self) {
