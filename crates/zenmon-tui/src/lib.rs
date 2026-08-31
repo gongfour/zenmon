@@ -1,6 +1,6 @@
 pub mod app;
-pub mod event;
 pub mod diff;
+pub mod event;
 pub mod history;
 pub mod tree;
 pub mod views;
@@ -23,9 +23,14 @@ use zenmon_core::config::ZenmonConfig;
 use zenmon_core::types::ZenohMessage;
 use zenoh::Session;
 
-pub async fn run(mut config: ZenmonConfig, refresh: Duration) -> Result<()> {
+pub async fn run(
+    mut config: ZenmonConfig,
+    refresh: Duration,
+    contract: Option<zenmon_core::contract::Contract>,
+) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
+    app.contract = contract;
     app.scout_port_current = config.scout_port;
     app.current_mode = config.mode;
 

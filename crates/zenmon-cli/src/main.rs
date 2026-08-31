@@ -1440,7 +1440,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
 
         #[cfg(feature = "tui")]
         Command::Tui { refresh } => {
-            zenmon_tui::run(config, refresh)
+            // `--contract` / ZENMON_CONTRACT is global, so the TUI picks it up
+            // the same way `sub` and `discover` do; without one the detail pane
+            // simply shows no contract badge.
+            let contract = load_contract_opt(&cli.contract)?;
+            zenmon_tui::run(config, refresh, contract)
                 .await
                 .map_err(internal_err)?;
         }

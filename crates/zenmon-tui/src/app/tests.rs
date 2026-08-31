@@ -976,6 +976,96 @@ fn a_key_seen_once_says_there_is_no_baseline_rather_than_marking_everything() {
     assert_eq!(row_fg(&buf, "mode:"), ratatui::style::Color::Gray);
 }
 
+/// Minimal contract declaring one topic with a JSON encoding.
+fn test_contract() -> zenmon_core::contract::Contract {
+    zenmon_core::contract::Contract::from_yaml_str(
+        r#"
+version: "0.2"
+project: test
+encoding:
+  default: application/json
+types: {}
+services: []
+topics:
+  - key: agv/*/state
+    description: Vehicle state
+"#,
+    )
+    .expect("fixture contract parses")
+}
+
+fn seed_one(app: &mut App, key: &str, encoding: &str) {
+    app.handle_zenoh_message(ZenohMessage {
+        key_expr: key.into(),
+        payload: MessagePayload::from_json(&serde_json::json!({"mode": "idle"})),
+        encoding: encoding.into(),
+        payload_bytes: 16,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+}
+
+#[test]
+fn a_declared_key_says_so_and_carries_its_description() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(test_contract());
+    seed_one(&mut app, "agv/f001/state", "application/json");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(text.contains("contract ✓"), "{text}");
+    assert!(text.contains("Vehicle state"), "{text}");
+}
+
+#[test]
+fn a_key_the_contract_does_not_declare_is_marked_undeclared() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(test_contract());
+    seed_one(&mut app, "agv/f001/mystery", "application/json");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(text.contains("undeclared"), "{text}");
+}
+
+#[test]
+fn an_encoding_the_contract_did_not_expect_is_called_out() {
+    // The mismatch that shows up as a decoder failure three services away.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(test_contract());
+    seed_one(&mut app, "agv/f001/state", "text/plain");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(text.contains("expected application/json"), "{text}");
+    assert!(text.contains("got text/plain"), "{text}");
+}
+
+#[test]
+fn without_a_contract_the_pane_is_unchanged() {
+    // No contract loaded must mean no badge row at all, not an empty one.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    seed_one(&mut app, "agv/f001/state", "application/json");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(!text.contains("contract"), "{text}");
+    assert!(!text.contains("undeclared"), "{text}");
+}
+
 #[test]
 fn a_quiet_keys_history_survives_a_noisy_neighbour() {
     // The end-to-end version of what `history` exists for: under the old

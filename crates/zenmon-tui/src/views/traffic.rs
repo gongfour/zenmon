@@ -254,8 +254,9 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     // Fixed header (stats + mode indicator), then the scrollable body.
+    let header_h = if app.contract.is_some() { 3 } else { 2 };
     let [header_area, body_area] =
-        Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(header_h), Constraint::Fill(1)]).areas(inner);
 
     // Header line: {hz} Hz · {bw} · {encoding?} · {n} msgs
     let hz = app.topic_hz.get(&key).copied().unwrap_or(0.0);
@@ -295,6 +296,53 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
         }
     }
 
+    // Contract badge. Only rendered when a contract was loaded, so a session
+    // without one looks exactly as it did.
+    let contract_line = app.contract.as_ref().map(|c| {
+        let encoding = app
+            .topic_latest
+            .get(&key)
+            .map(|(m, _)| m.encoding.as_str())
+            .unwrap_or("");
+        let e = c.enrich(&key, encoding);
+        let mut spans = Vec::new();
+        if e.declared {
+            spans.push(Span::styled(
+                "contract ✓",
+                Style::default().fg(Color::Green),
+            ));
+            // An encoding the contract did not expect is the kind of mismatch
+            // that produces a decoder failure three services downstream, so it
+            // is called out rather than left for the reader to compare.
+            if e.encoding_matches == Some(false) {
+                spans.push(Span::styled(
+                    format!(
+                        "  encoding: expected {}, got {}",
+                        e.encoding_expected.as_deref().unwrap_or("?"),
+                        if encoding.is_empty() {
+                            "none"
+                        } else {
+                            encoding
+                        }
+                    ),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            if let Some(d) = &e.description {
+                spans.push(Span::styled(
+                    format!("  {d}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        } else {
+            spans.push(Span::styled(
+                "undeclared",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        Line::from(spans)
+    });
+
     let active = Style::default()
         .fg(Color::Black)
         .bg(Color::Cyan)
@@ -319,13 +367,15 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
             },
         ),
     ]);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(header, Style::default().fg(Color::Gray))),
-            mode_line,
-        ]),
-        header_area,
-    );
+    let mut header_lines = vec![Line::from(Span::styled(
+        header,
+        Style::default().fg(Color::Gray),
+    ))];
+    if let Some(line) = contract_line {
+        header_lines.push(line);
+    }
+    header_lines.push(mode_line);
+    frame.render_widget(Paragraph::new(header_lines), header_area);
 
     let body_lines = match app.detail_mode {
         DetailMode::Live => live_body(app, &key),

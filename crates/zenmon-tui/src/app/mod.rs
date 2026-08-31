@@ -367,6 +367,10 @@ pub struct App {
     /// On by default: a repeating status blob is unreadable without it, and the
     /// cost when nothing changed is that everything renders dim.
     pub diff_enabled: bool,
+    /// Loaded from `--contract` / ZENMON_CONTRACT. When present the detail pane
+    /// says whether the selected key is declared and whether its encoding
+    /// matches — turning "what is this key" into a question the tool answers.
+    pub contract: Option<zenmon_core::contract::Contract>,
     pub topic_detail_scroll: u16,
 
     pub topic_msg_counts: HashMap<String, u32>,
@@ -488,6 +492,7 @@ impl App {
             tree_selected: 0,
             topics_filtering: false,
             diff_enabled: true,
+            contract: None,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
             topic_hz: HashMap::new(),
