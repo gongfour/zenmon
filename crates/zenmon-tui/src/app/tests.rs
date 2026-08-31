@@ -1171,6 +1171,44 @@ fn choosing_a_field_draws_its_sparkline_with_the_range() {
 }
 
 #[test]
+fn a_wide_value_pushes_the_range_onto_its_own_line_instead_of_wrapping() {
+    // A 13-digit epoch-millis timestamp is a real field on the pose messages
+    // this was checked against, and it does not leave room for the range
+    // beside it. The range has to move, not wrap mid-word.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    for i in 0..20i64 {
+        app.handle_zenoh_message(ZenohMessage {
+            key_expr: "nav/pose".into(),
+            payload: MessagePayload::from_json(
+                &serde_json::json!({ "timestamp": 1_788_180_124_679i64 + i }),
+            ),
+            encoding: "application/json".into(),
+            payload_bytes: 32,
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+            attachment_bytes: None,
+        });
+    }
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.plot_field
+        .insert("nav/pose".into(), "/timestamp".into());
+
+    let text = buffer_text(&draw(&mut app, 70, 20));
+    // Every part of the caption survives on one row rather than being split
+    // across a wrap.
+    assert!(
+        text.contains("min 1788180124679  max 1788180124698  n 20"),
+        "{text}"
+    );
+}
+
+#[test]
 fn the_plotted_field_is_remembered_per_key() {
     // Moving away and back should return to the signal you were watching.
     let mut app = App::new("test".into());

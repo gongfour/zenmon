@@ -23,16 +23,28 @@ use ratatui::Frame;
 /// Unicode block glyphs (low→high) for the master sparkbar.
 const SPARK_GLYPHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-/// Columns the value and its range need beside a sparkline.
-const PLOT_LABEL_COLS: u16 = 34;
-
-/// How many glyphs of value sparkline fit in a detail pane `width` wide.
+/// Lay out a value sparkline for a detail pane `width` wide: how many glyphs
+/// fit, and whether the range summary needs its own line.
 ///
-/// Sized to the pane rather than fixed: at a fixed 48 the line wrapped on a
-/// narrow split, which turns a shape you read at a glance into two rows you
-/// have to reassemble.
-fn plot_width(width: u16) -> usize {
-    width.saturating_sub(PLOT_LABEL_COLS).clamp(8, 64) as usize
+/// Measured from the strings that will actually be drawn rather than a fixed
+/// reservation. A two-digit percentage and a 13-digit timestamp need very
+/// different room, and a fixed guess wrapped the range mid-word on real pose
+/// data — turning a caption into a ragged second row.
+fn plot_layout(width: u16, value: &str, range: &str) -> (usize, bool) {
+    const INDENT: usize = 2;
+    const GAPS: usize = 5;
+    let avail = (width as usize).saturating_sub(INDENT);
+    let inline = value.chars().count() + range.chars().count() + GAPS;
+    if avail > inline + 8 {
+        ((avail - inline).min(64), false)
+    } else {
+        // No room for both, so the shape keeps the wide line and the range
+        // drops below it, where it reads as a caption.
+        (
+            avail.saturating_sub(value.chars().count() + 4).clamp(8, 64),
+            true,
+        )
+    }
 }
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -514,32 +526,39 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
                     "─ {} ─",
                     plot::pointer_label(pointer)
                 )));
-                lines.push(Line::from(vec![
+                let value = series.last().map(plot::format_value).unwrap_or_default();
+                // The range is what makes the shape readable: the sparkline is
+                // normalised to it, so without it a 2% wobble and a full
+                // discharge draw the same picture.
+                let range = format!(
+                    "min {}  max {}  n {}",
+                    plot::format_value(series.min),
+                    plot::format_value(series.max),
+                    series.values.len()
+                );
+                let (glyphs, range_below) = plot_layout(width, &value, &range);
+                let dim = Style::default().fg(Color::DarkGray);
+                let mut spans = vec![
                     Span::raw("  "),
                     Span::styled(
-                        plot::spark(&series, plot_width(width)),
+                        plot::spark(&series, glyphs),
                         Style::default().fg(Color::Cyan),
                     ),
                     Span::raw("  "),
                     Span::styled(
-                        series.last().map(plot::format_value).unwrap_or_default(),
+                        value,
                         Style::default()
                             .fg(Color::White)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    // The range is what makes the shape readable: the sparkline
-                    // is normalised to it, so without it a 2% wobble and a full
-                    // discharge draw the same picture.
-                    Span::styled(
-                        format!(
-                            "   min {}  max {}  n {}",
-                            plot::format_value(series.min),
-                            plot::format_value(series.max),
-                            series.values.len()
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
+                ];
+                if range_below {
+                    lines.push(Line::from(spans));
+                    lines.push(Line::from(Span::styled(format!("  {range}"), dim)));
+                } else {
+                    spans.push(Span::styled(format!("   {range}"), dim));
+                    lines.push(Line::from(spans));
+                }
                 lines.push(Line::from(""));
             }
             None => {
