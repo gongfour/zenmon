@@ -135,6 +135,10 @@ pub enum Overlay {
     /// Compose a message to publish. Only reachable when the session was
     /// started with `--allow-publish`.
     Publish,
+    /// Name the view being saved.
+    ProfileSave,
+    /// Pick a saved view to restore.
+    ProfileLoad,
 }
 
 /// An effect the command palette can trigger. Each entry in [`palette_commands`]
@@ -151,6 +155,8 @@ pub enum PaletteAction {
     /// capability is discoverable and its absence is explained rather than
     /// silently missing.
     OpenPublish,
+    SaveProfile,
+    LoadProfile,
     Quit,
 }
 
@@ -205,6 +211,16 @@ pub fn palette_commands() -> &'static [PaletteCommand] {
             label: "Publish to a key…",
             key_hint: "",
             action: PaletteAction::OpenPublish,
+        },
+        PaletteCommand {
+            label: "Save this view…",
+            key_hint: "",
+            action: PaletteAction::SaveProfile,
+        },
+        PaletteCommand {
+            label: "Load a saved view…",
+            key_hint: "",
+            action: PaletteAction::LoadProfile,
         },
         PaletteCommand {
             label: "Help",
@@ -423,6 +439,13 @@ pub struct App {
     pub pending_publish: Option<(String, String)>,
     /// Result of the last publish, shown in the editor.
     pub publish_result: Option<Result<String, String>>,
+
+    /// Saved views, read once at startup.
+    pub profiles: zenmon_core::profile::TuiProfiles,
+    /// Name being typed in the save dialog.
+    pub profile_name_input: String,
+    /// Cursor in the load picker.
+    pub profile_selected: usize,
     pub topic_detail_scroll: u16,
 
     pub topic_msg_counts: HashMap<String, u32>,
@@ -553,6 +576,9 @@ impl App {
             publish_field: PublishField::Key,
             pending_publish: None,
             publish_result: None,
+            profiles: zenmon_core::profile::TuiProfiles::default(),
+            profile_name_input: String::new(),
+            profile_selected: 0,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
             topic_hz: HashMap::new(),
@@ -801,6 +827,56 @@ impl App {
             .and_then(|h| h.latest())
             .map(|e| crate::plot::numeric_pointers(&e.view, PLOT_FIELD_LIMIT))
             .unwrap_or_default()
+    }
+
+    /// Capture the current view as a named profile.
+    ///
+    /// Deliberately not the whole of `App`: a view is the filter, what was
+    /// open, and what was plotted. Cursor position and scroll are where you
+    /// happened to stop, not what you were looking at, and restoring them
+    /// would fight the user on load.
+    pub(crate) fn snapshot_profile(&self, name: &str) -> zenmon_core::profile::TuiProfile {
+        let mut expanded: Vec<String> = self.tree_expanded.iter().cloned().collect();
+        let mut unfolded: Vec<String> = self.tree_unfolded.iter().cloned().collect();
+        // Sets iterate arbitrarily; sorting keeps a re-save from producing a
+        // spurious diff in the file.
+        expanded.sort();
+        unfolded.sort();
+        zenmon_core::profile::TuiProfile {
+            name: name.to_string(),
+            filter: self.topic_filter.clone(),
+            expanded,
+            unfolded,
+            plot_fields: self
+                .plot_field
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            diff_enabled: self.diff_enabled,
+        }
+    }
+
+    /// Restore a saved view.
+    ///
+    /// The expansion state is applied as the user's own, so the automatic
+    /// opening stands down — loading a view they saved is exactly as
+    /// deliberate as expanding by hand, and new keys must not reopen branches
+    /// the profile had closed.
+    pub(crate) fn apply_profile(&mut self, profile: &zenmon_core::profile::TuiProfile) {
+        self.topic_filter = profile.filter.clone();
+        self.topics_filtering = false;
+        self.tree_expanded = profile.expanded.iter().cloned().collect();
+        self.tree_unfolded = profile.unfolded.iter().cloned().collect();
+        self.plot_field = profile
+            .plot_fields
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        self.diff_enabled = profile.diff_enabled;
+        self.tree_selected = 0;
+        self.topic_detail_scroll = 0;
+        self.mark_tree_touched();
+        self.refresh_tree_rows();
     }
 
     /// Whether a key is publishing, has gone quiet, or has no payload yet.

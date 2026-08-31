@@ -49,6 +49,14 @@ impl App {
             self.handle_publish_key(key);
             return;
         }
+        if self.overlay == Overlay::ProfileSave {
+            self.handle_profile_save_key(key);
+            return;
+        }
+        if self.overlay == Overlay::ProfileLoad {
+            self.handle_profile_load_key(key);
+            return;
+        }
         if self.overlay == Overlay::Doctor {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
@@ -161,6 +169,65 @@ impl App {
             KeyCode::Char('P') => self.clear_plot_field(),
             KeyCode::Char('y') => self.copy_selected_payload(),
             KeyCode::Char('Y') => self.copy_selected_key(),
+            _ => {}
+        }
+    }
+
+    fn handle_profile_save_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+                self.profile_name_input.clear();
+            }
+            KeyCode::Enter => {
+                let name = self.profile_name_input.trim().to_string();
+                if name.is_empty() {
+                    self.set_error_toast("Give the view a name");
+                    return;
+                }
+                let profile = self.snapshot_profile(&name);
+                self.profiles.upsert(profile);
+                match zenmon_core::profile::save(&self.profiles) {
+                    // Say where it went: a saved thing the user cannot find is
+                    // barely saved.
+                    Ok(()) => {
+                        let where_ = zenmon_core::profile::config_path()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default();
+                        self.set_toast(format!("Saved '{name}' to {where_}"));
+                    }
+                    Err(e) => self.set_error_toast(format!("Could not save: {e}")),
+                }
+                self.overlay = Overlay::None;
+                self.profile_name_input.clear();
+            }
+            KeyCode::Backspace => {
+                self.profile_name_input.pop();
+            }
+            KeyCode::Char(c) => self.profile_name_input.push(c),
+            _ => {}
+        }
+    }
+
+    fn handle_profile_load_key(&mut self, key: KeyEvent) {
+        let count = self.profiles.profiles.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.overlay = Overlay::None,
+            KeyCode::Down | KeyCode::Char('j') => {
+                if count > 0 {
+                    self.profile_selected = (self.profile_selected + 1).min(count - 1);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.profile_selected = self.profile_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let Some(p) = self.profiles.profiles.get(self.profile_selected).cloned() {
+                    self.apply_profile(&p);
+                    self.set_toast(format!("Loaded '{}'", p.name));
+                }
+                self.overlay = Overlay::None;
+            }
             _ => {}
         }
     }
@@ -620,6 +687,18 @@ impl App {
                 self.scout_port_input.clear();
             }
             PaletteAction::OpenPublish => self.open_publish_editor(),
+            PaletteAction::SaveProfile => {
+                self.profile_name_input.clear();
+                self.overlay = Overlay::ProfileSave;
+            }
+            PaletteAction::LoadProfile => {
+                if self.profiles.profiles.is_empty() {
+                    self.set_error_toast("No saved views yet — save one first");
+                } else {
+                    self.profile_selected = 0;
+                    self.overlay = Overlay::ProfileLoad;
+                }
+            }
             PaletteAction::OpenHelp => {
                 self.overlay = Overlay::Help;
                 self.help_scroll = 0;

@@ -68,6 +68,12 @@ impl App {
         if self.overlay == Overlay::Publish {
             self.render_publish_editor(frame, body_area);
         }
+        if self.overlay == Overlay::ProfileSave {
+            self.render_profile_save(frame, body_area);
+        }
+        if self.overlay == Overlay::ProfileLoad {
+            self.render_profile_load(frame, body_area);
+        }
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
@@ -340,6 +346,122 @@ impl App {
         )));
 
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    }
+
+    /// Centre a popup of `w` x `h` inside `area`, or `None` if it will not fit.
+    fn popup_rect(area: Rect, w: u16, h: u16, min_w: u16, min_h: u16) -> Option<Rect> {
+        let width = w.min(area.width.saturating_sub(2));
+        let height = h.min(area.height.saturating_sub(2));
+        if width < min_w || height < min_h {
+            return None;
+        }
+        Some(Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        ))
+    }
+
+    fn render_profile_save(&self, frame: &mut Frame, content_area: Rect) {
+        let Some(popup) = Self::popup_rect(content_area, 60, 7, 28, 5) else {
+            return;
+        };
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Save this view ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        // Say what is being captured, so "view" is not a word the user has to
+        // guess the meaning of.
+        let plotted = self.plot_field.len();
+        let summary = format!(
+            "  filter {}  ·  {} open  ·  {} plotted",
+            if self.topic_filter.is_empty() {
+                "(none)".into()
+            } else {
+                format!("'{}'", self.topic_filter)
+            },
+            self.tree_expanded.len(),
+            plotted,
+        );
+
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled("  name  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{}_", self.profile_name_input),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray))),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  [Enter] save   [Esc] cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]),
+            inner,
+        );
+    }
+
+    fn render_profile_load(&self, frame: &mut Frame, content_area: Rect) {
+        let rows = self.profiles.profiles.len() as u16;
+        let Some(popup) = Self::popup_rect(content_area, 60, rows + 4, 28, 5) else {
+            return;
+        };
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Load a saved view ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let mut lines: Vec<Line> = self
+            .profiles
+            .profiles
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let style = if i == self.profile_selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let detail = format!(
+                    "{} open, {} plotted{}",
+                    p.expanded.len(),
+                    p.plot_fields.len(),
+                    if p.filter.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", /{}", p.filter)
+                    }
+                );
+                Line::from(Span::styled(
+                    format!(" {:<20} {:>30} ", p.name, detail),
+                    style,
+                ))
+            })
+            .collect();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " [Enter] load   [Esc] cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
