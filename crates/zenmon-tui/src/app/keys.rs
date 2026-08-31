@@ -1,0 +1,475 @@
+//! Keyboard dispatch: global chrome keys, per-space keys, overlay keys, and
+//! the text-input mode that filters and editors run in.
+
+use super::*;
+use crossterm::event::{KeyCode, KeyEvent};
+
+/// A detail-panel scroll request. Uppercase `J`/`K` scroll the detail panel in
+/// every view; we accept the uppercase char regardless of how the terminal
+/// reports the Shift modifier, so the contract is portable and consistent.
+/// Lowercase `j`/`k` remain list navigation and are not handled here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DetailScroll {
+    Down,
+    Up,
+}
+
+pub(crate) fn detail_scroll_action(key: KeyEvent) -> Option<DetailScroll> {
+    match key.code {
+        KeyCode::Char('J') => Some(DetailScroll::Down),
+        KeyCode::Char('K') => Some(DetailScroll::Up),
+        _ => None,
+    }
+}
+
+/// Apply a detail-scroll action to a scroll offset (3 lines per step,
+/// saturating at 0).
+pub(crate) fn apply_detail_scroll(scroll: u16, action: DetailScroll) -> u16 {
+    match action {
+        DetailScroll::Down => scroll.saturating_add(3),
+        DetailScroll::Up => scroll.saturating_sub(3),
+    }
+}
+
+impl App {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) {
+        if self.overlay == Overlay::Palette {
+            self.handle_palette_key(key);
+            return;
+        }
+        if self.overlay == Overlay::ScoutPort {
+            self.handle_scout_modal_key(key);
+            return;
+        }
+        if self.overlay == Overlay::Doctor {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
+                    self.overlay = Overlay::None;
+                }
+                KeyCode::Char('r') => self.pending_doctor_request = true,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.doctor_scroll = self.doctor_scroll.saturating_add(1)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.doctor_scroll = self.doctor_scroll.saturating_sub(1)
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.overlay != Overlay::None {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    self.overlay = Overlay::None;
+                    self.help_scroll = 0;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.help_scroll = self.help_scroll.saturating_add(1)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1)
+                }
+                _ => {}
+            }
+            return;
+        }
+        // Text input (filters, query editor, modals) swallows every key so that
+        // typing `q`/`1`/`2`/`?` edits text instead of triggering global actions.
+        if self.is_text_input_active() {
+            self.handle_text_input_key(key);
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('?') => {
+                self.overlay = Overlay::Help;
+                self.help_scroll = 0;
+            }
+            KeyCode::Char('d') => {
+                self.overlay = Overlay::Doctor;
+                self.doctor_scroll = 0;
+                self.pending_doctor_request = true;
+            }
+            KeyCode::Char(':') => {
+                self.overlay = Overlay::Palette;
+                self.palette_input.clear();
+                self.palette_selected = 0;
+            }
+            KeyCode::Tab => self.switch_space(self.space.next()),
+            KeyCode::Char('1') => self.switch_space(Space::Traffic),
+            KeyCode::Char('2') => self.switch_space(Space::Network),
+            KeyCode::Enter | KeyCode::Right => self.pane_focus = PaneFocus::Detail,
+            KeyCode::Esc | KeyCode::Left => self.pane_focus = PaneFocus::Master,
+            _ => self.handle_space_key(key),
+        }
+    }
+
+    /// Dispatch a key not claimed by the global chrome to the active space.
+    fn handle_space_key(&mut self, key: KeyEvent) {
+        match self.space {
+            Space::Traffic => self.handle_traffic_key(key),
+            Space::Network => self.handle_network_key(key),
+        }
+    }
+
+    /// Traffic-space normal-mode keys (master navigation + detail actions).
+    /// Global keys (`q`, `?`, `Tab`, `1`/`2`, `Enter`/`Esc`) are consumed by
+    /// `handle_key` before this runs.
+    fn handle_traffic_key(&mut self, key: KeyEvent) {
+        if let Some(action) = detail_scroll_action(key) {
+            self.topic_detail_scroll = apply_detail_scroll(self.topic_detail_scroll, action);
+            return;
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => self.move_topic_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_topic_selection(-1),
+            KeyCode::Char('/') => self.topics_filtering = true,
+            KeyCode::Char('L') => self.detail_mode = DetailMode::Live,
+            KeyCode::Char('Q') => {
+                self.detail_mode = DetailMode::Query;
+                if let Some(key_expr) = self.selected_topic_key() {
+                    self.query_history.push(key_expr.clone());
+                    self.pending_query = Some(key_expr);
+                }
+            }
+            KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
+            KeyCode::Char('f') => {
+                self.follow_stream();
+                self.topic_detail_scroll = 0;
+            }
+            KeyCode::Char('y') => self.copy_selected_payload(),
+            KeyCode::Char('Y') => self.copy_selected_key(),
+            _ => {}
+        }
+    }
+
+    /// Move the master cursor within `filtered_topics()`, clamped to bounds, and
+    /// reset the detail scroll so the new selection starts at the top.
+    pub(crate) fn move_topic_selection(&mut self, delta: isize) {
+        let len = self.filtered_topics().len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.topic_selected.min(len - 1) as isize;
+        self.topic_selected = (cur + delta).clamp(0, len as isize - 1) as usize;
+        self.topic_detail_scroll = 0;
+    }
+
+    /// The key expression currently selected in the Traffic master, if any.
+    fn selected_topic_key(&self) -> Option<String> {
+        self.filtered_topics()
+            .get(self.topic_selected)
+            .map(|t| t.key_expr.clone())
+    }
+
+    fn copy_selected_payload(&mut self) {
+        let Some(key) = self.selected_topic_key() else {
+            self.set_error_toast("No key selected to copy");
+            return;
+        };
+        match self.topic_latest.get(&key).map(|(m, _)| m.payload.pretty()) {
+            Some(text) => self.copy_to_clipboard(text, "payload"),
+            None => self.set_error_toast("No payload received for selected key"),
+        }
+    }
+
+    fn copy_selected_key(&mut self) {
+        match self.selected_topic_key() {
+            Some(key) => self.copy_to_clipboard(key, "key"),
+            None => self.set_error_toast("No key selected to copy"),
+        }
+    }
+
+    /// Network-space normal-mode keys (unified participant navigation + detail
+    /// actions). Global keys are consumed by `handle_key` before this runs.
+    fn handle_network_key(&mut self, key: KeyEvent) {
+        if let Some(action) = detail_scroll_action(key) {
+            self.node_detail_scroll = apply_detail_scroll(self.node_detail_scroll, action);
+            return;
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => self.move_network_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_network_selection(-1),
+            KeyCode::Char('s') => {
+                if !self.scout_in_progress {
+                    self.pending_scout_request = true;
+                }
+            }
+            KeyCode::Char('y') => self.copy_selected_participant(),
+            _ => {}
+        }
+    }
+
+    /// Move the unified cursor within `network_rows()`, clamped to bounds, and
+    /// reset the detail scroll so the new selection starts at the top.
+    pub(crate) fn move_network_selection(&mut self, delta: isize) {
+        let len = self.network_rows().len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.network_selected.min(len - 1) as isize;
+        self.network_selected = (cur + delta).clamp(0, len as isize - 1) as usize;
+        self.node_detail_scroll = 0;
+    }
+
+    fn copy_selected_participant(&mut self) {
+        match self.selected_network_row() {
+            Some(NetworkRow::Session(i)) => {
+                let zid = self.nodes[i].zid.clone();
+                self.copy_to_clipboard(zid, "zid");
+            }
+            Some(NetworkRow::Service(i)) => {
+                let key = self.liveliness_tokens[i].key_expr.clone();
+                self.copy_to_clipboard(key, "key");
+            }
+            None => self.set_error_toast("No participant selected to copy"),
+        }
+    }
+
+    /// The unified list of selectable participant rows, in display order: every
+    /// transport session (in node order) followed by every liveliness service.
+    /// Services are ordered so tokens of the same group are contiguous (groups in
+    /// first-appearance order), which is exactly the order the view draws them —
+    /// so `network_selected` maps 1:1 onto the rendered rows.
+    pub(crate) fn network_rows(&self) -> Vec<NetworkRow> {
+        let mut rows: Vec<NetworkRow> = (0..self.nodes.len()).map(NetworkRow::Session).collect();
+
+        let mut group_order: Vec<String> = Vec::new();
+        let mut by_group: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, token) in self.liveliness_tokens.iter().enumerate() {
+            let group = token
+                .group_prefix()
+                .unwrap_or_else(|| "(ungrouped)".to_string());
+            if !by_group.contains_key(&group) {
+                group_order.push(group.clone());
+            }
+            by_group.entry(group).or_default().push(i);
+        }
+        for group in &group_order {
+            for &i in &by_group[group] {
+                rows.push(NetworkRow::Service(i));
+            }
+        }
+        rows
+    }
+
+    /// The participant row under the unified cursor, if any.
+    pub(crate) fn selected_network_row(&self) -> Option<NetworkRow> {
+        self.network_rows().get(self.network_selected).copied()
+    }
+
+    fn switch_space(&mut self, space: Space) {
+        self.space = space;
+        self.pane_focus = PaneFocus::Master;
+    }
+
+    pub(crate) fn is_text_input_active(&self) -> bool {
+        self.topics_filtering
+            || self.stream_filtering
+            || self.query_editing
+            || self.overlay == Overlay::Palette
+            || self.overlay == Overlay::ScoutPort
+    }
+
+    /// Indices into [`palette_commands`] whose label contains `palette_input`
+    /// (case-insensitive substring). Empty input matches everything.
+    pub(crate) fn filtered_palette_commands(&self) -> Vec<usize> {
+        let needle = self.palette_input.to_ascii_lowercase();
+        palette_commands()
+            .iter()
+            .enumerate()
+            .filter(|(_, cmd)| {
+                needle.is_empty() || cmd.label.to_ascii_lowercase().contains(&needle)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Command-palette key handling: printable chars filter, arrows/Tab move the
+    /// cursor within the filtered list, Enter runs, Esc closes.
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+            }
+            KeyCode::Enter => {
+                let filtered = self.filtered_palette_commands();
+                if let Some(&idx) = filtered.get(self.palette_selected) {
+                    let action = palette_commands()[idx].action;
+                    self.run_palette_action(action);
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let len = self.filtered_palette_commands().len();
+                if len > 0 {
+                    self.palette_selected = (self.palette_selected + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => {
+                self.palette_selected = self.palette_selected.saturating_sub(1);
+            }
+            KeyCode::Backspace => {
+                self.palette_input.pop();
+                self.palette_selected = 0;
+            }
+            KeyCode::Char(c) => {
+                self.palette_input.push(c);
+                self.palette_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Perform a palette command's effect. Every action closes the palette,
+    /// except `OpenScoutPort`, which transitions to the ScoutPort overlay.
+    pub(crate) fn run_palette_action(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::SwitchSpace(space) => {
+                self.switch_space(space);
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::RunDoctor => {
+                self.overlay = Overlay::Doctor;
+                self.doctor_scroll = 0;
+                self.pending_doctor_request = true;
+            }
+            PaletteAction::ScoutRefresh => {
+                if !self.scout_in_progress {
+                    self.pending_scout_request = true;
+                }
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::SetMode(mode) => {
+                if mode != self.current_mode {
+                    self.pending_reconnect_mode = Some(mode);
+                    self.set_toast(format!("Switching to {} mode…", mode));
+                } else {
+                    self.set_toast(format!("Already in {} mode", mode));
+                }
+                self.overlay = Overlay::None;
+            }
+            PaletteAction::OpenScoutPort => {
+                self.overlay = Overlay::ScoutPort;
+                self.scout_port_input.clear();
+            }
+            PaletteAction::OpenHelp => {
+                self.overlay = Overlay::Help;
+                self.help_scroll = 0;
+            }
+            PaletteAction::Quit => {
+                self.should_quit = true;
+            }
+        }
+    }
+
+    /// ScoutPort modal key handling: type a custom port, scan domains, or pick a
+    /// scanned result, then reconnect on that scout port.
+    fn handle_scout_modal_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+                self.scout_port_input.clear();
+            }
+            KeyCode::Char('s')
+                if self.scout_port_input.is_empty() && !self.port_scan_in_progress =>
+            {
+                self.pending_port_scan_request = true;
+            }
+            KeyCode::Enter => {
+                let from_input = self
+                    .scout_port_input
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| *p > 0);
+                let from_list = if self.scout_port_input.is_empty() {
+                    self.port_scan_results
+                        .iter()
+                        .filter(|r| !r.nodes.is_empty())
+                        .nth(self.port_scan_selected)
+                        .map(|r| r.port)
+                } else {
+                    None
+                };
+                if let Some(port) = from_input.or(from_list) {
+                    self.pending_reconnect_port = Some(port);
+                    self.scout_port_current = Some(port);
+                    self.overlay = Overlay::None;
+                    self.scout_port_input.clear();
+                    self.set_toast(format!("Reconnecting with scout port {}", port));
+                } else {
+                    self.set_error_toast("Type a port or scan and select one");
+                }
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() && self.scout_port_input.len() < 5 => {
+                self.scout_port_input.push(c);
+            }
+            KeyCode::Backspace => {
+                self.scout_port_input.pop();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.port_scan_selected = self.port_scan_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let count = self
+                    .port_scan_results
+                    .iter()
+                    .filter(|r| !r.nodes.is_empty())
+                    .count();
+                if count > 0 && self.port_scan_selected + 1 < count {
+                    self.port_scan_selected += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_text_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.topics_filtering = false;
+                self.stream_filtering = false;
+                self.query_editing = false;
+            }
+            KeyCode::Enter => {
+                if self.query_editing {
+                    self.query_editing = false;
+                    if !self.query_input.is_empty() {
+                        self.query_history.push(self.query_input.clone());
+                        self.pending_query = Some(self.query_input.clone());
+                    }
+                }
+                if self.topics_filtering {
+                    self.topics_filtering = false;
+                }
+                if self.stream_filtering {
+                    self.stream_filtering = false;
+                    self.clamp_stream_selection();
+                }
+            }
+            KeyCode::Char(c) => {
+                if self.topics_filtering {
+                    self.topic_filter.push(c);
+                } else if self.stream_filtering {
+                    self.stream_key_filter = None;
+                    self.stream_filter.push(c);
+                    self.clamp_stream_selection();
+                } else if self.query_editing {
+                    self.query_input.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if self.topics_filtering {
+                    self.topic_filter.pop();
+                } else if self.stream_filtering {
+                    self.stream_key_filter = None;
+                    self.stream_filter.pop();
+                    self.clamp_stream_selection();
+                } else if self.query_editing {
+                    self.query_input.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+}

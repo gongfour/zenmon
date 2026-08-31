@@ -1,0 +1,1199 @@
+//! Behavioural tests for `App`.
+//!
+//! Kept as one module rather than split along the same lines as the code: each
+//! test drives a key or a message all the way through to rendered output, so it
+//! touches several of the sibling modules at once.
+
+use super::chrome::domain_port_label;
+use super::keys::{apply_detail_scroll, detail_scroll_action, DetailScroll};
+use super::mouse::{list_hit, space_tab_hit};
+use super::*;
+use crate::event::AppEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
+use std::time::Duration;
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+#[test]
+fn uppercase_j_k_map_to_detail_scroll_without_shift() {
+    // Uppercase J/K scroll regardless of whether Shift is reported.
+    assert_eq!(
+        detail_scroll_action(key(KeyCode::Char('J'))),
+        Some(DetailScroll::Down)
+    );
+    assert_eq!(
+        detail_scroll_action(key(KeyCode::Char('K'))),
+        Some(DetailScroll::Up)
+    );
+    assert_eq!(
+        detail_scroll_action(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT)),
+        Some(DetailScroll::Down)
+    );
+}
+
+#[test]
+fn lowercase_j_k_are_not_detail_scroll() {
+    assert_eq!(detail_scroll_action(key(KeyCode::Char('j'))), None);
+    assert_eq!(detail_scroll_action(key(KeyCode::Char('k'))), None);
+}
+
+#[test]
+fn rate_window_evicts_beyond_cap_and_detects_idle() {
+    let mut w = RateWindow::new(3);
+    w.push(10);
+    w.push(20);
+    w.push(30);
+    w.push(40); // evicts the 10
+    assert_eq!(w.series(), vec![20, 30, 40]);
+    assert_eq!(w.latest(), 40);
+    assert!(!w.is_all_zero());
+    let mut idle = RateWindow::new(2);
+    idle.push(0);
+    idle.push(0);
+    assert!(idle.is_all_zero());
+}
+
+#[test]
+fn format_bytes_per_sec_scales_units() {
+    assert_eq!(format_bytes_per_sec(500), "500 B/s");
+    assert_eq!(format_bytes_per_sec(2048), "2.0 KB/s");
+    assert_eq!(format_bytes_per_sec(3_145_728), "3.0 MB/s");
+}
+
+#[test]
+fn narrow_below_threshold() {
+    assert!(is_narrow(89));
+    assert!(!is_narrow(90));
+    assert!(!is_narrow(200));
+}
+
+#[test]
+fn empty_reason_reflects_connection_state() {
+    let mut app = App::new("test".into());
+    app.connection_state = ConnectionState::Connecting;
+    assert_eq!(app.topics_empty_reason(), EmptyReason::Connecting);
+    app.connection_state = ConnectionState::Disconnected("x".into());
+    assert_eq!(app.nodes_empty_reason(), EmptyReason::Disconnected);
+}
+
+#[test]
+fn empty_reason_distinguishes_filter_from_no_data() {
+    let mut app = App::new("test".into());
+    app.connection_state = ConnectionState::Connected("zid".into());
+    // No data at all → NoDataYet.
+    assert_eq!(app.topics_empty_reason(), EmptyReason::NoDataYet);
+    // Data exists but the filter hides it → FilteredOut.
+    app.topics.push(TopicInfo {
+        key_expr: "a/b".into(),
+    });
+    app.topic_filter = "zzz".into();
+    assert_eq!(app.topics_empty_reason(), EmptyReason::FilteredOut);
+}
+
+#[test]
+fn question_mark_toggles_help_overlay() {
+    let mut app = App::new("test".into());
+    assert_eq!(app.overlay, Overlay::None);
+    app.handle_key(key(KeyCode::Char('?')));
+    assert_eq!(app.overlay, Overlay::Help);
+    // q closes the overlay (does not quit)
+    app.handle_key(key(KeyCode::Char('q')));
+    assert_eq!(app.overlay, Overlay::None);
+    assert!(!app.should_quit);
+}
+
+#[test]
+fn help_scrolls_and_esc_closes() {
+    let mut app = App::new("test".into());
+    app.handle_key(key(KeyCode::Char('?')));
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.help_scroll, 1);
+    app.handle_key(key(KeyCode::Char('k')));
+    assert_eq!(app.help_scroll, 0);
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.overlay, Overlay::None);
+}
+
+#[test]
+fn tab_and_number_keys_switch_space() {
+    let mut app = App::new("test".into());
+    assert_eq!(app.space, Space::Traffic);
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.space, Space::Network);
+    app.handle_key(key(KeyCode::Char('1')));
+    assert_eq!(app.space, Space::Traffic);
+    app.handle_key(key(KeyCode::Char('2')));
+    assert_eq!(app.space, Space::Network);
+}
+
+#[test]
+fn enter_and_esc_move_pane_focus() {
+    let mut app = App::new("test".into());
+    assert_eq!(app.pane_focus, PaneFocus::Master);
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.pane_focus, PaneFocus::Detail);
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.pane_focus, PaneFocus::Master);
+}
+
+#[test]
+fn switching_space_resets_pane_focus_to_master() {
+    let mut app = App::new("test".into());
+    app.pane_focus = PaneFocus::Detail;
+    app.handle_key(key(KeyCode::Char('2')));
+    assert_eq!(app.space, Space::Network);
+    assert_eq!(app.pane_focus, PaneFocus::Master);
+}
+
+#[test]
+fn domain_port_label_maps_domain_range() {
+    assert_eq!(domain_port_label(7446), "domain 0 (port 7446)");
+    assert_eq!(domain_port_label(7450), "domain 4 (port 7450)");
+    assert_eq!(domain_port_label(7546), "domain 100 (port 7546)");
+}
+
+#[test]
+fn domain_port_label_treats_out_of_range_as_custom_port() {
+    // Below 7446 must not be misreported as "domain 0".
+    assert_eq!(domain_port_label(7000), "port 7000 (custom)");
+    assert_eq!(domain_port_label(8000), "port 8000 (custom)");
+}
+
+#[test]
+fn apply_detail_scroll_saturates_at_zero() {
+    assert_eq!(apply_detail_scroll(0, DetailScroll::Up), 0);
+    assert_eq!(apply_detail_scroll(0, DetailScroll::Down), 3);
+    assert_eq!(apply_detail_scroll(5, DetailScroll::Up), 2);
+}
+
+#[test]
+fn space_tab_hit_inside_rect_returns_index() {
+    let rects = [Some(Rect::new(1, 0, 9, 1)), Some(Rect::new(12, 0, 9, 1))];
+    assert_eq!(space_tab_hit(&rects, 2, 0), Some(0));
+    assert_eq!(space_tab_hit(&rects, 14, 0), Some(1));
+}
+
+#[test]
+fn space_tab_hit_outside_returns_none() {
+    let rects = [Some(Rect::new(1, 0, 9, 1)), None];
+    assert_eq!(space_tab_hit(&rects, 50, 0), None);
+    assert_eq!(space_tab_hit(&rects, 2, 5), None);
+}
+
+#[test]
+fn list_hit_converts_row_to_index() {
+    let rect = Rect::new(0, 5, 20, 10);
+    assert_eq!(list_hit(rect, 6, 0, 8, 6), Some(0));
+    assert_eq!(list_hit(rect, 8, 0, 8, 6), Some(2));
+    assert_eq!(list_hit(rect, 5, 0, 8, 6), None);
+    assert_eq!(list_hit(rect, 15, 0, 8, 6), None);
+    assert_eq!(list_hit(rect, 20, 0, 8, 6), None);
+    assert_eq!(list_hit(rect, 14, 0, 8, 6), None);
+}
+
+#[test]
+fn list_hit_respects_scroll_offset() {
+    let rect = Rect::new(0, 5, 20, 10);
+    assert_eq!(list_hit(rect, 6, 4, 20, 6), Some(4));
+    assert_eq!(list_hit(rect, 9, 4, 20, 6), Some(7));
+}
+
+#[test]
+fn sub_selected_zero_stays_on_new_message() {
+    let mut app = App::new("test".into());
+    app.sub_selected = 0;
+    let msg = ZenohMessage {
+        key_expr: "a".into(),
+        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    };
+    app.handle_zenoh_message(msg);
+    assert_eq!(app.sub_selected, 0);
+}
+
+#[test]
+fn sub_selected_nonzero_follows_message_through_shift() {
+    let mut app = App::new("test".into());
+    let make = |k: &str| ZenohMessage {
+        key_expr: k.into(),
+        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    };
+    app.handle_zenoh_message(make("a"));
+    app.handle_zenoh_message(make("b"));
+    app.handle_zenoh_message(make("c"));
+    app.pin_stream_at(1);
+    app.handle_zenoh_message(make("d"));
+    assert!(!app.stream_follow);
+    assert_eq!(app.sub_selected, 2);
+}
+
+#[test]
+fn filtered_sub_messages_match_key_and_payload() {
+    let mut app = App::new("test".into());
+    app.handle_zenoh_message(ZenohMessage {
+        key_expr: "robot/pose".into(),
+        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!({"x": 1})),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+    app.handle_zenoh_message(ZenohMessage {
+        key_expr: "robot/status".into(),
+        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!("idle")),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+
+    app.stream_filter = "pose".into();
+    assert_eq!(app.filtered_sub_messages().len(), 1);
+    assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/pose");
+
+    app.stream_filter = "idle".into();
+    assert_eq!(app.filtered_sub_messages().len(), 1);
+    assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/status");
+}
+
+#[test]
+fn sub_selected_only_shifts_for_matching_filtered_message() {
+    let mut app = App::new("test".into());
+    let make = |k: &str| ZenohMessage {
+        key_expr: k.into(),
+        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    };
+    app.handle_zenoh_message(make("alpha/1"));
+    app.handle_zenoh_message(make("beta/1"));
+    app.handle_zenoh_message(make("alpha/2"));
+
+    app.stream_filter = "alpha".into();
+    app.pin_stream_at(1);
+
+    app.handle_zenoh_message(make("beta/2"));
+    assert_eq!(app.sub_selected, 1);
+
+    app.handle_zenoh_message(make("alpha/3"));
+    assert_eq!(app.sub_selected, 2);
+}
+
+#[test]
+fn follow_stream_resets_selection_to_latest() {
+    let mut app = App::new("test".into());
+    app.stream_follow = false;
+    app.sub_selected = 3;
+    app.follow_stream();
+    assert!(app.stream_follow);
+    assert_eq!(app.sub_selected, 0);
+}
+
+#[test]
+fn pin_stream_disables_follow() {
+    let mut app = App::new("test".into());
+    app.pin_stream_at(2);
+    assert!(!app.stream_follow);
+    assert_eq!(app.sub_selected, 0);
+}
+
+#[test]
+fn clear_network_state_clears_topics_messages_and_nodes() {
+    let mut app = App::new("test".into());
+    let make = |k: &str| ZenohMessage {
+        key_expr: k.into(),
+        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    };
+    app.handle_zenoh_message(make("a"));
+    app.handle_zenoh_message(make("b"));
+    app.total_msg_count = 7;
+    app.total_hz = 3.5;
+    app.topic_selected = 1;
+    app.topic_detail_scroll = 4;
+    app.list_scroll_offset = 5;
+    app.sub_selected = 1;
+    app.admin_nodes.push(zenmon_core::types::NodeInfo {
+        zid: "z1".into(),
+        kind: "router".into(),
+        locators: vec![],
+        metadata: None,
+        sources: zenmon_core::types::NodeSources::default(),
+        admin_last_seen: None,
+        scout_last_seen: None,
+    });
+    app.scout_nodes.push(zenmon_core::types::NodeInfo {
+        zid: "z2".into(),
+        kind: "peer".into(),
+        locators: vec![],
+        metadata: None,
+        sources: zenmon_core::types::NodeSources::default(),
+        admin_last_seen: None,
+        scout_last_seen: None,
+    });
+    app.nodes = zenmon_core::merge::merge_nodes(&app.admin_nodes, &app.scout_nodes);
+    app.node_selected = 1;
+    app.node_detail_scroll = 2;
+
+    app.clear_network_state();
+
+    assert!(app.topics.is_empty());
+    assert!(app.topic_latest.is_empty());
+    assert!(app.topic_msg_counts.is_empty());
+    assert!(app.topic_hz.is_empty());
+    assert_eq!(app.total_msg_count, 0);
+    assert_eq!(app.total_hz, 0.0);
+    assert_eq!(app.topic_selected, 0);
+    assert_eq!(app.topic_detail_scroll, 0);
+    assert_eq!(app.list_scroll_offset, 0);
+
+    assert!(app.sub_messages.is_empty());
+    assert!(app.recent_messages.is_empty());
+    assert_eq!(app.sub_selected, 0);
+
+    assert!(app.admin_nodes.is_empty());
+    assert!(app.scout_nodes.is_empty());
+    assert!(app.nodes.is_empty());
+    assert_eq!(app.node_selected, 0);
+    assert_eq!(app.node_detail_scroll, 0);
+}
+
+#[test]
+fn clear_network_state_preserves_query_history_and_filters() {
+    let mut app = App::new("test".into());
+    app.query_input = "demo/**".into();
+    app.query_history.push("demo/**".into());
+    app.query_results.push(ZenohMessage {
+        key_expr: "demo/x".into(),
+        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(1)),
+        encoding: String::new(),
+        payload_bytes: 0,
+        timestamp: None,
+        kind: "get".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+    app.topic_filter = "abc".into();
+    app.stream_filter = "xyz".into();
+    app.stream_follow = false;
+    app.sub_paused = true;
+
+    app.clear_network_state();
+
+    assert_eq!(app.query_input, "demo/**");
+    assert_eq!(app.query_history, vec!["demo/**".to_string()]);
+    assert_eq!(app.query_results.len(), 1);
+    assert_eq!(app.topic_filter, "abc");
+    assert_eq!(app.stream_filter, "xyz");
+    assert!(!app.stream_follow);
+    assert!(app.sub_paused);
+}
+
+fn seed_topics(app: &mut App, keys: &[&str]) {
+    for k in keys {
+        app.topics.push(TopicInfo {
+            key_expr: (*k).into(),
+        });
+    }
+    app.topics.sort_by(|a, b| a.key_expr.cmp(&b.key_expr));
+}
+
+#[test]
+fn traffic_q_runs_query_on_selected_key() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["demo/a", "demo/b"]);
+    app.topic_selected = 1; // demo/b
+    app.handle_key(key(KeyCode::Char('Q')));
+    assert_eq!(app.detail_mode, DetailMode::Query);
+    assert_eq!(app.pending_query, Some("demo/b".to_string()));
+    assert_eq!(app.query_history, vec!["demo/b".to_string()]);
+}
+
+#[test]
+fn traffic_l_sets_live_mode() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.detail_mode = DetailMode::Query;
+    app.handle_key(key(KeyCode::Char('L')));
+    assert_eq!(app.detail_mode, DetailMode::Live);
+}
+
+#[test]
+fn traffic_jk_move_and_clamp_selection() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["a", "b", "c"]);
+    assert_eq!(app.topic_selected, 0);
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.topic_selected, 1);
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.topic_selected, 2);
+    // Clamp at the bottom.
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.topic_selected, 2);
+    app.handle_key(key(KeyCode::Char('k')));
+    app.handle_key(key(KeyCode::Char('k')));
+    assert_eq!(app.topic_selected, 0);
+    // Clamp at the top.
+    app.handle_key(key(KeyCode::Char('k')));
+    assert_eq!(app.topic_selected, 0);
+}
+
+#[test]
+fn traffic_move_resets_detail_scroll() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["a", "b"]);
+    app.topic_detail_scroll = 9;
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.topic_selected, 1);
+    assert_eq!(app.topic_detail_scroll, 0);
+}
+
+#[test]
+fn render_traffic_with_data_wide_and_narrow_shows_key() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    for (w, h) in [(120u16, 30u16), (60u16, 20u16)] {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.connection_state = ConnectionState::Connected("zid".into());
+        app.topics.push(TopicInfo {
+            key_expr: "demo/robot/pose".into(),
+        });
+        let msg = ZenohMessage {
+            key_expr: "demo/robot/pose".into(),
+            payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
+            encoding: "application/json".into(),
+            payload_bytes: 8,
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+            attachment_bytes: None,
+        };
+        app.topic_latest
+            .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+        app.sub_messages.push_front(msg);
+        app.topic_hz.insert("demo/robot/pose".into(), 12.0);
+
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        // Wide → master; narrow default focus is Master → master shows the key.
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(
+            text.contains("demo/robot/pose"),
+            "key missing at {}x{}: {}",
+            w,
+            h,
+            text
+        );
+    }
+}
+
+#[test]
+fn render_traffic_narrow_detail_pane_does_not_panic() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.topics.push(TopicInfo {
+        key_expr: "demo/robot/pose".into(),
+    });
+    let msg = ZenohMessage {
+        key_expr: "demo/robot/pose".into(),
+        payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
+        encoding: "application/json".into(),
+        payload_bytes: 8,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    };
+    app.topic_latest
+        .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+    app.sub_messages.push_front(msg);
+
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("demo/robot/pose"), "detail key missing");
+}
+
+/// Headless render smoke test: drive `render()` through ratatui's in-memory
+/// TestBackend at wide and narrow widths (either side of the two-pane
+/// breakpoint) to prove the layout builds without panicking and the header
+/// tab / space body actually paint. Substitutes for interactive TTY checks.
+fn render_at(width: u16, height: u16, space: Space) -> ratatui::buffer::Buffer {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.space = space;
+    terminal.draw(|f| app.render(f)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+fn buffer_text(buf: &ratatui::buffer::Buffer) -> String {
+    buf.content().iter().map(|c| c.symbol()).collect()
+}
+
+/// Render `buf` back into a row-by-row text grid (with borders visible), for
+/// eyeballing the real layout in a terminal.
+fn buffer_grid(buf: &ratatui::buffer::Buffer) -> String {
+    let area = buf.area();
+    let mut out = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            out.push_str(buf[(area.x + x, area.y + y)].symbol());
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// A dev harness (not run by default): seed a realistic network and dump the
+/// actual rendered frames to stdout for manual inspection.
+/// Run with: `cargo test -p zenmon-tui dump_frames -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn dump_frames() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let seed = |space: Space| {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = space;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        app.self_zid = Some("a3f19c0011223344".into());
+        // Topics + rates.
+        for (k, hz) in [
+            ("demo/robot/pose", 12.0),
+            ("demo/robot/battery", 1.0),
+            ("demo/sensor/lidar", 30.0),
+            ("sys/health", 0.0),
+        ] {
+            app.topics.push(TopicInfo { key_expr: k.into() });
+            app.topic_hz.insert(k.into(), hz);
+        }
+        let msg = ZenohMessage {
+            key_expr: "demo/robot/pose".into(),
+            payload: MessagePayload::from_json(
+                &serde_json::json!({"x": 1.21, "y": 3.40, "theta": 0.11}),
+            ),
+            encoding: "application/json".into(),
+            payload_bytes: 40,
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+            attachment_bytes: None,
+        };
+        app.topic_latest
+            .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+        app.sub_messages.push_front(msg);
+        app.total_hz = 43.0;
+        // Nodes + services.
+        app.nodes.push(make_node("a3f19c0011223344", "router"));
+        app.nodes.push(make_node("b2c4ffee00990011", "peer"));
+        app.liveliness_tokens
+            .push(make_token("demo/robot/node/action_executor", true));
+        app.liveliness_tokens
+            .push(make_token("demo/robot/node/topic_recorder", false));
+        app.liveliness_tokens
+            .push(make_token("sys/node/system_monitor", true));
+        app
+    };
+
+    for (label, space, w, h) in [
+        ("TRAFFIC (wide 110x24)", Space::Traffic, 110u16, 24u16),
+        ("NETWORK (wide 110x24)", Space::Network, 110u16, 24u16),
+        ("NETWORK (narrow 64x20)", Space::Network, 64u16, 20u16),
+    ] {
+        let mut app = seed(space);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== {label} =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // Doctor overlay over the Network space, with a mixed report.
+    {
+        use std::time::Duration;
+        use zenmon_core::doctor::{Check, DoctorReport};
+        let mut app = seed(Space::Network);
+        app.doctor_report = Some(DoctorReport::new(vec![
+            Check::pass("config", Duration::from_millis(1), None),
+            Check::pass("session", Duration::from_millis(8), None),
+            Check::pass(
+                "connection",
+                Duration::from_millis(12),
+                Some("1 router(s), 1 peer(s)".into()),
+            ),
+            Check::warn(
+                "liveliness",
+                Duration::from_millis(0),
+                "no_tokens",
+                "no liveliness tokens on 'sys/**'",
+                "is the monitored app declaring liveliness?",
+            ),
+        ]));
+        app.overlay = Overlay::Doctor;
+        let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== DOCTOR overlay (110x24) =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // Command palette over Traffic.
+    {
+        let mut app = seed(Space::Traffic);
+        app.overlay = Overlay::Palette;
+        let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== PALETTE overlay (110x24) =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+}
+
+#[test]
+fn render_wide_paints_two_pane_traffic() {
+    let buf = render_at(120, 30, Space::Traffic);
+    let text = buffer_text(&buf);
+    assert!(text.contains("Traffic"), "space tab / master title missing");
+    assert!(
+        text.contains("Detail"),
+        "detail pane missing in wide layout"
+    );
+}
+
+#[test]
+fn render_narrow_single_pane_does_not_panic() {
+    // Below TWO_PANE_MIN_WIDTH: single pane, compact 1-line header.
+    let buf = render_at(60, 20, Space::Network);
+    let text = buffer_text(&buf);
+    assert!(text.contains("Network"), "network master title missing");
+}
+
+fn make_node(zid: &str, kind: &str) -> NodeInfo {
+    NodeInfo {
+        zid: zid.into(),
+        kind: kind.into(),
+        locators: vec!["tcp/127.0.0.1:7447".into()],
+        metadata: None,
+        sources: zenmon_core::types::NodeSources::ADMIN,
+        admin_last_seen: Some(SystemTime::now()),
+        scout_last_seen: None,
+    }
+}
+
+fn make_token(key_expr: &str, alive: bool) -> LivelinessToken {
+    LivelinessToken {
+        key_expr: key_expr.into(),
+        source_zid: None,
+        alive,
+    }
+}
+
+#[test]
+fn network_jk_move_and_clamp_selection() {
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    app.nodes.push(make_node("z1", "router"));
+    app.nodes.push(make_node("z2", "peer"));
+    app.liveliness_tokens
+        .push(make_token("fleet/r1/node/a", true));
+    // 2 sessions + 1 service = 3 selectable rows.
+    assert_eq!(app.network_rows().len(), 3);
+    assert_eq!(app.network_selected, 0);
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.network_selected, 1);
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.network_selected, 2);
+    // Clamp at the bottom.
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.network_selected, 2);
+    app.handle_key(key(KeyCode::Char('k')));
+    app.handle_key(key(KeyCode::Char('k')));
+    assert_eq!(app.network_selected, 0);
+    // Clamp at the top.
+    app.handle_key(key(KeyCode::Char('k')));
+    assert_eq!(app.network_selected, 0);
+}
+
+#[test]
+fn network_move_resets_detail_scroll() {
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    app.nodes.push(make_node("z1", "router"));
+    app.nodes.push(make_node("z2", "peer"));
+    app.node_detail_scroll = 9;
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.network_selected, 1);
+    assert_eq!(app.node_detail_scroll, 0);
+}
+
+#[test]
+fn network_selection_resolves_session_then_service() {
+    let mut app = App::new("test".into());
+    app.nodes.push(make_node("z1", "router"));
+    app.nodes.push(make_node("z2", "peer"));
+    app.liveliness_tokens
+        .push(make_token("fleet/r1/node/a", true));
+    assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(0)));
+    app.network_selected = 1;
+    assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(1)));
+    app.network_selected = 2;
+    assert_eq!(app.selected_network_row(), Some(NetworkRow::Service(0)));
+}
+
+#[test]
+fn network_s_requests_scout_refresh() {
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    assert!(!app.pending_scout_request);
+    app.handle_key(key(KeyCode::Char('s')));
+    assert!(app.pending_scout_request);
+}
+
+#[test]
+fn network_s_does_not_request_while_scout_in_progress() {
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    app.scout_in_progress = true;
+    app.handle_key(key(KeyCode::Char('s')));
+    assert!(!app.pending_scout_request);
+}
+
+#[test]
+fn render_network_with_data_wide_and_narrow_shows_participant() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    for (w, h) in [(120u16, 30u16), (60u16, 20u16)] {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Network;
+        app.connection_state = ConnectionState::Connected("zidrouter0000000".into());
+        app.nodes.push(make_node("zidrouter0000000", "router"));
+        app.liveliness_tokens
+            .push(make_token("fleet/r1/node/action_executor_ec98a701", true));
+
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        // Master (wide → both panes; narrow default focus is Master) shows the
+        // session zid and the service name.
+        assert!(
+            text.contains("zidrouter"),
+            "session zid missing at {}x{}: {}",
+            w,
+            h,
+            text
+        );
+        assert!(
+            text.contains("action_executor"),
+            "service name missing at {}x{}: {}",
+            w,
+            h,
+            text
+        );
+    }
+}
+
+#[test]
+fn render_help_overlay_paints() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.overlay = Overlay::Help;
+    terminal.draw(|f| app.render(f)).unwrap();
+    // Overlay drew on top without panicking; buffer is non-empty.
+    assert!(!buffer_text(terminal.backend().buffer()).trim().is_empty());
+}
+
+#[test]
+fn d_opens_doctor_overlay_and_requests_run() {
+    let mut app = App::new("test".into());
+    assert_eq!(app.overlay, Overlay::None);
+    assert!(!app.pending_doctor_request);
+    app.handle_key(key(KeyCode::Char('d')));
+    assert_eq!(app.overlay, Overlay::Doctor);
+    assert!(app.pending_doctor_request);
+    assert_eq!(app.doctor_scroll, 0);
+}
+
+#[test]
+fn doctor_overlay_r_reruns_and_esc_closes() {
+    let mut app = App::new("test".into());
+    app.handle_key(key(KeyCode::Char('d')));
+    app.pending_doctor_request = false;
+    // r re-runs
+    app.handle_key(key(KeyCode::Char('r')));
+    assert!(app.pending_doctor_request);
+    // j/k scroll
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(app.doctor_scroll, 1);
+    app.handle_key(key(KeyCode::Char('k')));
+    assert_eq!(app.doctor_scroll, 0);
+    // Esc closes
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.overlay, Overlay::None);
+}
+
+#[test]
+fn doctor_events_toggle_running_and_store_report() {
+    use zenmon_core::doctor::Check;
+    let mut app = App::new("test".into());
+    app.handle_event(AppEvent::DoctorStarted);
+    assert!(app.doctor_running);
+    assert!(app.doctor_report.is_none());
+
+    let report = DoctorReport::new(vec![Check::pass("config", Duration::from_millis(1), None)]);
+    app.handle_event(AppEvent::DoctorReport(report));
+    assert!(!app.doctor_running);
+    assert!(app.doctor_report.is_some());
+}
+
+#[test]
+fn render_doctor_overlay_shows_checks_and_hints() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use zenmon_core::doctor::Check;
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.doctor_report = Some(DoctorReport::new(vec![
+        Check::pass("config", Duration::from_millis(2), None),
+        Check::fail(
+            "connection",
+            Duration::from_millis(5),
+            "router_unreachable",
+            "no router connected in client mode",
+            "start a router (zenohd) and check --endpoint",
+        ),
+    ]));
+    app.overlay = Overlay::Doctor;
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("✖"), "fail glyph missing: {}", text);
+    assert!(text.contains("connection"), "check name missing: {}", text);
+    assert!(
+        text.contains("start a router"),
+        "hint text missing: {}",
+        text
+    );
+}
+
+#[test]
+fn header_dot_reflects_failing_doctor_report() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use zenmon_core::doctor::Check;
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.doctor_report = Some(DoctorReport::new(vec![Check::fail(
+        "connection",
+        Duration::from_millis(5),
+        "router_unreachable",
+        "no router connected in client mode",
+        "start a router",
+    )]));
+    // Renders without panic and paints the fail glyph in the header.
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("✖"), "header fail glyph missing: {}", text);
+}
+
+#[test]
+fn colon_opens_command_palette() {
+    let mut app = App::new("test".into());
+    assert_eq!(app.overlay, Overlay::None);
+    app.handle_key(key(KeyCode::Char(':')));
+    assert_eq!(app.overlay, Overlay::Palette);
+    assert!(app.palette_input.is_empty());
+    assert_eq!(app.palette_selected, 0);
+}
+
+#[test]
+fn palette_filtering_shrinks_and_matches() {
+    let mut app = App::new("test".into());
+    app.handle_key(key(KeyCode::Char(':')));
+    let all = app.filtered_palette_commands().len();
+    assert_eq!(all, palette_commands().len());
+
+    // Type "peer" (case-insensitive) → only the peer-mode command matches.
+    for c in "peer".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    let filtered = app.filtered_palette_commands();
+    assert!(filtered.len() < all);
+    assert_eq!(filtered.len(), 1);
+    assert!(matches!(
+        palette_commands()[filtered[0]].action,
+        PaletteAction::SetMode(ConnectMode::Peer)
+    ));
+}
+
+#[test]
+fn palette_enter_runs_peer_mode_command() {
+    let mut app = App::new("test".into());
+    app.current_mode = ConnectMode::Client;
+    app.handle_key(key(KeyCode::Char(':')));
+    for c in "peer".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.pending_reconnect_mode, Some(ConnectMode::Peer));
+    // Palette closed after running.
+    assert_eq!(app.overlay, Overlay::None);
+}
+
+#[test]
+fn palette_set_mode_same_mode_does_not_reconnect() {
+    let mut app = App::new("test".into());
+    app.current_mode = ConnectMode::Client;
+    app.run_palette_action(PaletteAction::SetMode(ConnectMode::Client));
+    assert_eq!(app.pending_reconnect_mode, None);
+    assert_eq!(app.overlay, Overlay::None);
+}
+
+#[test]
+fn palette_esc_closes_without_action() {
+    let mut app = App::new("test".into());
+    app.handle_key(key(KeyCode::Char(':')));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.overlay, Overlay::None);
+    assert_eq!(app.pending_reconnect_mode, None);
+}
+
+#[test]
+fn palette_arrow_navigation_clamps() {
+    let mut app = App::new("test".into());
+    app.handle_key(key(KeyCode::Char(':')));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.palette_selected, 0);
+    let count = app.filtered_palette_commands().len();
+    for _ in 0..(count + 3) {
+        app.handle_key(key(KeyCode::Down));
+    }
+    assert_eq!(app.palette_selected, count - 1);
+}
+
+#[test]
+fn scout_port_action_opens_modal_and_reconnects() {
+    let mut app = App::new("test".into());
+    app.run_palette_action(PaletteAction::OpenScoutPort);
+    assert_eq!(app.overlay, Overlay::ScoutPort);
+    // Type a port and confirm.
+    app.handle_key(key(KeyCode::Char('7')));
+    app.handle_key(key(KeyCode::Char('4')));
+    app.handle_key(key(KeyCode::Char('5')));
+    app.handle_key(key(KeyCode::Char('0')));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.pending_reconnect_port, Some(7450));
+    assert_eq!(app.scout_port_current, Some(7450));
+    assert_eq!(app.overlay, Overlay::None);
+}
+
+#[test]
+fn scout_port_modal_esc_closes() {
+    let mut app = App::new("test".into());
+    app.run_palette_action(PaletteAction::OpenScoutPort);
+    app.handle_key(key(KeyCode::Char('7')));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.overlay, Overlay::None);
+    assert!(app.scout_port_input.is_empty());
+    assert_eq!(app.pending_reconnect_port, None);
+}
+
+#[test]
+fn scout_port_modal_s_requests_scan() {
+    let mut app = App::new("test".into());
+    app.run_palette_action(PaletteAction::OpenScoutPort);
+    app.handle_key(key(KeyCode::Char('s')));
+    assert!(app.pending_port_scan_request);
+}
+
+#[test]
+fn scout_port_enter_uses_selected_scan_result() {
+    let mut app = App::new("test".into());
+    app.run_palette_action(PaletteAction::OpenScoutPort);
+    app.port_scan_results = vec![
+        PortScoutResult {
+            port: 7446,
+            nodes: vec![],
+        },
+        PortScoutResult {
+            port: 7448,
+            nodes: vec![zenmon_core::types::ScoutInfo {
+                zid: "z1".into(),
+                whatami: "peer".into(),
+                locators: vec![],
+            }],
+        },
+    ];
+    app.port_scan_selected = 0; // first non-empty result → port 7448
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.pending_reconnect_port, Some(7448));
+}
+
+#[test]
+fn render_palette_overlay_paints_labels() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.overlay = Overlay::Palette;
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("Commands"), "palette title missing: {}", text);
+    assert!(text.contains("doctor"), "doctor command missing: {}", text);
+    assert!(
+        text.contains("Network"),
+        "network command missing: {}",
+        text
+    );
+}
+
+fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+#[test]
+fn traffic_click_selects_row_and_drills() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["a", "b", "c"]);
+    app.list_rect = Some(Rect::new(0, 2, 40, 10));
+    app.list_first_item_row = 3;
+    app.list_scroll_offset = 0;
+    // Row 5 == first_item_row(3) + 2 → index 2.
+    app.handle_click(5, 5);
+    assert_eq!(app.topic_selected, 2);
+    assert_eq!(app.topic_detail_scroll, 0);
+    assert_eq!(app.pane_focus, PaneFocus::Detail);
+}
+
+#[test]
+fn traffic_click_outside_list_is_ignored() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["a", "b", "c"]);
+    app.topic_selected = 1;
+    app.list_rect = Some(Rect::new(0, 2, 40, 10));
+    app.list_first_item_row = 3;
+    // Row 1 is above the list rect (y == 2) → no change.
+    app.handle_click(5, 1);
+    assert_eq!(app.topic_selected, 1);
+}
+
+#[test]
+fn network_click_map_marks_headers_and_rows() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    app.connection_state = ConnectionState::Connected("z1".into());
+    app.nodes.push(make_node("z1", "router"));
+    app.nodes.push(make_node("z2", "peer"));
+    app.liveliness_tokens
+        .push(make_token("fleet/r1/node/a", true));
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+
+    // Display rows: Sessions header, z1, z2, Services header, group header,
+    // token. Headers → None; participants → their `network_rows()` index.
+    assert_eq!(
+        app.network_click_map,
+        vec![None, Some(0), Some(1), None, None, Some(2)]
+    );
+
+    // Clicking the z2 display row (index 2) selects network_rows() index 1.
+    let rect = app.list_rect.unwrap();
+    let row = app.list_first_item_row + 2 - app.list_scroll_offset as u16;
+    app.handle_click(rect.x + 1, row);
+    assert_eq!(app.network_selected, 1);
+    assert_eq!(app.pane_focus, PaneFocus::Detail);
+
+    // Clicking a header row (display index 0) leaves the selection alone.
+    let hdr_row = app.list_first_item_row - app.list_scroll_offset as u16;
+    app.handle_click(rect.x + 1, hdr_row);
+    assert_eq!(app.network_selected, 1);
+}
+
+#[test]
+fn wheel_moves_traffic_selection_and_clamps() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["a", "b", "c"]);
+    app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
+    assert_eq!(app.topic_selected, 1);
+    // Clamp at the bottom.
+    app.wheel(1);
+    app.wheel(1);
+    assert_eq!(app.topic_selected, 2);
+    // Scroll back up and clamp at the top.
+    app.handle_mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
+    app.wheel(-1);
+    app.wheel(-1);
+    assert_eq!(app.topic_selected, 0);
+}
+
+#[test]
+fn wheel_moves_network_selection_and_clamps() {
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    app.nodes.push(make_node("z1", "router"));
+    app.nodes.push(make_node("z2", "peer"));
+    // 2 selectable rows.
+    app.wheel(1);
+    assert_eq!(app.network_selected, 1);
+    app.wheel(1); // clamp
+    assert_eq!(app.network_selected, 1);
+    app.wheel(-1);
+    assert_eq!(app.network_selected, 0);
+}
+
+#[test]
+fn wheel_ignored_while_overlay_open() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["a", "b", "c"]);
+    app.overlay = Overlay::Help;
+    app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
+    assert_eq!(app.topic_selected, 0);
+}

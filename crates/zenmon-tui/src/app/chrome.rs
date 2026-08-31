@@ -1,0 +1,513 @@
+//! Everything painted around the active space: the header, the hint bar, and
+//! the modal overlays (help, doctor, scout-port, command palette).
+
+use super::*;
+use crate::views;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::Frame;
+use zenmon_core::doctor::CheckStatus;
+
+/// Human label for a scout/multicast port. Ports in the Zenoh domain range
+/// (7446..=7546, i.e. domains 0..=100) are shown as their domain id; anything
+/// else is a custom port and is labeled as a port, not a domain — so an
+/// arbitrary port below 7446 isn't misreported as "domain 0".
+pub(crate) fn domain_port_label(port: u16) -> String {
+    if (7446..=7546).contains(&port) {
+        format!("domain {} (port {})", port - 7446, port)
+    } else {
+        format!("port {} (custom)", port)
+    }
+}
+
+impl App {
+    pub fn render(&mut self, frame: &mut Frame) {
+        // Expire stale toasts each frame.
+        let toast_expired = self
+            .toast
+            .as_ref()
+            .map(|(_, t)| t.elapsed().as_secs() >= 2)
+            .unwrap_or(true);
+        if toast_expired {
+            self.toast = None;
+        }
+
+        let compact = frame.area().width < TWO_PANE_MIN_WIDTH;
+        let header_h = if compact { 1 } else { 2 };
+        let [header_area, body_area, hint_area] = Layout::vertical([
+            Constraint::Length(header_h),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+
+        self.render_header(frame, header_area, compact);
+        match self.space {
+            Space::Traffic => views::traffic::render(self, frame, body_area),
+            Space::Network => views::network::render(self, frame, body_area),
+        }
+        self.render_hint_bar(frame, hint_area);
+
+        if self.overlay == Overlay::Help {
+            self.render_help_overlay(frame, body_area);
+        }
+        if self.overlay == Overlay::Doctor {
+            self.render_doctor_overlay(frame, body_area);
+        }
+        if self.overlay == Overlay::Palette {
+            self.render_palette_overlay(frame, body_area);
+        }
+        if self.overlay == Overlay::ScoutPort {
+            self.render_scout_port_modal(frame, body_area);
+        }
+    }
+
+    fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
+        let conn_text = match &self.connection_state {
+            ConnectionState::Connected(zid) => {
+                format!("Connected zid:{}", &zid[..zid.len().min(16)])
+            }
+            ConnectionState::Connecting => "Connecting...".to_string(),
+            ConnectionState::Disconnected(reason) => format!("Disconnected: {}", reason),
+        };
+
+        // Health dot: reflects the last `doctor` run's overall status when a
+        // report exists, otherwise falls back to socket connection state.
+        let (dot_glyph, dot_color, health_label) = match &self.doctor_report {
+            Some(report) => match report.status {
+                CheckStatus::Pass => ("●", Color::Green, "OK".to_string()),
+                CheckStatus::Warn => {
+                    let n = report
+                        .checks
+                        .iter()
+                        .filter(|c| c.status != CheckStatus::Pass)
+                        .count();
+                    ("⚠", Color::Yellow, format!("{} warn", n))
+                }
+                CheckStatus::Fail => {
+                    let n = report
+                        .checks
+                        .iter()
+                        .filter(|c| c.status == CheckStatus::Fail)
+                        .count();
+                    ("✖", Color::Red, format!("{} fail", n))
+                }
+            },
+            None => match &self.connection_state {
+                ConnectionState::Connected(_) => ("●", Color::Green, "OK".to_string()),
+                ConnectionState::Connecting => ("●", Color::Yellow, "connecting".to_string()),
+                ConnectionState::Disconnected(_) => ("●", Color::Red, "offline".to_string()),
+            },
+        };
+
+        let [line0, line1] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(if compact { 0 } else { 1 }),
+        ])
+        .areas(area);
+
+        // Line 0: health dot + label, connection string, then the two space tabs.
+        let mut spans = vec![
+            Span::styled(format!("{} ", dot_glyph), Style::default().fg(dot_color)),
+            Span::styled(
+                format!("{}  ", health_label),
+                Style::default().fg(dot_color),
+            ),
+        ];
+        if self.doctor_running {
+            spans.push(Span::styled(
+                "checking…  ",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        spans.push(Span::styled(conn_text, Style::default().fg(Color::Gray)));
+        spans.push(Span::raw("  "));
+        let prefix_width: u16 = spans.iter().map(|s| s.content.chars().count() as u16).sum();
+        frame.render_widget(Paragraph::new(Line::from(spans)), line0);
+
+        // Space tabs — record each label rect for mouse hit-testing.
+        let mut x = line0.x + prefix_width;
+        for (i, title) in SPACE_TITLES.iter().enumerate() {
+            let label = format!("[{}]", title);
+            let label_width = label.chars().count() as u16;
+            if x + label_width > line0.x + line0.width {
+                self.space_tab_rects[i] = None;
+                continue;
+            }
+            let rect = Rect::new(x, line0.y, label_width, 1);
+            self.space_tab_rects[i] = Some(rect);
+            let style = if i == self.space.index() {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
+            x += label_width + 1;
+        }
+
+        // Line 1 (skipped when compact): counts summary.
+        if !compact {
+            let counts = format!(
+                "{} sessions · {} services · {} keys · {:.0} msg/s · {}",
+                self.nodes.len(),
+                self.liveliness_tokens.len(),
+                self.topics.len(),
+                self.total_hz,
+                format_bytes_per_sec(self.total_bytes_per_sec()),
+            );
+            frame.render_widget(
+                Paragraph::new(Span::styled(counts, Style::default().fg(Color::DarkGray))),
+                line1,
+            );
+        }
+    }
+
+    fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
+        let hint = match self.space {
+            Space::Traffic => {
+                "Tab space  / filter  j/k move  Enter open  L live  Q query  y/Y copy  : cmds  d doctor  ? help  q quit"
+            }
+            Space::Network => {
+                "Tab space  j/k move  Enter drill  s scout  y copy  : cmds  d doctor  ? help  q quit"
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+            area,
+        );
+    }
+
+    fn render_help_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 60.min(content_area.width.saturating_sub(2));
+        let height = 16.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Keybindings ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        // Generated from the same command table the palette uses, so help and
+        // the `:` palette can never drift apart.
+        let mut lines: Vec<Line> = palette_commands()
+            .iter()
+            .map(|cmd| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<6}", cmd.key_hint),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::styled(cmd.label.to_string(), Style::default().fg(Color::White)),
+                ])
+            })
+            .collect();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "`:` opens the command palette · j/k or ↑↓ to scroll · Esc/q/? to close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+        let scroll = self.help_scroll.min(max_scroll);
+        let para = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0));
+        frame.render_widget(para, inner);
+    }
+
+    fn render_doctor_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 72.min(content_area.width.saturating_sub(2));
+        let height = 20.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Doctor ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let mut lines: Vec<Line> = Vec::new();
+        match &self.doctor_report {
+            None => {
+                if self.doctor_running {
+                    lines.push(Line::from(Span::styled(
+                        "Running diagnostics…",
+                        Style::default().fg(Color::Yellow),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "No diagnostics yet.",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            Some(report) => {
+                if self.doctor_running {
+                    lines.push(Line::from(Span::styled(
+                        "Re-running diagnostics…",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                for check in &report.checks {
+                    let (icon, color) = match check.status {
+                        CheckStatus::Pass => ("✓", Color::Green),
+                        CheckStatus::Warn => ("⚠", Color::Yellow),
+                        CheckStatus::Fail => ("✖", Color::Red),
+                    };
+                    let mut spans = vec![
+                        Span::styled(format!("{} ", icon), Style::default().fg(color)),
+                        Span::styled(
+                            format!("{:<12}", check.name),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled(
+                            format!("{:>6}ms  ", check.latency_ms),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ];
+                    if let Some(msg) = &check.message {
+                        spans.push(Span::styled(msg.clone(), Style::default().fg(Color::Gray)));
+                    }
+                    lines.push(Line::from(spans));
+                    if check.status != CheckStatus::Pass {
+                        if let Some(hint) = &check.hint {
+                            lines.push(Line::from(Span::styled(
+                                format!("      hint: {}", hint),
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[r] re-run   [j/k] scroll   [Esc] close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+        let scroll = self.doctor_scroll.min(max_scroll);
+        let para = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0));
+        frame.render_widget(para, inner);
+    }
+
+    fn render_scout_port_modal(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 58.min(content_area.width.saturating_sub(2));
+        let height = 16.min(content_area.height.saturating_sub(2));
+        if width < 20 || height < 8 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Domain Scan & Switch ")
+            .style(
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let [current_row, input_row, _gap, list_area, hint_row] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+
+        let current_text = match self.scout_port_current {
+            Some(p) => format!("Current: {}", domain_port_label(p)),
+            None => "Current: domain 0 (port 7446, default)".to_string(),
+        };
+        frame.render_widget(
+            Paragraph::new(current_text).style(Style::default().fg(Color::Gray)),
+            current_row,
+        );
+
+        let input_text = if self.scout_port_input.is_empty() {
+            "Custom port: _".to_string()
+        } else {
+            format!("Custom port: {}_", self.scout_port_input)
+        };
+        frame.render_widget(
+            Paragraph::new(input_text).style(Style::default().fg(Color::Cyan)),
+            input_row,
+        );
+
+        if self.port_scan_in_progress {
+            frame.render_widget(
+                Paragraph::new("Scanning domains 0-100 (ports 7446-7546) ...")
+                    .style(Style::default().fg(Color::Yellow)),
+                list_area,
+            );
+        } else {
+            let hits: Vec<&PortScoutResult> = self
+                .port_scan_results
+                .iter()
+                .filter(|r| !r.nodes.is_empty())
+                .collect();
+            if hits.is_empty() && self.port_scan_results.is_empty() {
+                frame.render_widget(
+                    Paragraph::new("Press 's' to scan domains 0-100 for nodes")
+                        .style(Style::default().fg(Color::DarkGray)),
+                    list_area,
+                );
+            } else if hits.is_empty() {
+                frame.render_widget(
+                    Paragraph::new("No nodes found in domains 0-100")
+                        .style(Style::default().fg(Color::Red)),
+                    list_area,
+                );
+            } else {
+                let lines: Vec<Line> = hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        let selected = i == self.port_scan_selected;
+                        let marker = if selected { "> " } else { "  " };
+                        let is_self = matches!(
+                            &self.connection_state,
+                            ConnectionState::Connected(zid) if r.nodes.iter().any(|n| n.zid == *zid)
+                        );
+                        let base_text = format!(
+                            "{}{}  {} node(s)",
+                            marker,
+                            domain_port_label(r.port),
+                            r.nodes.len()
+                        );
+                        let mut spans = vec![Span::styled(
+                            base_text,
+                            if selected {
+                                Style::default()
+                                    .fg(Color::Black)
+                                    .bg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::White)
+                            },
+                        )];
+                        if is_self {
+                            spans.push(Span::styled(
+                                "  (self)",
+                                Style::default()
+                                    .fg(Color::Green)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                        Line::from(spans)
+                    })
+                    .collect();
+                frame.render_widget(Paragraph::new(lines), list_area);
+            }
+        }
+
+        frame.render_widget(
+            Paragraph::new(" s:scan domains  Enter:switch  jk/↑↓:select  Esc:close ")
+                .style(Style::default().fg(Color::DarkGray)),
+            hint_row,
+        );
+    }
+
+    fn render_palette_overlay(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 54.min(content_area.width.saturating_sub(2));
+        let height = 16.min(content_area.height.saturating_sub(2));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let x = content_area.x + (content_area.width - width) / 2;
+        let y = content_area.y + (content_area.height - height) / 2;
+        let popup = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Commands ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let [input_row, list_area, hint_row] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+
+        frame.render_widget(
+            Paragraph::new(format!("> {}▏", self.palette_input))
+                .style(Style::default().fg(Color::Cyan)),
+            input_row,
+        );
+
+        let commands = palette_commands();
+        let filtered = self.filtered_palette_commands();
+        let label_width = list_area.width.saturating_sub(2) as usize;
+        let lines: Vec<Line> = filtered
+            .iter()
+            .enumerate()
+            .map(|(row, &idx)| {
+                let cmd = &commands[idx];
+                let selected = row == self.palette_selected;
+                let marker = if selected { "> " } else { "  " };
+                let hint_w = cmd.key_hint.chars().count();
+                let label_w = cmd.label.chars().count();
+                let pad = label_width
+                    .saturating_sub(2)
+                    .saturating_sub(label_w)
+                    .saturating_sub(hint_w);
+                let label_style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(vec![
+                    Span::styled(format!("{}{}", marker, cmd.label), label_style),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(
+                        cmd.key_hint.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), list_area);
+
+        frame.render_widget(
+            Paragraph::new("[Enter] run   [Esc] close").style(Style::default().fg(Color::DarkGray)),
+            hint_row,
+        );
+    }
+}
