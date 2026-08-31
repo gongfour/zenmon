@@ -109,6 +109,7 @@ pub mod error;
 pub mod info;
 pub mod keyexpr;
 /// Zenoh GET queries and their replies.
+pub mod publish;
 pub mod query;
 pub mod queryable;
 /// Zenoh admin-space node inventory.

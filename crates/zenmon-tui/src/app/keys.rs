@@ -45,6 +45,10 @@ impl App {
             self.handle_plot_picker_key(key);
             return;
         }
+        if self.overlay == Overlay::Publish {
+            self.handle_publish_key(key);
+            return;
+        }
         if self.overlay == Overlay::Doctor {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
@@ -159,6 +163,88 @@ impl App {
             KeyCode::Char('Y') => self.copy_selected_key(),
             _ => {}
         }
+    }
+
+    /// Open the publish editor, prefilled with the selected key.
+    ///
+    /// Guard 1 of 4: without `--allow-publish` this refuses and says how to
+    /// enable it, rather than the command being absent and leaving the user
+    /// wondering whether the tool can do it at all.
+    fn open_publish_editor(&mut self) {
+        if !self.allow_publish {
+            self.set_error_toast("Publishing is off — restart with --allow-publish");
+            return;
+        }
+        self.publish_key = self.selected_topic_key().unwrap_or_default();
+        self.publish_payload.clear();
+        self.publish_field = if self.publish_key.is_empty() {
+            PublishField::Key
+        } else {
+            PublishField::Payload
+        };
+        self.publish_result = None;
+        self.overlay = Overlay::Publish;
+    }
+
+    /// Guard 4 of 4: `Ctrl+Enter` sends, plain `Enter` does not.
+    ///
+    /// Every other editor in this app commits on `Enter`, so this one
+    /// deliberately does not: the muscle memory that dismisses a dialog must
+    /// not be the thing that writes to a live network.
+    fn handle_publish_key(&mut self, key: KeyEvent) {
+        use crossterm::event::KeyModifiers;
+        match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+                self.publish_result = None;
+            }
+            KeyCode::Tab | KeyCode::Down | KeyCode::Up => {
+                self.publish_field = match self.publish_field {
+                    PublishField::Key => PublishField::Payload,
+                    PublishField::Payload => PublishField::Key,
+                };
+            }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.arm_publish();
+            }
+            KeyCode::Backspace => match self.publish_field {
+                PublishField::Key => {
+                    self.publish_key.pop();
+                }
+                PublishField::Payload => {
+                    self.publish_payload.pop();
+                }
+            },
+            KeyCode::Char(c) => match self.publish_field {
+                PublishField::Key => self.publish_key.push(c),
+                PublishField::Payload => self.publish_payload.push(c),
+            },
+            _ => {}
+        }
+    }
+
+    /// Hand the composed message to the run loop, which owns the session.
+    fn arm_publish(&mut self) {
+        if !self.allow_publish {
+            // Unreachable through the UI, but the check is repeated here so the
+            // guarantee does not depend on every caller of this method.
+            self.publish_result = Some(Err("publishing is not enabled".into()));
+            return;
+        }
+        let key = self.publish_key.trim().to_string();
+        if key.is_empty() {
+            self.publish_result = Some(Err("key expression is empty".into()));
+            return;
+        }
+        if key.contains('*') {
+            // A wildcard put fans out to every matching subscriber, which on a
+            // fleet is every vehicle at once. Nothing about the editor makes
+            // that intent visible, so it is refused rather than confirmed.
+            self.publish_result = Some(Err("wildcards are not allowed here — name one key".into()));
+            return;
+        }
+        self.pending_publish = Some((key, self.publish_payload.clone()));
+        self.publish_result = None;
     }
 
     /// Open the field picker for the selected key.
@@ -533,6 +619,7 @@ impl App {
                 self.overlay = Overlay::ScoutPort;
                 self.scout_port_input.clear();
             }
+            PaletteAction::OpenPublish => self.open_publish_editor(),
             PaletteAction::OpenHelp => {
                 self.overlay = Overlay::Help;
                 self.help_scroll = 0;

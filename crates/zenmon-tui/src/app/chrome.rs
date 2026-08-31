@@ -65,6 +65,9 @@ impl App {
         if self.overlay == Overlay::PlotPicker {
             self.render_plot_picker(frame, body_area);
         }
+        if self.overlay == Overlay::Publish {
+            self.render_publish_editor(frame, body_area);
+        }
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
@@ -127,6 +130,19 @@ impl App {
         }
         spans.push(Span::styled(conn_text, Style::default().fg(Color::Gray)));
         spans.push(Span::raw("  "));
+        // Guard 3 of 4: a session that can write says so on every frame. There
+        // must never be a moment where the user does not know which kind of
+        // session they are looking at.
+        if self.allow_publish {
+            spans.push(Span::styled(
+                " WRITE ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("  "));
+        }
         let prefix_width: u16 = spans.iter().map(|s| s.content.chars().count() as u16).sum();
         frame.render_widget(Paragraph::new(Line::from(spans)), line0);
 
@@ -234,6 +250,96 @@ impl App {
         )));
 
         frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    /// The publish editor.
+    fn render_publish_editor(&self, frame: &mut Frame, content_area: Rect) {
+        let width = 72.min(content_area.width.saturating_sub(2));
+        let height = 12.min(content_area.height.saturating_sub(2));
+        if width < 32 || height < 8 {
+            return;
+        }
+        let popup = Rect::new(
+            content_area.x + (content_area.width - width) / 2,
+            content_area.y + (content_area.height - height) / 2,
+            width,
+            height,
+        );
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Publish ")
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let field = |label: &str, value: &str, active: bool| {
+            let marker = if active { "▸ " } else { "  " };
+            let style = if active {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("{marker}{label:<9}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!("{value}{}", if active { "_" } else { "" }), style),
+            ])
+        };
+
+        let mut lines = vec![
+            field(
+                "key",
+                &self.publish_key,
+                self.publish_field == PublishField::Key,
+            ),
+            field(
+                "payload",
+                &self.publish_payload,
+                self.publish_field == PublishField::Payload,
+            ),
+            Line::from(""),
+        ];
+
+        // Guard 4 of 4: name the target again right before the send key, so
+        // committing is never a blind action on whatever was prefilled.
+        match &self.publish_result {
+            Some(Ok(key)) => lines.push(Line::from(Span::styled(
+                format!("  sent to {key}"),
+                Style::default().fg(Color::Green),
+            ))),
+            Some(Err(reason)) => lines.push(Line::from(Span::styled(
+                format!("  {reason}"),
+                Style::default().fg(Color::Red),
+            ))),
+            None => lines.push(Line::from(vec![
+                Span::styled("  will write to  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if self.publish_key.trim().is_empty() {
+                        "(no key)".to_string()
+                    } else {
+                        self.publish_key.trim().to_string()
+                    },
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])),
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  [Ctrl+Enter] send   [Tab] field   [Esc] cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
 
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {

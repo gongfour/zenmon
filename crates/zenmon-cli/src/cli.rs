@@ -331,6 +331,13 @@ pub enum Command {
         /// UI refresh interval (e.g. 100ms, 1s)
         #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
         refresh: Duration,
+
+        /// Allow publishing from the TUI. Off by default: the dashboard is an
+        /// observation tool, and an accidental put on a live control topic is
+        /// not a recoverable mistake. With this set, the header shows a WRITE
+        /// badge for the whole session.
+        #[arg(long)]
+        allow_publish: bool,
     },
 
     /// Inspect a zenmon contract file (offline; no network).

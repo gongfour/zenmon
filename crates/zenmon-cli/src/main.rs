@@ -681,14 +681,19 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let session = zenmon_core::session::open_session(&config).await?;
             let attachment_bytes = att.as_ref().map(|a| a.len());
 
-            // Publish the same value/attachment once. Rebuilt per tick because
-            // the put builder is consumed by `.await`.
+            // Publish the same value/attachment once. Shared with the TUI's
+            // publish path so the two cannot drift on attachments or error
+            // mapping.
             let publish_once = || async {
-                let mut builder = session.put(&key_expr, value.clone());
-                if let Some(ref att_json) = att {
-                    builder = builder.attachment(att_json.as_bytes());
-                }
-                builder.await.map_err(internal_err)
+                zenmon_core::publish::put(
+                    &session,
+                    &key_expr,
+                    // Same wire bytes either way: zenoh encodes a String as
+                    // its UTF-8, which is what `resolve_payload_arg` validated.
+                    value.clone().into_bytes(),
+                    att.as_ref().map(|a| a.as_bytes()),
+                )
+                .await
             };
 
             match rate {
@@ -1439,12 +1444,15 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         }
 
         #[cfg(feature = "tui")]
-        Command::Tui { refresh } => {
+        Command::Tui {
+            refresh,
+            allow_publish,
+        } => {
             // `--contract` / ZENMON_CONTRACT is global, so the TUI picks it up
             // the same way `sub` and `discover` do; without one the detail pane
             // simply shows no contract badge.
             let contract = load_contract_opt(&cli.contract)?;
-            zenmon_tui::run(config, refresh, contract)
+            zenmon_tui::run(config, refresh, contract, allow_publish)
                 .await
                 .map_err(internal_err)?;
         }

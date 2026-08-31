@@ -132,6 +132,9 @@ pub enum Overlay {
     ScoutPort,
     /// Pick which numeric field of the selected key to plot.
     PlotPicker,
+    /// Compose a message to publish. Only reachable when the session was
+    /// started with `--allow-publish`.
+    Publish,
 }
 
 /// An effect the command palette can trigger. Each entry in [`palette_commands`]
@@ -144,6 +147,10 @@ pub enum PaletteAction {
     SetMode(ConnectMode),
     OpenScoutPort,
     OpenHelp,
+    /// Open the publish editor. Listed even when publishing is off, so the
+    /// capability is discoverable and its absence is explained rather than
+    /// silently missing.
+    OpenPublish,
     Quit,
 }
 
@@ -195,6 +202,11 @@ pub fn palette_commands() -> &'static [PaletteCommand] {
             action: PaletteAction::OpenScoutPort,
         },
         PaletteCommand {
+            label: "Publish to a key…",
+            key_hint: "",
+            action: PaletteAction::OpenPublish,
+        },
+        PaletteCommand {
             label: "Help",
             key_hint: "?",
             action: PaletteAction::OpenHelp,
@@ -205,6 +217,13 @@ pub fn palette_commands() -> &'static [PaletteCommand] {
             action: PaletteAction::Quit,
         },
     ]
+}
+
+/// Which line of the publish editor the cursor is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishField {
+    Key,
+    Payload,
 }
 
 /// Which pane holds focus when the terminal is too narrow to show both.
@@ -388,6 +407,22 @@ pub struct App {
     pub plot_field: HashMap<String, String>,
     /// Cursor inside the plot-field picker.
     pub plot_picker_selected: usize,
+
+    /// Whether this session may write to the network at all, from
+    /// `--allow-publish`. Off means the publish path does not exist: the
+    /// palette entry explains itself and the editor never opens.
+    pub allow_publish: bool,
+    /// Key expression being composed in the publish editor.
+    pub publish_key: String,
+    /// Payload being composed.
+    pub publish_payload: String,
+    /// Which field the editor's cursor is in.
+    pub publish_field: PublishField,
+    /// Set once the editor is armed; consumed by the run loop, which owns the
+    /// session. Cleared as soon as it is taken.
+    pub pending_publish: Option<(String, String)>,
+    /// Result of the last publish, shown in the editor.
+    pub publish_result: Option<Result<String, String>>,
     pub topic_detail_scroll: u16,
 
     pub topic_msg_counts: HashMap<String, u32>,
@@ -512,6 +547,12 @@ impl App {
             contract: None,
             plot_field: HashMap::new(),
             plot_picker_selected: 0,
+            allow_publish: false,
+            publish_key: String::new(),
+            publish_payload: String::new(),
+            publish_field: PublishField::Key,
+            pending_publish: None,
+            publish_result: None,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
             topic_hz: HashMap::new(),

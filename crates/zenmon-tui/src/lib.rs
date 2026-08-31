@@ -28,10 +28,12 @@ pub async fn run(
     mut config: ZenmonConfig,
     refresh: Duration,
     contract: Option<zenmon_core::contract::Contract>,
+    allow_publish: bool,
 ) -> Result<()> {
     let endpoint = config.endpoint.clone();
     let mut app = App::new(endpoint);
     app.contract = contract;
+    app.allow_publish = allow_publish;
     app.scout_port_current = config.scout_port;
     app.current_mode = config.mode;
 
@@ -305,6 +307,20 @@ async fn run_loop(
         if app.pending_doctor_request {
             app.pending_doctor_request = false;
             spawn_doctor_task(config.clone(), tx.clone(), Duration::from_secs(5));
+        }
+
+        // A publish armed in the editor. The session lives out here, so the
+        // editor can only ever hand over an intent — it cannot write by itself.
+        if let Some((key, payload)) = app.pending_publish.take() {
+            let result = match session.lock().await.as_ref() {
+                Some(s) => zenmon_core::publish::put(s, &key, payload.into_bytes(), None)
+                    .await
+                    .map(|()| key.clone())
+                    .map_err(|e| format!("{e}")),
+                None => Err("not connected".to_string()),
+            };
+            app.publish_result = Some(result);
+            needs_redraw = true;
         }
 
         if let Some(new_port) = app.pending_reconnect_port.take() {
