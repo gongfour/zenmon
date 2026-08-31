@@ -5,7 +5,7 @@
 //! history scoped to that key) or **Query** mode (results of a `get`).
 
 use crate::app::{format_bytes_per_sec, App, BodyLayout, DetailMode, PaneFocus, QueryStatus};
-use crate::views::stream::format_stream_timestamp;
+use crate::views::fmt::format_stream_timestamp;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
