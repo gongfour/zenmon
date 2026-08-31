@@ -41,6 +41,10 @@ impl App {
             self.handle_scout_modal_key(key);
             return;
         }
+        if self.overlay == Overlay::PlotPicker {
+            self.handle_plot_picker_key(key);
+            return;
+        }
         if self.overlay == Overlay::Doctor {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
@@ -149,8 +153,69 @@ impl App {
                 self.topic_detail_scroll = 0;
             }
             KeyCode::Char('D') => self.diff_enabled = !self.diff_enabled,
+            KeyCode::Char('p') => self.open_plot_picker(),
+            KeyCode::Char('P') => self.clear_plot_field(),
             KeyCode::Char('y') => self.copy_selected_payload(),
             KeyCode::Char('Y') => self.copy_selected_key(),
+            _ => {}
+        }
+    }
+
+    /// Open the field picker for the selected key.
+    ///
+    /// Only keys have plottable fields; a branch names a prefix, and a key with
+    /// nothing numeric in its latest payload says so rather than opening an
+    /// empty list the user has to dismiss.
+    fn open_plot_picker(&mut self) {
+        let Some(key) = self.selected_topic_key() else {
+            self.set_error_toast("Select a key to plot a field from");
+            return;
+        };
+        if self.plottable_fields().is_empty() {
+            self.set_error_toast(format!("No numeric fields in {key}"));
+            return;
+        }
+        // Start on the field already plotted, so reopening the picker does not
+        // silently move the selection off it.
+        let current = self.plot_field.get(&key).cloned();
+        self.plot_picker_selected = current
+            .and_then(|c| self.plottable_fields().iter().position(|f| *f == c))
+            .unwrap_or(0);
+        self.overlay = Overlay::PlotPicker;
+    }
+
+    fn clear_plot_field(&mut self) {
+        if let Some(key) = self.selected_topic_key() {
+            if self.plot_field.remove(&key).is_some() {
+                self.set_toast("Plot cleared");
+            }
+        }
+    }
+
+    fn handle_plot_picker_key(&mut self, key: KeyEvent) {
+        let fields = self.plottable_fields();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('p') => {
+                self.overlay = Overlay::None;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !fields.is_empty() {
+                    self.plot_picker_selected =
+                        (self.plot_picker_selected + 1).min(fields.len() - 1);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.plot_picker_selected = self.plot_picker_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let (Some(k), Some(field)) = (
+                    self.selected_topic_key(),
+                    fields.get(self.plot_picker_selected).cloned(),
+                ) {
+                    self.plot_field.insert(k, field);
+                }
+                self.overlay = Overlay::None;
+            }
             _ => {}
         }
     }

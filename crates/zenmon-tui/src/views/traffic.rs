@@ -11,6 +11,7 @@ use crate::app::{
 };
 use crate::diff::{self, DiffTag};
 use crate::history::PAYLOAD_CAP_BYTES;
+use crate::plot;
 use crate::tree::{RowKind, TreeRow};
 use crate::views::fmt::format_stream_timestamp;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -21,6 +22,30 @@ use ratatui::Frame;
 
 /// Unicode block glyphs (low→high) for the master sparkbar.
 const SPARK_GLYPHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Lay out a value sparkline for a detail pane `width` wide: how many glyphs
+/// fit, and whether the range summary needs its own line.
+///
+/// Measured from the strings that will actually be drawn rather than a fixed
+/// reservation. A two-digit percentage and a 13-digit timestamp need very
+/// different room, and a fixed guess wrapped the range mid-word on real pose
+/// data — turning a caption into a ragged second row.
+fn plot_layout(width: u16, value: &str, range: &str) -> (usize, bool) {
+    const INDENT: usize = 2;
+    const GAPS: usize = 5;
+    let avail = (width as usize).saturating_sub(INDENT);
+    let inline = value.chars().count() + range.chars().count() + GAPS;
+    if avail > inline + 8 {
+        ((avail - inline).min(64), false)
+    } else {
+        // No room for both, so the shape keeps the wide line and the range
+        // drops below it, where it reads as a caption.
+        (
+            avail.saturating_sub(value.chars().count() + 4).clamp(8, 64),
+            true,
+        )
+    }
+}
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     match app.body_layout(area) {
@@ -91,11 +116,11 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
     let keys = app.key_tree.len();
 
     let title = if app.topics_filtering {
-        format!(" Traffic — {} keys · /{}_ ", keys, app.topic_filter)
+        format!(" Traffic — {} · /{}_ ", plural_keys(keys), app.topic_filter)
     } else if !app.topic_filter.is_empty() {
-        format!(" Traffic — {} keys · /{} ", keys, app.topic_filter)
+        format!(" Traffic — {} · /{} ", plural_keys(keys), app.topic_filter)
     } else {
-        format!(" Traffic — {} keys ", keys)
+        format!(" Traffic — {} ", plural_keys(keys))
     };
 
     // Indentation makes every row a different length, so the rate column would
@@ -378,7 +403,7 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(header_lines), header_area);
 
     let body_lines = match app.detail_mode {
-        DetailMode::Live => live_body(app, &key),
+        DetailMode::Live => live_body(app, &key, body_area.width),
         DetailMode::Query => query_body(app),
     };
 
@@ -487,9 +512,64 @@ fn diff_style(tag: DiffTag) -> Style {
     }
 }
 
-fn live_body<'a>(app: &'a App, key: &str) -> Vec<Line<'a>> {
+fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
     let mut lines: Vec<Line> = Vec::new();
     let history = app.history.get(key);
+
+    // A plotted field goes above the payload: it is the reason the pane is open
+    // when someone is watching a value move, and burying it under the JSON
+    // would mean scrolling to the thing you came for.
+    if let (Some(pointer), Some(h)) = (app.plot_field.get(key), history) {
+        match plot::series_for(h, pointer) {
+            Some(series) => {
+                lines.push(section_owned(format!(
+                    "─ {} ─",
+                    plot::pointer_label(pointer)
+                )));
+                let value = series.last().map(plot::format_value).unwrap_or_default();
+                // The range is what makes the shape readable: the sparkline is
+                // normalised to it, so without it a 2% wobble and a full
+                // discharge draw the same picture.
+                let range = format!(
+                    "min {}  max {}  n {}",
+                    plot::format_value(series.min),
+                    plot::format_value(series.max),
+                    series.values.len()
+                );
+                let (glyphs, range_below) = plot_layout(width, &value, &range);
+                let dim = Style::default().fg(Color::DarkGray);
+                let mut spans = vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        plot::spark(&series, glyphs),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        value,
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ];
+                if range_below {
+                    lines.push(Line::from(spans));
+                    lines.push(Line::from(Span::styled(format!("  {range}"), dim)));
+                } else {
+                    spans.push(Span::styled(format!("   {range}"), dim));
+                    lines.push(Line::from(spans));
+                }
+                lines.push(Line::from(""));
+            }
+            None => {
+                lines.push(section_owned(format!(
+                    "─ {} — not present in the history held ─",
+                    plot::pointer_label(pointer)
+                )));
+                lines.push(Line::from(""));
+            }
+        }
+    }
 
     let previous = if app.diff_enabled {
         history.and_then(|h| h.previous()).map(|e| &e.view)

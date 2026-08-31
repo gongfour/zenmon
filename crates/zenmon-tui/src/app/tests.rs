@@ -1107,6 +1107,173 @@ fn without_a_contract_the_pane_is_unchanged() {
     assert!(!text.contains("undeclared"), "{text}");
 }
 
+/// A key whose battery drains over `n` messages, shaped like the real pose
+/// blobs: several numbers, a string and a bool alongside.
+fn seed_draining_battery(app: &mut App, n: i64) {
+    for i in 0..n {
+        app.handle_zenoh_message(ZenohMessage {
+            key_expr: "agv/f001/battery".into(),
+            payload: MessagePayload::from_json(&serde_json::json!({
+                "percent": 88 - i,
+                "charging": false,
+                "cell": {"volts": 48.0 + (i as f64) * 0.01},
+                "id": "pack-a",
+            })),
+            encoding: "application/json".into(),
+            payload_bytes: 64,
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+            attachment_bytes: None,
+        });
+    }
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+}
+
+#[test]
+fn p_offers_only_the_numeric_fields() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_draining_battery(&mut app, 5);
+
+    app.handle_key(key(KeyCode::Char('p')));
+    assert_eq!(app.overlay, Overlay::PlotPicker);
+    // `charging` is a bool and `id` a string: neither plots.
+    assert_eq!(app.plottable_fields(), vec!["/cell/volts", "/percent"]);
+}
+
+#[test]
+fn choosing_a_field_draws_its_sparkline_with_the_range() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    seed_draining_battery(&mut app, 10);
+
+    app.handle_key(key(KeyCode::Char('p')));
+    app.handle_key(key(KeyCode::Char('j'))); // onto /percent
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.overlay, Overlay::None);
+    assert_eq!(
+        app.plot_field.get("agv/f001/battery").map(String::as_str),
+        Some("/percent")
+    );
+
+    let text = buffer_text(&draw(&mut app, 96, 24));
+    assert!(text.contains("percent"), "{text}");
+    // The range is what makes a normalised sparkline readable.
+    assert!(text.contains("min 79"), "{text}");
+    assert!(text.contains("max 88"), "{text}");
+    assert!(text.contains("n 10"), "{text}");
+    assert!(text.contains('█'), "expected a sparkline glyph: {text}");
+}
+
+#[test]
+fn a_wide_value_pushes_the_range_onto_its_own_line_instead_of_wrapping() {
+    // A 13-digit epoch-millis timestamp is a real field on the pose messages
+    // this was checked against, and it does not leave room for the range
+    // beside it. The range has to move, not wrap mid-word.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    for i in 0..20i64 {
+        app.handle_zenoh_message(ZenohMessage {
+            key_expr: "nav/pose".into(),
+            payload: MessagePayload::from_json(
+                &serde_json::json!({ "timestamp": 1_788_180_124_679i64 + i }),
+            ),
+            encoding: "application/json".into(),
+            payload_bytes: 32,
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+            attachment_bytes: None,
+        });
+    }
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.plot_field
+        .insert("nav/pose".into(), "/timestamp".into());
+
+    let text = buffer_text(&draw(&mut app, 70, 20));
+    // Every part of the caption survives on one row rather than being split
+    // across a wrap.
+    assert!(
+        text.contains("min 1788180124679  max 1788180124698  n 20"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_plotted_field_is_remembered_per_key() {
+    // Moving away and back should return to the signal you were watching.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_draining_battery(&mut app, 4);
+    app.plot_field
+        .insert("agv/f001/battery".into(), "/percent".into());
+
+    app.handle_key(key(KeyCode::Char('k')));
+    app.handle_key(key(KeyCode::Char('j')));
+    assert_eq!(
+        app.plot_field.get("agv/f001/battery").map(String::as_str),
+        Some("/percent")
+    );
+
+    // And reopening the picker starts on it rather than resetting to the top.
+    app.handle_key(key(KeyCode::Char('p')));
+    assert_eq!(app.plot_picker_selected, 1);
+}
+
+#[test]
+fn shift_p_clears_the_plot() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_draining_battery(&mut app, 4);
+    app.plot_field
+        .insert("agv/f001/battery".into(), "/percent".into());
+
+    app.handle_key(key(KeyCode::Char('P')));
+    assert!(app.plot_field.is_empty());
+}
+
+#[test]
+fn p_on_a_key_with_nothing_numeric_says_so_instead_of_opening_an_empty_list() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.handle_zenoh_message(ZenohMessage {
+        key_expr: "agv/f001/mode".into(),
+        payload: MessagePayload::from_json(&serde_json::json!({"mode": "idle"})),
+        encoding: "application/json".into(),
+        payload_bytes: 16,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+
+    app.handle_key(key(KeyCode::Char('p')));
+    assert_eq!(app.overlay, Overlay::None);
+    assert!(app.toast.is_some(), "the user should be told why");
+}
+
+#[test]
+fn p_on_a_branch_does_not_open_the_picker() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_draining_battery(&mut app, 3);
+    app.tree_selected = 0; // the `agv/` branch
+    app.handle_key(key(KeyCode::Char('p')));
+    assert_eq!(app.overlay, Overlay::None);
+}
+
 #[test]
 fn a_quiet_keys_history_survives_a_noisy_neighbour() {
     // The end-to-end version of what `history` exists for: under the old
@@ -1264,6 +1431,47 @@ fn dump_frames() {
         let mut terminal = Terminal::new(TestBackend::new(88, 22)).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC detail, diff against the previous message =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // A plotted field: the case the bandwidth sparkbar could never show,
+    // because it plots how much a key sends rather than what it says.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.pane_focus = PaneFocus::Detail;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        for i in 0..60i64 {
+            // A discharge with a charging bump in the middle, so the shape is
+            // worth looking at rather than a straight ramp.
+            let pct = if i < 40 { 88 - i } else { 48 + (i - 40) * 2 };
+            app.handle_zenoh_message(ZenohMessage {
+                key_expr: "agv/f001/battery".into(),
+                payload: MessagePayload::from_json(&serde_json::json!({
+                    "percent": pct, "charging": i >= 40, "cell": {"volts": 48.0},
+                })),
+                encoding: "application/json".into(),
+                payload_bytes: 64,
+                timestamp: None,
+                kind: "put".into(),
+                attachment: None,
+                attachment_bytes: None,
+            });
+        }
+        app.auto_expand();
+        app.refresh_tree_rows();
+        app.tree_selected = app.tree_rows().len() - 1;
+        app.plot_field
+            .insert("agv/f001/battery".into(), "/percent".into());
+
+        let mut terminal = Terminal::new(TestBackend::new(96, 20)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC detail, plotted field =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+
+        app.overlay = Overlay::PlotPicker;
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC plot-field picker =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 
