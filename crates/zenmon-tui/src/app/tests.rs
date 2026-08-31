@@ -1274,6 +1274,149 @@ fn p_on_a_branch_does_not_open_the_picker() {
     assert_eq!(app.overlay, Overlay::None);
 }
 
+// ---- publish guards -------------------------------------------------------
+//
+// Four guards stand between a keystroke and a write to a live network. Each
+// gets a test, because the cost of one of them silently regressing is an
+// unintended put on a control topic.
+
+fn ctrl(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::CONTROL)
+}
+
+fn publishing_app(allow: bool) -> App {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.allow_publish = allow;
+    seed_topics(&mut app, &["agv/f001/cmd"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app
+}
+
+fn open_publish(app: &mut App) {
+    app.run_palette_action(PaletteAction::OpenPublish);
+}
+
+#[test]
+fn guard_1_without_the_flag_the_editor_does_not_open() {
+    let mut app = publishing_app(false);
+    open_publish(&mut app);
+    assert_eq!(app.overlay, Overlay::None);
+    // …and says why, rather than the command appearing broken.
+    let (msg, _) = app.toast.clone().expect("a reason should be shown");
+    assert!(msg.contains("--allow-publish"), "{msg}");
+}
+
+#[test]
+fn guard_1_holds_even_if_something_arms_a_publish_directly() {
+    // The flag is checked again at the point of arming, so the guarantee does
+    // not rest on every future caller remembering to check first.
+    let mut app = publishing_app(false);
+    app.publish_key = "agv/f001/cmd".into();
+    app.overlay = Overlay::Publish;
+    app.handle_key(ctrl(KeyCode::Enter));
+    assert!(app.pending_publish.is_none());
+}
+
+#[test]
+fn guard_2_publishing_has_no_direct_key_only_the_palette() {
+    // Nothing on the Traffic keymap may open it: a single keystroke is how an
+    // accident happens.
+    let mut app = publishing_app(true);
+    for c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /".chars() {
+        app.overlay = Overlay::None;
+        app.handle_key(key(KeyCode::Char(c)));
+        assert_ne!(
+            app.overlay,
+            Overlay::Publish,
+            "`{c}` opened the publish editor"
+        );
+    }
+    // The palette is the only door.
+    open_publish(&mut app);
+    assert_eq!(app.overlay, Overlay::Publish);
+}
+
+#[test]
+fn guard_3_a_writable_session_is_labelled_on_every_frame() {
+    let mut writable = publishing_app(true);
+    writable.connection_state = ConnectionState::Connected("zid".into());
+    assert!(buffer_text(&draw(&mut writable, 100, 20)).contains("WRITE"));
+
+    let mut read_only = publishing_app(false);
+    read_only.connection_state = ConnectionState::Connected("zid".into());
+    assert!(!buffer_text(&draw(&mut read_only, 100, 20)).contains("WRITE"));
+}
+
+#[test]
+fn guard_4_plain_enter_does_not_send() {
+    // Every other editor here commits on Enter. This one must not, or the
+    // reflex that dismisses a dialog becomes the thing that writes.
+    let mut app = publishing_app(true);
+    open_publish(&mut app);
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.pending_publish.is_none());
+
+    app.handle_key(ctrl(KeyCode::Enter));
+    assert_eq!(
+        app.pending_publish,
+        Some(("agv/f001/cmd".to_string(), String::new()))
+    );
+}
+
+#[test]
+fn guard_4_the_target_is_named_before_sending() {
+    let mut app = publishing_app(true);
+    app.connection_state = ConnectionState::Connected("zid".into());
+    open_publish(&mut app);
+    let text = buffer_text(&draw(&mut app, 100, 24));
+    assert!(text.contains("will write to"), "{text}");
+    assert!(text.contains("agv/f001/cmd"), "{text}");
+    assert!(text.contains("Ctrl+Enter"), "{text}");
+}
+
+#[test]
+fn a_wildcard_key_is_refused() {
+    // A wildcard put reaches every matching subscriber — on a fleet, every
+    // vehicle at once — and nothing in the editor makes that intent visible.
+    let mut app = publishing_app(true);
+    open_publish(&mut app);
+    app.publish_key = "agv/*/cmd".into();
+    app.handle_key(ctrl(KeyCode::Enter));
+    assert!(app.pending_publish.is_none());
+    let err = app.publish_result.clone().unwrap().unwrap_err();
+    assert!(err.contains("wildcard"), "{err}");
+}
+
+#[test]
+fn an_empty_key_is_refused() {
+    let mut app = publishing_app(true);
+    open_publish(&mut app);
+    app.publish_key.clear();
+    app.handle_key(ctrl(KeyCode::Enter));
+    assert!(app.pending_publish.is_none());
+    assert!(app.publish_result.unwrap().is_err());
+}
+
+#[test]
+fn the_editor_prefills_the_selected_key_and_starts_in_the_payload() {
+    // The key is usually right and the payload never is, so the cursor starts
+    // where the typing has to happen.
+    let mut app = publishing_app(true);
+    open_publish(&mut app);
+    assert_eq!(app.publish_key, "agv/f001/cmd");
+    assert_eq!(app.publish_field, PublishField::Payload);
+}
+
+#[test]
+fn esc_closes_the_editor_without_arming_anything() {
+    let mut app = publishing_app(true);
+    open_publish(&mut app);
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.overlay, Overlay::None);
+    assert!(app.pending_publish.is_none());
+}
+
 #[test]
 fn a_quiet_keys_history_survives_a_noisy_neighbour() {
     // The end-to-end version of what `history` exists for: under the old
@@ -1472,6 +1615,28 @@ fn dump_frames() {
         app.overlay = Overlay::PlotPicker;
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC plot-field picker =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // The publish editor, with the WRITE badge that a writable session carries
+    // for its whole lifetime.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        app.allow_publish = true;
+        for k in ["agv/f001/cmd", "agv/f001/pose"] {
+            app.key_tree.insert(k);
+        }
+        app.auto_expand();
+        app.refresh_tree_rows();
+        app.tree_selected = 2;
+        app.run_palette_action(crate::app::PaletteAction::OpenPublish);
+        app.publish_payload = r#"{"stop":true}"#.into();
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC publish editor (WRITE session) =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 
