@@ -1,5 +1,6 @@
 pub mod app;
 pub mod event;
+pub mod tree;
 pub mod views;
 
 use app::{App, ConnectionState, QueryStatus};
