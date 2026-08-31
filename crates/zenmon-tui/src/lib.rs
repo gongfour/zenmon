@@ -1,5 +1,7 @@
 pub mod app;
 pub mod event;
+pub mod diff;
+pub mod history;
 pub mod tree;
 pub mod views;
 
