@@ -634,6 +634,104 @@ fn filtering_reaches_inside_a_folded_group() {
     );
 }
 
+/// Record `key` as last seen `secs` ago. `Instant` cannot be constructed, so
+/// this walks back from now — saturating, since a machine booted seconds ago
+/// has no instant that far in the past.
+fn seen_ago(app: &mut App, key: &str, secs: u64) {
+    let at = Instant::now()
+        .checked_sub(Duration::from_secs(secs))
+        .unwrap_or_else(Instant::now);
+    app.key_tree.insert(key);
+    app.topic_latest.insert(
+        key.into(),
+        (
+            ZenohMessage {
+                key_expr: key.into(),
+                payload: MessagePayload::from_json(&serde_json::json!(null)),
+                encoding: String::new(),
+                payload_bytes: 0,
+                timestamp: None,
+                kind: "put".into(),
+                attachment: None,
+                attachment_bytes: None,
+            },
+            at,
+        ),
+    );
+}
+
+#[test]
+fn freshness_turns_over_at_the_dim_threshold() {
+    let mut app = App::new("test".into());
+    seen_ago(&mut app, "a/fresh", 0);
+    seen_ago(&mut app, "a/stale", IDLE_DIM_SECS + 1);
+    assert_eq!(app.key_freshness("a/fresh"), KeyFreshness::Live);
+    assert_eq!(app.key_freshness("a/stale"), KeyFreshness::Idle);
+    // In the tree but never carrying a payload.
+    app.key_tree.insert("a/unseen");
+    assert_eq!(app.key_freshness("a/unseen"), KeyFreshness::NoData);
+}
+
+#[test]
+fn format_idle_is_coarse_by_design() {
+    assert_eq!(format_idle(0), "0m");
+    assert_eq!(format_idle(59), "0m");
+    assert_eq!(format_idle(305), "5m");
+    assert_eq!(format_idle(3600), "1h0m");
+    assert_eq!(format_idle(7_845), "2h10m");
+}
+
+#[test]
+fn keys_under_the_cap_are_never_evicted() {
+    // Going quiet is a finding, not a reason to be forgotten.
+    let mut app = App::new("test".into());
+    seen_ago(&mut app, "a/ancient", 86_400);
+    app.evict_excess_keys();
+    assert_eq!(app.key_tree.len(), 1);
+    assert_eq!(app.keys_aged_out, 0);
+}
+
+#[test]
+fn exceeding_the_cap_evicts_the_longest_idle_first() {
+    let mut app = App::new("test".into());
+    // One key per second of age, oldest first, just past the cap.
+    for i in 0..=MAX_KEYS {
+        seen_ago(&mut app, &format!("k/{i:05}"), (MAX_KEYS - i) as u64);
+    }
+    assert_eq!(app.key_tree.len(), MAX_KEYS + 1);
+
+    app.evict_excess_keys();
+
+    let target = (MAX_KEYS as f64 * EVICT_TO_FRACTION) as usize;
+    assert_eq!(app.key_tree.len(), target, "evicts past the cap, not to it");
+    assert_eq!(app.keys_aged_out, MAX_KEYS + 1 - target);
+    // The oldest went; the newest stayed.
+    assert!(!app.key_tree.contains("k/00000"));
+    assert!(app.key_tree.contains(&format!("k/{MAX_KEYS:05}")));
+    // And every map is dropped together, so nothing is left keyed by a key
+    // the tree no longer knows.
+    assert!(!app.topic_latest.contains_key("k/00000"));
+    assert_eq!(app.topic_latest.len(), target);
+}
+
+#[test]
+fn eviction_prunes_expansion_state_for_vanished_branches() {
+    // Otherwise the expansion sets grow without bound alongside the keys they
+    // outlive — the same leak, one level up.
+    let mut app = App::new("test".into());
+    for i in 0..=MAX_KEYS {
+        seen_ago(&mut app, &format!("k{i:05}/leaf"), (MAX_KEYS - i) as u64);
+    }
+    app.tree_expanded.insert("k00000".into());
+    app.tree_unfolded.insert("k00000".into());
+
+    app.evict_excess_keys();
+
+    assert!(!app.key_tree.contains("k00000/leaf"));
+    assert!(!app.tree_expanded.contains("k00000"));
+    assert!(!app.tree_unfolded.contains("k00000"));
+}
+
 #[test]
 fn render_traffic_with_data_wide_and_narrow_shows_key() {
     use ratatui::backend::TestBackend;
@@ -865,6 +963,27 @@ fn dump_frames() {
         app.refresh_tree_rows();
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC 601 keys, filtered to /f017 =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // A mix of live and long-quiet keys, which is what a stalled publisher
+    // actually looks like in this pane.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        seen_ago(&mut app, "agv/f001/pose", 0);
+        seen_ago(&mut app, "agv/f001/battery", 0);
+        seen_ago(&mut app, "agv/f002/pose", 900);
+        seen_ago(&mut app, "agv/f002/battery", 7_845);
+        app.topic_hz.insert("agv/f001/pose".into(), 10.0);
+        app.topic_hz.insert("agv/f001/battery".into(), 1.0);
+        app.auto_expand();
+        app.keys_aged_out = 137;
+
+        let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC live vs long-idle keys =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 

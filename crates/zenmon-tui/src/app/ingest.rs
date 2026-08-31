@@ -189,11 +189,54 @@ impl App {
         }
     }
 
+    /// Drop the longest-idle keys once the tree exceeds [`MAX_KEYS`].
+    ///
+    /// Before this, `key_tree` and `topic_latest` only ever grew — a reconnect
+    /// was the sole way a key left the session. `topic_hz`/`topic_rates` were
+    /// already bounded by their own idle sweep in `update_hz`, so this closes
+    /// the last two.
+    ///
+    /// Eviction goes past the cap down to [`EVICT_TO_FRACTION`] of it: the sort
+    /// is O(n log n) over every key, and without the slack a namespace sitting
+    /// at the cap would pay for it on every single new key.
+    pub(crate) fn evict_excess_keys(&mut self) {
+        if self.key_tree.len() <= MAX_KEYS {
+            return;
+        }
+        let target = (MAX_KEYS as f64 * EVICT_TO_FRACTION) as usize;
+        let drop_n = self.key_tree.len().saturating_sub(target);
+
+        let mut by_age: Vec<(String, Instant)> = self
+            .topic_latest
+            .iter()
+            .map(|(k, (_, at))| (k.clone(), *at))
+            .collect();
+        by_age.sort_by_key(|(_, at)| *at);
+
+        for (key, _) in by_age.into_iter().take(drop_n) {
+            self.key_tree.remove(&key);
+            self.topic_latest.remove(&key);
+            self.topic_hz.remove(&key);
+            self.topic_rates.remove(&key);
+            self.topic_msg_counts.remove(&key);
+            self.topic_byte_counts.remove(&key);
+            self.keys_aged_out += 1;
+        }
+
+        // Expansion state is keyed by path, so pruned branches would otherwise
+        // leave entries behind that nothing can ever reach again — the same
+        // unbounded growth one level up.
+        self.tree_expanded.retain(|p| self.key_tree.has_children(p));
+        self.tree_unfolded.retain(|p| self.key_tree.has_children(p));
+        self.tree_expanded_version = self.tree_expanded_version.wrapping_add(1);
+    }
+
     pub fn update_hz(&mut self) {
         let elapsed = self.last_hz_update.elapsed().as_secs_f64();
         if elapsed < 1.0 {
             return;
         }
+        self.evict_excess_keys();
 
         // Every topic we already track a rate for gets a bucket this interval —
         // even if it received nothing (a 0 bucket) — so sparklines show real

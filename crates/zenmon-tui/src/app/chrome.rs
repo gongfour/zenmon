@@ -151,7 +151,7 @@ impl App {
 
         // Line 1 (skipped when compact): counts summary.
         if !compact {
-            let counts = format!(
+            let mut counts = format!(
                 "{} sessions · {} services · {} keys · {:.0} msg/s · {}",
                 self.nodes.len(),
                 self.liveliness_tokens.len(),
@@ -159,6 +159,12 @@ impl App {
                 self.total_hz,
                 format_bytes_per_sec(self.total_bytes_per_sec()),
             );
+            // Say so when the session has forgotten keys. A monitoring tool
+            // that quietly drops what it observed is worse than one that
+            // admits the ceiling.
+            if self.keys_aged_out > 0 {
+                counts.push_str(&format!(" · {} aged out", self.keys_aged_out));
+            }
             frame.render_widget(
                 Paragraph::new(Span::styled(counts, Style::default().fg(Color::DarkGray))),
                 line1,

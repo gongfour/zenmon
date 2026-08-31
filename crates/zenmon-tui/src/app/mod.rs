@@ -31,6 +31,45 @@ use zenmon_core::types::{
 /// How many children an expanded branch may list before it folds to a summary.
 pub(crate) const DEFAULT_FOLD_THRESHOLD: usize = 12;
 
+/// A key's row dims after this long without a message.
+pub(crate) const IDLE_DIM_SECS: u64 = 300;
+
+/// Above this many keys the longest-idle ones are dropped.
+///
+/// This is a memory bound, not a staleness policy. A key that stopped
+/// publishing is itself a finding — often *the* finding — so going quiet never
+/// gets a key evicted on its own; it only decides who goes first when the
+/// session has accumulated more keys than it can hold.
+pub(crate) const MAX_KEYS: usize = 10_000;
+
+/// Evict down to this fraction of [`MAX_KEYS`], so the sort behind an eviction
+/// runs occasionally rather than once per key past the cap.
+pub(crate) const EVICT_TO_FRACTION: f64 = 0.9;
+
+/// How a key's row should read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyFreshness {
+    /// Publishing recently.
+    Live,
+    /// Seen this session, silent for at least [`IDLE_DIM_SECS`].
+    Idle,
+    /// In the tree but no payload recorded — only reachable transiently.
+    NoData,
+}
+
+/// Coarse "how long ago" for an idle key: minutes, then hours.
+///
+/// Deliberately blunt. The number answers "did this stop just now or hours
+/// ago", and a second-accurate figure next to a dimmed row would invite
+/// reading precision into something the 1 Hz sampling cannot support.
+pub(crate) fn format_idle(secs: u64) -> String {
+    if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
 /// The flattened rows, kept until something they depend on changes.
 ///
 /// Flattening is cheap per node but runs over every visible row, and the frame
@@ -294,6 +333,10 @@ pub struct App {
     pub tree_user_touched: bool,
     /// Children above which an expanded branch shows a summary row instead.
     pub fold_threshold: usize,
+    /// Keys dropped to stay under [`MAX_KEYS`]. Surfaced in the header, because
+    /// a monitoring tool that silently forgets what it saw is worse than one
+    /// that admits it.
+    pub keys_aged_out: usize,
     tree_cache: TreeViewCache,
 
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
@@ -418,6 +461,7 @@ impl App {
             tree_expanded_version: 0,
             tree_user_touched: false,
             fold_threshold: DEFAULT_FOLD_THRESHOLD,
+            keys_aged_out: 0,
             tree_cache: TreeViewCache::default(),
             topic_latest: HashMap::new(),
             admin_nodes: Vec::new(),
@@ -668,6 +712,22 @@ impl App {
             // Not `mark_tree_touched`: this is not the user's doing.
             self.tree_expanded_version = self.tree_expanded_version.wrapping_add(1);
         }
+    }
+
+    /// Whether a key is publishing, has gone quiet, or has no payload yet.
+    pub(crate) fn key_freshness(&self, key: &str) -> KeyFreshness {
+        match self.topic_latest.get(key) {
+            None => KeyFreshness::NoData,
+            Some((_, at)) if at.elapsed().as_secs() >= IDLE_DIM_SECS => KeyFreshness::Idle,
+            Some(_) => KeyFreshness::Live,
+        }
+    }
+
+    /// Seconds since the last message on `key`, if one was ever recorded.
+    pub(crate) fn idle_secs(&self, key: &str) -> Option<u64> {
+        self.topic_latest
+            .get(key)
+            .map(|(_, at)| at.elapsed().as_secs())
     }
 
     /// Aggregate rate and bandwidth for every key at or below `path`.

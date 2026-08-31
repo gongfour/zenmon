@@ -1,10 +1,14 @@
 //! Traffic space — master/detail view over live key expressions.
 //!
-//! Left (master): a flat, sorted key list with Hz + a tiny bandwidth sparkbar.
-//! Right (detail): the selected key in **Live** mode (latest payload + scrolling
-//! history scoped to that key) or **Query** mode (results of a `get`).
+//! Left (master): the key hierarchy, one segment per row, with Hz and a tiny
+//! bandwidth sparkbar on the keys and a count on the branches.
+//! Right (detail): a key in **Live** mode (latest payload + scrolling history)
+//! or **Query** mode (results of a `get`); a branch gets a subtree summary.
 
-use crate::app::{format_bytes_per_sec, App, BodyLayout, DetailMode, PaneFocus, QueryStatus};
+use crate::app::{
+    format_bytes_per_sec, format_idle, App, BodyLayout, DetailMode, KeyFreshness, PaneFocus,
+    QueryStatus,
+};
 use crate::tree::{RowKind, TreeRow};
 use crate::views::fmt::format_stream_timestamp;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -56,10 +60,6 @@ fn sparkbar(series: &[u64], width: usize) -> String {
         .collect()
 }
 
-/// One row's leading indent and expander glyph.
-///
-/// The glyph column is always present, so keys and branches at the same depth
-/// line up instead of the text shifting by one when a row happens to be a leaf.
 fn plural_keys(n: usize) -> String {
     if n == 1 {
         "1 key".to_string()
@@ -68,6 +68,10 @@ fn plural_keys(n: usize) -> String {
     }
 }
 
+/// One row's leading indent and expander glyph.
+///
+/// The glyph column is always present, so keys and branches at the same depth
+/// line up instead of the text shifting by one when a row happens to be a leaf.
 fn row_prefix(row: &TreeRow) -> String {
     let indent = "  ".repeat(row.depth as usize);
     let glyph = match row.kind {
@@ -145,18 +149,27 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                     ]))
                 }
                 RowKind::Leaf => {
-                    let has_data = app.topic_latest.contains_key(&row.path);
+                    let freshness = app.key_freshness(&row.path);
                     let hz = app.topic_hz.get(&row.path).copied().unwrap_or(0.0);
-                    let hz_str = if hz > 0.0 {
-                        format!("{:>6.1} Hz", hz)
-                    } else {
-                        "      — ".to_string()
+                    // An idle key shows how long it has been quiet instead of a
+                    // dash: "stopped" and "stopped an hour ago" are different
+                    // findings, and the dash alone cannot tell them apart.
+                    let (hz_str, rate_color) = match (freshness, hz > 0.0) {
+                        (_, true) => (format!("{:>6.1} Hz", hz), Color::Green),
+                        (KeyFreshness::Idle, false) => {
+                            let idle = app.idle_secs(&row.path).unwrap_or(0);
+                            // Not a rate, so not the rate colour — a quiet key
+                            // should not read as if it were still publishing.
+                            (format!("{:>6} ", format_idle(idle)), Color::DarkGray)
+                        }
+                        _ => ("      — ".to_string(), Color::DarkGray),
                     };
                     let spark = sparkbar(&app.topic_rate_series(&row.path), 8);
-                    let key_style = if has_data {
-                        Style::default().fg(Color::White)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
+                    let key_style = match freshness {
+                        KeyFreshness::Live => Style::default().fg(Color::White),
+                        KeyFreshness::Idle | KeyFreshness::NoData => {
+                            Style::default().fg(Color::DarkGray)
+                        }
                     };
                     let pad = label_width
                         .saturating_sub(prefix.chars().count() + row.segment.chars().count());
@@ -164,7 +177,7 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                         Span::raw(prefix),
                         Span::styled(row.segment.clone(), key_style),
                         Span::raw(" ".repeat(pad + 2)),
-                        Span::styled(hz_str, Style::default().fg(Color::Green)),
+                        Span::styled(hz_str, Style::default().fg(rate_color)),
                         Span::raw(" "),
                         Span::styled(spark, Style::default().fg(Color::Cyan)),
                     ]))
@@ -261,6 +274,13 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
         header.push_str(&format!(" · {}", enc));
     }
     header.push_str(&format!(" · {} msgs", history.len()));
+    // The master row dims when a key goes quiet; the detail says for how long,
+    // since a stopped publisher is usually the thing being investigated.
+    if app.key_freshness(&key) == KeyFreshness::Idle {
+        if let Some(idle) = app.idle_secs(&key) {
+            header.push_str(&format!(" · silent {}", format_idle(idle)));
+        }
+    }
 
     let active = Style::default()
         .fg(Color::Black)
