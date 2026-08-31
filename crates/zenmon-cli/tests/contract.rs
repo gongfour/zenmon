@@ -189,8 +189,14 @@ fn v2_lint_counts_endpoints_and_flags_disagreements() {
         .collect();
     let has = |needle: &str| warnings.iter().any(|w| w.contains(needle));
 
-    assert!(has("type mismatch on topic/state/mixed_type"), "{warnings:?}");
-    assert!(has("producer QoS mismatch on topic/state/mixed_qos"), "{warnings:?}");
+    assert!(
+        has("type mismatch on topic/state/mixed_type"),
+        "{warnings:?}"
+    );
+    assert!(
+        has("producer QoS mismatch on topic/state/mixed_qos"),
+        "{warnings:?}"
+    );
     assert!(has("unknown role 'listener'"), "{warnings:?}");
     assert!(has("undeclared service 'ghost_service'"), "{warnings:?}");
 
@@ -238,7 +244,13 @@ fn v2_show_emits_endpoints_and_derived_participants() {
 #[test]
 fn v2_show_treats_call_client_as_producer() {
     let out = zenmon()
-        .args(["--json", "contract", "show", "call/mission/pause", FIXTURE_V2])
+        .args([
+            "--json",
+            "contract",
+            "show",
+            "call/mission/pause",
+            FIXTURE_V2,
+        ])
         .output()
         .expect("run zenmon");
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");

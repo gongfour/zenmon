@@ -218,7 +218,11 @@ fn canonical_json(value: &Value) -> String {
             format!("{{{body}}}")
         }
         Value::Array(items) => {
-            let body = items.iter().map(canonical_json).collect::<Vec<_>>().join(",");
+            let body = items
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",");
             format!("[{body}]")
         }
         other => other.to_string(),
@@ -397,10 +401,7 @@ impl Contract {
                 ));
             }
             if !self.services.is_empty() && !self.services.contains(&e.service) {
-                warnings.push(format!(
-                    "undeclared service '{}' on {}",
-                    e.service, t.key
-                ));
+                warnings.push(format!("undeclared service '{}' on {}", e.service, t.key));
             }
         }
 
@@ -1033,7 +1034,11 @@ topics:
         let c = Contract::from_yaml_str(V2).unwrap();
         let w = warnings_for("topic/mixed_type", &c);
         assert_eq!(w.len(), 1, "{w:?}");
-        assert!(w[0].starts_with("type mismatch on topic/mixed_type"), "{}", w[0]);
+        assert!(
+            w[0].starts_with("type mismatch on topic/mixed_type"),
+            "{}",
+            w[0]
+        );
     }
 
     #[test]
@@ -1056,8 +1061,14 @@ topics:
     fn v2_lints_unknown_role_and_undeclared_service() {
         let c = Contract::from_yaml_str(V2).unwrap();
         let w = warnings_for("topic/bad", &c);
-        assert!(w.iter().any(|x| x.contains("unknown role 'listener'")), "{w:?}");
-        assert!(w.iter().any(|x| x.contains("undeclared service 'ghost'")), "{w:?}");
+        assert!(
+            w.iter().any(|x| x.contains("unknown role 'listener'")),
+            "{w:?}"
+        );
+        assert!(
+            w.iter().any(|x| x.contains("undeclared service 'ghost'")),
+            "{w:?}"
+        );
     }
 
     /// QoS blocks that differ only in key order are the same QoS.
