@@ -29,6 +29,11 @@ use zenmon_core::types::{
     LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, ZenohMessage,
 };
 
+/// Numeric fields offered in the plot picker. A payload with more than this
+/// many numbers is a table, not a set of signals, and a list that long stops
+/// being a menu.
+pub(crate) const PLOT_FIELD_LIMIT: usize = 24;
+
 /// How many children an expanded branch may list before it folds to a summary.
 pub(crate) const DEFAULT_FOLD_THRESHOLD: usize = 12;
 
@@ -125,6 +130,8 @@ pub enum Overlay {
     Doctor,
     Palette,
     ScoutPort,
+    /// Pick which numeric field of the selected key to plot.
+    PlotPicker,
 }
 
 /// An effect the command palette can trigger. Each entry in [`palette_commands`]
@@ -376,6 +383,11 @@ pub struct App {
     /// says whether the selected key is declared and whether its encoding
     /// matches — turning "what is this key" into a question the tool answers.
     pub contract: Option<zenmon_core::contract::Contract>,
+    /// Which field is plotted, per key. Remembered across cursor moves: coming
+    /// back to a vehicle should show the same signal you left it on.
+    pub plot_field: HashMap<String, String>,
+    /// Cursor inside the plot-field picker.
+    pub plot_picker_selected: usize,
     pub topic_detail_scroll: u16,
 
     pub topic_msg_counts: HashMap<String, u32>,
@@ -498,6 +510,8 @@ impl App {
             topics_filtering: false,
             diff_enabled: true,
             contract: None,
+            plot_field: HashMap::new(),
+            plot_picker_selected: 0,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
             topic_hz: HashMap::new(),
@@ -733,6 +747,19 @@ impl App {
             // Not `mark_tree_touched`: this is not the user's doing.
             self.tree_expanded_version = self.tree_expanded_version.wrapping_add(1);
         }
+    }
+
+    /// The numeric fields offerable for the selected key, from its latest
+    /// payload. Empty when nothing numeric is in it.
+    pub(crate) fn plottable_fields(&self) -> Vec<String> {
+        let Some(key) = self.selected_topic_key() else {
+            return Vec::new();
+        };
+        self.history
+            .get(&key)
+            .and_then(|h| h.latest())
+            .map(|e| crate::plot::numeric_pointers(&e.view, PLOT_FIELD_LIMIT))
+            .unwrap_or_default()
     }
 
     /// Whether a key is publishing, has gone quiet, or has no payload yet.

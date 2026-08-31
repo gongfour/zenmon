@@ -62,6 +62,9 @@ impl App {
         if self.overlay == Overlay::ScoutPort {
             self.render_scout_port_modal(frame, body_area);
         }
+        if self.overlay == Overlay::PlotPicker {
+            self.render_plot_picker(frame, body_area);
+        }
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
@@ -172,10 +175,71 @@ impl App {
         }
     }
 
+    /// The field picker: every numeric field in the selected key's latest
+    /// payload, with its current value so the choice is informed.
+    fn render_plot_picker(&self, frame: &mut Frame, content_area: Rect) {
+        let fields = self.plottable_fields();
+        let width = 46.min(content_area.width.saturating_sub(2));
+        let height = (fields.len() as u16 + 4).min(content_area.height.saturating_sub(2));
+        if width < 20 || height < 5 {
+            return;
+        }
+        let popup = Rect::new(
+            content_area.x + (content_area.width - width) / 2,
+            content_area.y + (content_area.height - height) / 2,
+            width,
+            height,
+        );
+
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Plot field ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let latest = self
+            .selected_topic_key()
+            .and_then(|k| self.history.get(&k).and_then(|h| h.latest()).cloned());
+
+        let mut lines: Vec<Line> = fields
+            .iter()
+            .enumerate()
+            .map(|(i, pointer)| {
+                let value = latest
+                    .as_ref()
+                    .and_then(|e| e.view.pointer(pointer))
+                    .and_then(serde_json::Value::as_f64)
+                    .map(crate::plot::format_value)
+                    .unwrap_or_default();
+                let style = if i == self.plot_picker_selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(
+                    format!(" {:<24} {:>14} ", pointer.trim_start_matches('/'), value),
+                    style,
+                ))
+            })
+            .collect();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[Enter] plot   [Esc] cancel   [P] clear",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = match self.space {
             Space::Traffic => {
-                "Tab space  j/k move  h/l fold  / filter  D diff  L live  Q query  y/Y copy  : cmds  ? help  q quit"
+                "Tab space  j/k move  h/l fold  / filter  D diff  p plot  L live  Q query  y copy  : cmds  ? help  q quit"
             }
             Space::Network => {
                 "Tab space  j/k move  Enter drill  s scout  y copy  : cmds  d doctor  ? help  q quit"
@@ -233,6 +297,7 @@ impl App {
             ("/", "filter (searches inside folded groups)"),
             ("E/C", "expand / collapse everything"),
             ("D", "highlight what changed since the previous message"),
+            ("p/P", "plot a numeric field / clear the plot"),
         ] {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {:<6}", keys), Style::default().fg(Color::Yellow)),

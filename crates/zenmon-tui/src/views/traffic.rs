@@ -11,6 +11,7 @@ use crate::app::{
 };
 use crate::diff::{self, DiffTag};
 use crate::history::PAYLOAD_CAP_BYTES;
+use crate::plot;
 use crate::tree::{RowKind, TreeRow};
 use crate::views::fmt::format_stream_timestamp;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -21,6 +22,18 @@ use ratatui::Frame;
 
 /// Unicode block glyphs (low→high) for the master sparkbar.
 const SPARK_GLYPHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Columns the value and its range need beside a sparkline.
+const PLOT_LABEL_COLS: u16 = 34;
+
+/// How many glyphs of value sparkline fit in a detail pane `width` wide.
+///
+/// Sized to the pane rather than fixed: at a fixed 48 the line wrapped on a
+/// narrow split, which turns a shape you read at a glance into two rows you
+/// have to reassemble.
+fn plot_width(width: u16) -> usize {
+    width.saturating_sub(PLOT_LABEL_COLS).clamp(8, 64) as usize
+}
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     match app.body_layout(area) {
@@ -91,11 +104,11 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
     let keys = app.key_tree.len();
 
     let title = if app.topics_filtering {
-        format!(" Traffic — {} keys · /{}_ ", keys, app.topic_filter)
+        format!(" Traffic — {} · /{}_ ", plural_keys(keys), app.topic_filter)
     } else if !app.topic_filter.is_empty() {
-        format!(" Traffic — {} keys · /{} ", keys, app.topic_filter)
+        format!(" Traffic — {} · /{} ", plural_keys(keys), app.topic_filter)
     } else {
-        format!(" Traffic — {} keys ", keys)
+        format!(" Traffic — {} ", plural_keys(keys))
     };
 
     // Indentation makes every row a different length, so the rate column would
@@ -378,7 +391,7 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(header_lines), header_area);
 
     let body_lines = match app.detail_mode {
-        DetailMode::Live => live_body(app, &key),
+        DetailMode::Live => live_body(app, &key, body_area.width),
         DetailMode::Query => query_body(app),
     };
 
@@ -487,9 +500,57 @@ fn diff_style(tag: DiffTag) -> Style {
     }
 }
 
-fn live_body<'a>(app: &'a App, key: &str) -> Vec<Line<'a>> {
+fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
     let mut lines: Vec<Line> = Vec::new();
     let history = app.history.get(key);
+
+    // A plotted field goes above the payload: it is the reason the pane is open
+    // when someone is watching a value move, and burying it under the JSON
+    // would mean scrolling to the thing you came for.
+    if let (Some(pointer), Some(h)) = (app.plot_field.get(key), history) {
+        match plot::series_for(h, pointer) {
+            Some(series) => {
+                lines.push(section_owned(format!(
+                    "─ {} ─",
+                    plot::pointer_label(pointer)
+                )));
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        plot::spark(&series, plot_width(width)),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        series.last().map(plot::format_value).unwrap_or_default(),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    // The range is what makes the shape readable: the sparkline
+                    // is normalised to it, so without it a 2% wobble and a full
+                    // discharge draw the same picture.
+                    Span::styled(
+                        format!(
+                            "   min {}  max {}  n {}",
+                            plot::format_value(series.min),
+                            plot::format_value(series.max),
+                            series.values.len()
+                        ),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+            }
+            None => {
+                lines.push(section_owned(format!(
+                    "─ {} — not present in the history held ─",
+                    plot::pointer_label(pointer)
+                )));
+                lines.push(Line::from(""));
+            }
+        }
+    }
 
     let previous = if app.diff_enabled {
         history.and_then(|h| h.previous()).map(|e| &e.view)

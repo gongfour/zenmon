@@ -87,8 +87,10 @@ pub struct KeyHistory {
 }
 
 impl KeyHistory {
-    /// Newest first.
-    pub fn iter(&self) -> impl Iterator<Item = &HistoryEntry> {
+    /// Newest first. Double-ended so a caller that needs chronological order —
+    /// a sparkline, where left-to-right has to mean older-to-newer — can just
+    /// reverse it.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &HistoryEntry> {
         self.entries.iter()
     }
 
