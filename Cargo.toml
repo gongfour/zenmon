@@ -23,6 +23,19 @@ default-members = [
     "crates/zenmon-tui",
 ]
 
+# This repository ships binaries, and the CLI is downloaded per-release, so the
+# release profile optimises for a small artifact and fast startup.
+#
+# `panic = "abort"` is deliberately NOT set. `zenmon-tray` is in this workspace
+# and runs unattended for days writing rotating capture segments; whether an
+# abort loses the in-flight segment has not been established, and shrinking the
+# CLI is not worth finding out the hard way.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
