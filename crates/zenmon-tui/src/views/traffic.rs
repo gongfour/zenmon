@@ -9,6 +9,8 @@ use crate::app::{
     format_bytes_per_sec, format_idle, App, BodyLayout, DetailMode, KeyFreshness, PaneFocus,
     QueryStatus,
 };
+use crate::diff::{self, DiffTag};
+use crate::history::PAYLOAD_CAP_BYTES;
 use crate::tree::{RowKind, TreeRow};
 use crate::views::fmt::format_stream_timestamp;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -252,14 +254,9 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     // Fixed header (stats + mode indicator), then the scrollable body.
+    let header_h = if app.contract.is_some() { 3 } else { 2 };
     let [header_area, body_area] =
-        Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
-
-    let history: Vec<&zenmon_core::types::ZenohMessage> = app
-        .sub_messages
-        .iter()
-        .filter(|m| m.key_expr == key)
-        .collect();
+        Layout::vertical([Constraint::Length(header_h), Constraint::Fill(1)]).areas(inner);
 
     // Header line: {hz} Hz · {bw} · {encoding?} · {n} msgs
     let hz = app.topic_hz.get(&key).copied().unwrap_or(0.0);
@@ -273,7 +270,24 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     {
         header.push_str(&format!(" · {}", enc));
     }
-    header.push_str(&format!(" · {} msgs", history.len()));
+    header.push_str(&format!(
+        " · {} held",
+        app.history.get(&key).map_or(0, |h| h.len())
+    ));
+    // How many leaves moved, so "did anything change" is answerable from the
+    // header without reading the body.
+    if app.diff_enabled {
+        if let Some(h) = app.history.get(&key) {
+            if let (Some(cur), Some(prev)) = (h.latest(), h.previous()) {
+                let n = diff::changed_paths(&cur.view, &prev.view).len();
+                header.push_str(&match n {
+                    0 => " · unchanged".to_string(),
+                    1 => " · 1 field changed".to_string(),
+                    n => format!(" · {n} fields changed"),
+                });
+            }
+        }
+    }
     // The master row dims when a key goes quiet; the detail says for how long,
     // since a stopped publisher is usually the thing being investigated.
     if app.key_freshness(&key) == KeyFreshness::Idle {
@@ -281,6 +295,53 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
             header.push_str(&format!(" · silent {}", format_idle(idle)));
         }
     }
+
+    // Contract badge. Only rendered when a contract was loaded, so a session
+    // without one looks exactly as it did.
+    let contract_line = app.contract.as_ref().map(|c| {
+        let encoding = app
+            .topic_latest
+            .get(&key)
+            .map(|(m, _)| m.encoding.as_str())
+            .unwrap_or("");
+        let e = c.enrich(&key, encoding);
+        let mut spans = Vec::new();
+        if e.declared {
+            spans.push(Span::styled(
+                "contract ✓",
+                Style::default().fg(Color::Green),
+            ));
+            // An encoding the contract did not expect is the kind of mismatch
+            // that produces a decoder failure three services downstream, so it
+            // is called out rather than left for the reader to compare.
+            if e.encoding_matches == Some(false) {
+                spans.push(Span::styled(
+                    format!(
+                        "  encoding: expected {}, got {}",
+                        e.encoding_expected.as_deref().unwrap_or("?"),
+                        if encoding.is_empty() {
+                            "none"
+                        } else {
+                            encoding
+                        }
+                    ),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            if let Some(d) = &e.description {
+                spans.push(Span::styled(
+                    format!("  {d}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        } else {
+            spans.push(Span::styled(
+                "undeclared",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        Line::from(spans)
+    });
 
     let active = Style::default()
         .fg(Color::Black)
@@ -306,16 +367,18 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
             },
         ),
     ]);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(header, Style::default().fg(Color::Gray))),
-            mode_line,
-        ]),
-        header_area,
-    );
+    let mut header_lines = vec![Line::from(Span::styled(
+        header,
+        Style::default().fg(Color::Gray),
+    ))];
+    if let Some(line) = contract_line {
+        header_lines.push(line);
+    }
+    header_lines.push(mode_line);
+    frame.render_widget(Paragraph::new(header_lines), header_area);
 
     let body_lines = match app.detail_mode {
-        DetailMode::Live => live_body(app, &key, &history),
+        DetailMode::Live => live_body(app, &key),
         DetailMode::Query => query_body(app),
     };
 
@@ -410,33 +473,53 @@ fn snippet(text: &str, max: usize) -> String {
     }
 }
 
-fn live_body<'a>(
-    app: &'a App,
-    key: &str,
-    history: &[&'a zenmon_core::types::ZenohMessage],
-) -> Vec<Line<'a>> {
-    let mut lines: Vec<Line> = Vec::new();
+/// Colour for a diff verdict. Unchanged fields are dimmed rather than the
+/// changed one being brightened: on a twenty-field blob where one value moves,
+/// pushing the other nineteen back is what makes the one readable.
+fn diff_style(tag: DiffTag) -> Style {
+    match tag {
+        DiffTag::Changed => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        DiffTag::Added => Style::default().fg(Color::Green),
+        DiffTag::Removed => Style::default().fg(Color::Red),
+        DiffTag::Same => Style::default().fg(Color::Gray),
+    }
+}
 
-    lines.push(section("─ latest ─"));
-    match app.topic_latest.get(key) {
-        Some((msg, _)) => {
-            for line in msg.payload.pretty().lines() {
+fn live_body<'a>(app: &'a App, key: &str) -> Vec<Line<'a>> {
+    let mut lines: Vec<Line> = Vec::new();
+    let history = app.history.get(key);
+
+    let previous = if app.diff_enabled {
+        history.and_then(|h| h.previous()).map(|e| &e.view)
+    } else {
+        None
+    };
+
+    let header = match (app.diff_enabled, previous.is_some()) {
+        (false, _) => "─ latest (D to diff) ─",
+        (true, false) => "─ latest (no previous message yet) ─",
+        (true, true) => "─ latest · changes vs previous ─",
+    };
+    lines.push(section(header));
+
+    match history.and_then(|h| h.latest()) {
+        Some(entry) => {
+            if entry.truncated {
                 lines.push(Line::from(Span::styled(
-                    format!("  {}", line),
-                    Style::default().fg(Color::White),
+                    format!(
+                        "  (showing first {} of {} bytes)",
+                        PAYLOAD_CAP_BYTES, entry.raw_len
+                    ),
+                    Style::default().fg(Color::DarkGray),
                 )));
             }
-            if let Some(att) = &msg.attachment {
+            for tl in diff::render(&entry.view, previous) {
                 lines.push(Line::from(Span::styled(
-                    "  attachment:",
-                    Style::default().fg(Color::Magenta),
+                    format!("  {}{}", "  ".repeat(tl.indent as usize), tl.text),
+                    diff_style(tl.tag),
                 )));
-                for line in att.pretty().lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("    {}", line),
-                        Style::default().fg(Color::Magenta),
-                    )));
-                }
             }
         }
         None => lines.push(Line::from(Span::styled(
@@ -445,33 +528,48 @@ fn live_body<'a>(
         ))),
     }
 
-    lines.push(Line::from(""));
-    let hist_header = if app.sub_paused {
-        "─ history (paused, space=resume) ─"
-    } else {
-        "─ history (live, space=pause) ─"
-    };
-    lines.push(section(hist_header));
+    // The attachment is not diffed: it carries correlation ids that change on
+    // every message by design, so marking them would be noise on every line.
+    if let Some((msg, _)) = app.topic_latest.get(key) {
+        if let Some(att) = &msg.attachment {
+            lines.push(Line::from(Span::styled(
+                "  attachment:",
+                Style::default().fg(Color::Magenta),
+            )));
+            for line in att.pretty().lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", line),
+                    Style::default().fg(Color::Magenta),
+                )));
+            }
+        }
+    }
 
-    if history.is_empty() {
-        lines.push(Line::from(Span::styled(
+    lines.push(Line::from(""));
+    let held = history.map_or(0, |h| h.len());
+    let hist_header = if app.sub_paused {
+        format!("─ history · {held} held (paused, space=resume) ─")
+    } else {
+        format!("─ history · {held} held (space=pause) ─")
+    };
+    lines.push(section_owned(hist_header));
+
+    match history {
+        None => lines.push(Line::from(Span::styled(
             "  (no messages buffered for this key)",
             Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for msg in history {
-            let ts = format_stream_timestamp(msg.timestamp.as_deref().unwrap_or(""));
-            let mut spans = vec![
-                Span::styled(format!("{}  ", ts), Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    snippet(&msg.payload.to_string(), 60),
-                    Style::default().fg(Color::White),
-                ),
-            ];
-            if msg.attachment.is_some() {
-                spans.push(Span::styled("  att", Style::default().fg(Color::Magenta)));
+        ))),
+        Some(h) => {
+            for entry in h.iter() {
+                let ts = format_stream_timestamp(entry.timestamp.as_deref().unwrap_or(""));
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{}  ", ts), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        snippet(&entry.view.to_string(), 60),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
             }
-            lines.push(Line::from(spans));
         }
     }
 
@@ -534,6 +632,14 @@ fn query_body(app: &App) -> Vec<Line<'_>> {
 }
 
 fn section(label: &str) -> Line<'_> {
+    Line::from(Span::styled(
+        label,
+        Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+    ))
+}
+
+/// [`section`] for a heading built at render time (one that carries a count).
+fn section_owned(label: String) -> Line<'static> {
     Line::from(Span::styled(
         label,
         Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),

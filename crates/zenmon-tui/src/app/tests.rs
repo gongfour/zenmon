@@ -81,6 +81,47 @@ fn empty_reason_reflects_connection_state() {
 }
 
 #[test]
+fn empty_states_do_not_advertise_keys_that_no_longer_exist() {
+    // This copy went stale silently: it kept pointing at `m`, `P` and the
+    // numbered tabs `(4)`/`(5)` for a year after the two-space redesign removed
+    // all of them, and nothing failed. Anything a user is told to press has to
+    // still be bound.
+    let bound = |c: char| {
+        let mut app = App::new("test".into());
+        let before = format!("{:?}", (app.space, app.overlay, app.topics_filtering));
+        app.handle_key(key(KeyCode::Char(c)));
+        format!("{:?}", (app.space, app.overlay, app.topics_filtering)) != before
+    };
+
+    for reason in [
+        EmptyReason::Connecting,
+        EmptyReason::Disconnected,
+        EmptyReason::NoDataYet,
+        EmptyReason::FilteredOut,
+    ] {
+        let (why, action) = empty_state_text(reason);
+        for text in [why, action] {
+            assert!(
+                !text.contains("(4)") && !text.contains("(5)"),
+                "{text:?} names a tab the redesign removed"
+            );
+            for c in ['m', 'P'] {
+                assert!(
+                    !text.contains(&format!("press {c} ")),
+                    "{text:?} names `{c}`, which is not bound"
+                );
+            }
+        }
+    }
+
+    // And the keys the copy does name are real.
+    assert!(bound(':'), "the palette key must work");
+    assert!(bound('d'), "the doctor key must work");
+    assert!(bound('?'), "the help key must work");
+    assert!(bound('/'), "the filter key must work");
+}
+
+#[test]
 fn empty_reason_distinguishes_filter_from_no_data() {
     let mut app = App::new("test".into());
     app.connection_state = ConnectionState::Connected("zid".into());
@@ -871,6 +912,230 @@ fn buffer_grid(buf: &ratatui::buffer::Buffer) -> String {
     out
 }
 
+/// Foreground colour of the first non-blank cell on the row containing
+/// `needle`. The frame dumps are text-only, so colour — which is the entire
+/// diff signal — needs asserting from the buffer itself.
+fn row_fg(buf: &ratatui::buffer::Buffer, needle: &str) -> ratatui::style::Color {
+    let area = buf.area();
+    for y in 0..area.height {
+        let row: String = (0..area.width)
+            .map(|x| buf[(area.x + x, area.y + y)].symbol())
+            .collect();
+        if let Some(col) = row.find(needle) {
+            return buf[(area.x + col as u16, area.y + y)].fg;
+        }
+    }
+    panic!("no row containing {needle:?}");
+}
+
+/// A pair of messages on one key differing in `mode`, `speed` and `error`.
+fn seed_state_change(app: &mut App) {
+    let state = |mode: &str, speed: f64, err: serde_json::Value| ZenohMessage {
+        key_expr: "agv/f001/state".into(),
+        payload: MessagePayload::from_json(&serde_json::json!({
+            "mode": mode, "speed": speed, "load": 0, "battery": 87, "error": err,
+        })),
+        encoding: "application/json".into(),
+        payload_bytes: 96,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    };
+    app.handle_zenoh_message(state("moving", 1.2, serde_json::json!(null)));
+    app.handle_zenoh_message(state("stalled", 0.0, serde_json::json!("obstacle")));
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+}
+
+fn draw(app: &mut App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn the_detail_pane_highlights_only_the_fields_that_moved() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    seed_state_change(&mut app);
+
+    let buf = draw(&mut app, 88, 22);
+    // Three fields moved; two did not. The unchanged ones must recede.
+    assert_eq!(row_fg(&buf, "mode:"), ratatui::style::Color::Yellow);
+    assert_eq!(row_fg(&buf, "speed:"), ratatui::style::Color::Yellow);
+    assert_eq!(row_fg(&buf, "error:"), ratatui::style::Color::Yellow);
+    assert_eq!(row_fg(&buf, "battery:"), ratatui::style::Color::Gray);
+    assert_eq!(row_fg(&buf, "load:"), ratatui::style::Color::Gray);
+}
+
+#[test]
+fn d_turns_the_diff_off_and_everything_goes_quiet_again() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    seed_state_change(&mut app);
+
+    app.handle_key(key(KeyCode::Char('D')));
+    assert!(!app.diff_enabled);
+    let buf = draw(&mut app, 88, 22);
+    assert_eq!(row_fg(&buf, "mode:"), ratatui::style::Color::Gray);
+    assert!(
+        buffer_text(&buf).contains("D to diff"),
+        "the way back is shown"
+    );
+}
+
+#[test]
+fn a_key_seen_once_says_there_is_no_baseline_rather_than_marking_everything() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.handle_zenoh_message(ZenohMessage {
+        key_expr: "agv/f001/state".into(),
+        payload: MessagePayload::from_json(&serde_json::json!({"mode": "idle"})),
+        encoding: "application/json".into(),
+        payload_bytes: 16,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+
+    let buf = draw(&mut app, 88, 22);
+    assert!(buffer_text(&buf).contains("no previous message yet"));
+    assert_eq!(row_fg(&buf, "mode:"), ratatui::style::Color::Gray);
+}
+
+/// Minimal contract declaring one topic with a JSON encoding.
+fn test_contract() -> zenmon_core::contract::Contract {
+    zenmon_core::contract::Contract::from_yaml_str(
+        r#"
+version: "0.2"
+project: test
+encoding:
+  default: application/json
+types: {}
+services: []
+topics:
+  - key: agv/*/state
+    description: Vehicle state
+"#,
+    )
+    .expect("fixture contract parses")
+}
+
+fn seed_one(app: &mut App, key: &str, encoding: &str) {
+    app.handle_zenoh_message(ZenohMessage {
+        key_expr: key.into(),
+        payload: MessagePayload::from_json(&serde_json::json!({"mode": "idle"})),
+        encoding: encoding.into(),
+        payload_bytes: 16,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    });
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+}
+
+#[test]
+fn a_declared_key_says_so_and_carries_its_description() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(test_contract());
+    seed_one(&mut app, "agv/f001/state", "application/json");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(text.contains("contract ✓"), "{text}");
+    assert!(text.contains("Vehicle state"), "{text}");
+}
+
+#[test]
+fn a_key_the_contract_does_not_declare_is_marked_undeclared() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(test_contract());
+    seed_one(&mut app, "agv/f001/mystery", "application/json");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(text.contains("undeclared"), "{text}");
+}
+
+#[test]
+fn an_encoding_the_contract_did_not_expect_is_called_out() {
+    // The mismatch that shows up as a decoder failure three services away.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(test_contract());
+    seed_one(&mut app, "agv/f001/state", "text/plain");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(text.contains("expected application/json"), "{text}");
+    assert!(text.contains("got text/plain"), "{text}");
+}
+
+#[test]
+fn without_a_contract_the_pane_is_unchanged() {
+    // No contract loaded must mean no badge row at all, not an empty one.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    seed_one(&mut app, "agv/f001/state", "application/json");
+
+    let text = buffer_text(&draw(&mut app, 88, 22));
+    assert!(!text.contains("contract"), "{text}");
+    assert!(!text.contains("undeclared"), "{text}");
+}
+
+#[test]
+fn a_quiet_keys_history_survives_a_noisy_neighbour() {
+    // The end-to-end version of what `history` exists for: under the old
+    // global 500-entry ring this key's past was gone within seconds.
+    let mut app = App::new("test".into());
+    let msg = |k: &str, n: i64| ZenohMessage {
+        key_expr: k.into(),
+        payload: MessagePayload::from_json(&serde_json::json!({ "n": n })),
+        encoding: "application/json".into(),
+        payload_bytes: 12,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    };
+    app.handle_zenoh_message(msg("agv/quiet/pose", 1));
+    app.handle_zenoh_message(msg("agv/quiet/pose", 2));
+    for i in 0..5_000 {
+        app.handle_zenoh_message(msg("agv/loud/pose", i));
+    }
+    assert_eq!(app.history.get("agv/quiet/pose").unwrap().len(), 2);
+    assert!(app
+        .history
+        .get("agv/quiet/pose")
+        .unwrap()
+        .previous()
+        .is_some());
+}
+
 /// A dev harness (not run by default): seed a realistic network and dump the
 /// actual rendered frames to stdout for manual inspection.
 /// Run with: `cargo test -p zenmon-tui dump_frames -- --ignored --nocapture`
@@ -963,6 +1228,42 @@ fn dump_frames() {
         app.refresh_tree_rows();
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC 601 keys, filtered to /f017 =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // A repeating status blob where one field moved: the case the diff exists
+    // for, and the one a wall of JSON cannot show.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.pane_focus = PaneFocus::Detail;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        let state = |mode: &str, speed: f64, err: serde_json::Value| ZenohMessage {
+            key_expr: "agv/f001/state".into(),
+            payload: MessagePayload::from_json(&serde_json::json!({
+                "mode": mode,
+                "speed": speed,
+                "load": 0,
+                "battery": 87,
+                "error": err,
+                "pose": {"x": 12.5, "y": 3.0},
+            })),
+            encoding: "application/json".into(),
+            payload_bytes: 96,
+            timestamp: None,
+            kind: "put".into(),
+            attachment: None,
+            attachment_bytes: None,
+        };
+        app.handle_zenoh_message(state("moving", 1.2, serde_json::json!(null)));
+        app.handle_zenoh_message(state("stalled", 0.0, serde_json::json!("obstacle")));
+        app.auto_expand();
+        app.refresh_tree_rows();
+        app.tree_selected = app.tree_rows().len() - 1;
+
+        let mut terminal = Terminal::new(TestBackend::new(88, 22)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC detail, diff against the previous message =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 

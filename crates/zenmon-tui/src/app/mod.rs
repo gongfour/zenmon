@@ -18,6 +18,7 @@ mod tests;
 // `App` fields that hold it are declared here.
 use ingest::{RateWindow, RATE_WINDOW_SECS};
 
+use crate::history::History;
 use crate::tree::{FlattenOpts, KeyTree, RowKind, TreeRow};
 use ratatui::layout::{Constraint, Layout, Rect};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -267,13 +268,18 @@ pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static s
             "Connecting to the network…",
             "Waiting for the session to come up.",
         ),
+        // These point at `:`, `d` and `?` rather than naming the keys for
+        // "switch mode" or "scan ports". Those moved into the command palette
+        // during the two-space redesign and the old text kept advertising `m`
+        // and `P`, which have not been bound since. The palette is the stable
+        // address; what it contains can change without stranding this copy.
         EmptyReason::Disconnected => (
             "Not connected.",
-            "Check the endpoint; press m to change mode or P to scan domains.",
+            "Check the endpoint, or press : for commands — switch mode, change scout port.",
         ),
         EmptyReason::NoDataYet => (
             "Connected, but no messages observed yet.",
-            "Topics appear as messages arrive. Try Query (4) or Nodes (5), or ? for help.",
+            "Keys appear as messages arrive. Press d to run doctor, or ? for the keys.",
         ),
         EmptyReason::FilteredOut => (
             "Nothing matches the current filter.",
@@ -340,6 +346,9 @@ pub struct App {
     tree_cache: TreeViewCache,
 
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
+    /// Per-key history, replacing the global ring the detail pane used to
+    /// filter. See [`crate::history`] for why the global ring could not work.
+    pub history: History,
     pub admin_nodes: Vec<NodeInfo>,
     pub scout_nodes: Vec<NodeInfo>,
     pub nodes: Vec<NodeInfo>,
@@ -359,6 +368,14 @@ pub struct App {
     /// Cursor over the visible rows of [`App::tree_rows`].
     pub tree_selected: usize,
     pub topics_filtering: bool,
+    /// Highlight what changed since the previous message on the selected key.
+    /// On by default: a repeating status blob is unreadable without it, and the
+    /// cost when nothing changed is that everything renders dim.
+    pub diff_enabled: bool,
+    /// Loaded from `--contract` / ZENMON_CONTRACT. When present the detail pane
+    /// says whether the selected key is declared and whether its encoding
+    /// matches — turning "what is this key" into a question the tool answers.
+    pub contract: Option<zenmon_core::contract::Contract>,
     pub topic_detail_scroll: u16,
 
     pub topic_msg_counts: HashMap<String, u32>,
@@ -456,6 +473,7 @@ impl App {
             endpoint,
             space_tab_rects: [None; 2],
             key_tree: KeyTree::new(),
+            history: History::default(),
             tree_expanded: HashSet::new(),
             tree_unfolded: HashSet::new(),
             tree_expanded_version: 0,
@@ -478,6 +496,8 @@ impl App {
             topic_filter: String::new(),
             tree_selected: 0,
             topics_filtering: false,
+            diff_enabled: true,
+            contract: None,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
             topic_hz: HashMap::new(),
@@ -565,6 +585,7 @@ impl App {
         // opening should get another go at it.
         self.tree_user_touched = false;
         self.topic_latest.clear();
+        self.history.clear();
         self.topic_msg_counts.clear();
         self.topic_hz.clear();
         self.total_msg_count = 0;
