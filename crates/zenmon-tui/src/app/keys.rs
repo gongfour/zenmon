@@ -148,6 +148,7 @@ impl App {
                 self.follow_stream();
                 self.topic_detail_scroll = 0;
             }
+            KeyCode::Char('D') => self.diff_enabled = !self.diff_enabled,
             KeyCode::Char('y') => self.copy_selected_payload(),
             KeyCode::Char('Y') => self.copy_selected_key(),
             _ => {}

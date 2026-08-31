@@ -152,6 +152,7 @@ impl App {
 
         self.topic_latest
             .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
+        self.history.record(&msg);
 
         *self
             .topic_msg_counts
@@ -220,6 +221,7 @@ impl App {
             self.topic_rates.remove(&key);
             self.topic_msg_counts.remove(&key);
             self.topic_byte_counts.remove(&key);
+            self.history.remove(&key);
             self.keys_aged_out += 1;
         }
 

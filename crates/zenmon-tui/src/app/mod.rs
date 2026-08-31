@@ -18,6 +18,7 @@ mod tests;
 // `App` fields that hold it are declared here.
 use ingest::{RateWindow, RATE_WINDOW_SECS};
 
+use crate::history::History;
 use crate::tree::{FlattenOpts, KeyTree, RowKind, TreeRow};
 use ratatui::layout::{Constraint, Layout, Rect};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -340,6 +341,9 @@ pub struct App {
     tree_cache: TreeViewCache,
 
     pub topic_latest: HashMap<String, (ZenohMessage, Instant)>,
+    /// Per-key history, replacing the global ring the detail pane used to
+    /// filter. See [`crate::history`] for why the global ring could not work.
+    pub history: History,
     pub admin_nodes: Vec<NodeInfo>,
     pub scout_nodes: Vec<NodeInfo>,
     pub nodes: Vec<NodeInfo>,
@@ -359,6 +363,10 @@ pub struct App {
     /// Cursor over the visible rows of [`App::tree_rows`].
     pub tree_selected: usize,
     pub topics_filtering: bool,
+    /// Highlight what changed since the previous message on the selected key.
+    /// On by default: a repeating status blob is unreadable without it, and the
+    /// cost when nothing changed is that everything renders dim.
+    pub diff_enabled: bool,
     pub topic_detail_scroll: u16,
 
     pub topic_msg_counts: HashMap<String, u32>,
@@ -456,6 +464,7 @@ impl App {
             endpoint,
             space_tab_rects: [None; 2],
             key_tree: KeyTree::new(),
+            history: History::default(),
             tree_expanded: HashSet::new(),
             tree_unfolded: HashSet::new(),
             tree_expanded_version: 0,
@@ -478,6 +487,7 @@ impl App {
             topic_filter: String::new(),
             tree_selected: 0,
             topics_filtering: false,
+            diff_enabled: true,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
             topic_hz: HashMap::new(),
@@ -565,6 +575,7 @@ impl App {
         // opening should get another go at it.
         self.tree_user_touched = false;
         self.topic_latest.clear();
+        self.history.clear();
         self.topic_msg_counts.clear();
         self.topic_hz.clear();
         self.total_msg_count = 0;

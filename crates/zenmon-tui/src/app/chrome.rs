@@ -175,7 +175,7 @@ impl App {
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = match self.space {
             Space::Traffic => {
-                "Tab space  j/k move  h/l fold  E/C all  / filter  L live  Q query  y/Y copy  : cmds  ? help  q quit"
+                "Tab space  j/k move  h/l fold  / filter  D diff  L live  Q query  y/Y copy  : cmds  ? help  q quit"
             }
             Space::Network => {
                 "Tab space  j/k move  Enter drill  s scout  y copy  : cmds  d doctor  ? help  q quit"
@@ -230,8 +230,9 @@ impl App {
             ("h/←", "collapse, or go to the parent"),
             ("l/→", "expand, descend, or open a folded group"),
             ("z", "toggle the branch under the cursor"),
-            ("E/C", "expand / collapse everything"),
             ("/", "filter (searches inside folded groups)"),
+            ("E/C", "expand / collapse everything"),
+            ("D", "highlight what changed since the previous message"),
         ] {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {:<6}", keys), Style::default().fg(Color::Yellow)),
