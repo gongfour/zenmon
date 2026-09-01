@@ -129,6 +129,8 @@ pub enum Overlay {
     /// Compose a message to publish. Only reachable when the session was
     /// started with `--allow-publish`.
     Publish,
+    /// Compose a request to send with `get`.
+    Query,
     /// Name the view being saved.
     ProfileSave,
     /// Pick a saved view to restore.
@@ -149,6 +151,10 @@ pub enum PaletteAction {
     /// capability is discoverable and its absence is explained rather than
     /// silently missing.
     OpenPublish,
+    /// Flip query reply consolidation. On the palette rather than a key: it
+    /// changes what a later query returns, and a stray keystroke in the editor
+    /// must not silently alter the question being asked.
+    ToggleQueryReplies,
     SaveProfile,
     LoadProfile,
     Quit,
@@ -207,6 +213,11 @@ pub fn palette_commands() -> &'static [PaletteCommand] {
             action: PaletteAction::OpenPublish,
         },
         PaletteCommand {
+            label: "Query replies: one per key / every reply",
+            key_hint: "",
+            action: PaletteAction::ToggleQueryReplies,
+        },
+        PaletteCommand {
             label: "Save this view…",
             key_hint: "",
             action: PaletteAction::SaveProfile,
@@ -227,6 +238,22 @@ pub fn palette_commands() -> &'static [PaletteCommand] {
             action: PaletteAction::Quit,
         },
     ]
+}
+
+/// A composed `get`, handed to the run loop which owns the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryRequest {
+    pub key_expr: String,
+    /// `None` sends no payload at all, which is distinct from an empty one.
+    pub payload: Option<String>,
+    pub all_replies: bool,
+}
+
+/// Which line of the query editor the cursor is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryField {
+    Key,
+    Payload,
 }
 
 /// Which line of the publish editor the cursor is on.
@@ -458,11 +485,21 @@ pub struct App {
     pub(crate) total_rate: RateWindow,
     pub(crate) topic_rates: HashMap<String, RateWindow>,
 
-    pub query_input: String,
+    /// Key the composed request will go to.
+    pub query_key: String,
+    /// Request payload. Empty sends a `get` with no payload, which is what a
+    /// storage or a parameterless service expects.
+    pub query_payload: String,
+    pub query_field: QueryField,
+    /// Deliver every reply rather than only the fastest.
+    ///
+    /// Zenoh consolidates by default, so when several queryables serve one key
+    /// — a service fanned across a fleet — only one answer is observable. That
+    /// is the wrong default when the question is "which of them answered".
+    pub query_all_replies: bool,
     pub query_results: Vec<ZenohMessage>,
     pub query_history: Vec<String>,
-    pub query_editing: bool,
-    pub pending_query: Option<String>,
+    pub pending_query: Option<QueryRequest>,
     pub query_status: QueryStatus,
     pub query_selected: usize,
 
@@ -582,10 +619,12 @@ impl App {
             total_byte_count: 0,
             total_rate: RateWindow::new(RATE_WINDOW_SECS),
             topic_rates: HashMap::new(),
-            query_input: String::new(),
+            query_key: String::new(),
+            query_payload: String::new(),
+            query_field: QueryField::Payload,
+            query_all_replies: false,
             query_results: Vec::new(),
             query_history: Vec::new(),
-            query_editing: false,
             pending_query: None,
             query_status: QueryStatus::Idle,
             query_selected: 0,

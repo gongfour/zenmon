@@ -68,6 +68,9 @@ impl App {
         if self.overlay == Overlay::Publish {
             self.render_publish_editor(frame, body_area);
         }
+        if self.overlay == Overlay::Query {
+            self.render_query_editor(frame, body_area);
+        }
         if self.overlay == Overlay::ProfileSave {
             self.render_profile_save(frame, body_area);
         }
@@ -259,6 +262,96 @@ impl App {
         )));
 
         frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    /// The request editor behind `Q`.
+    fn render_query_editor(&self, frame: &mut Frame, content_area: Rect) {
+        let Some(popup) = Self::popup_rect(content_area, 72, 12, 32, 8) else {
+            return;
+        };
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Query — request ")
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let field = |label: &str, value: &str, active: bool, empty_hint: &str| {
+            let marker = if active { "▸ " } else { "  " };
+            let (text, style) = if value.is_empty() && !active {
+                (empty_hint.to_string(), Style::default().fg(Color::DarkGray))
+            } else {
+                (
+                    format!("{value}{}", if active { "_" } else { "" }),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("{marker}{label:<9}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(text, style),
+            ])
+        };
+
+        let mut lines = vec![
+            field(
+                "key",
+                &self.query_key,
+                self.query_field == QueryField::Key,
+                "",
+            ),
+            field(
+                "request",
+                &self.query_payload,
+                self.query_field == QueryField::Payload,
+                "(none — what a storage expects)",
+            ),
+            Line::from(vec![
+                Span::styled("  replies  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if self.query_all_replies {
+                        "every reply"
+                    } else {
+                        "one per key (zenoh default)"
+                    },
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+            Line::from(""),
+        ];
+
+        // A declared request schema is what marks this key as a service rather
+        // than a storage, so it is the one thing worth saying before sending.
+        match self.query_request_schema() {
+            Some(schema) => {
+                lines.push(Line::from(Span::styled(
+                    "  this key is a service — the contract declares a request:",
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", schema),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            None if self.contract.is_some() => lines.push(Line::from(Span::styled(
+                "  no request declared for this key in the contract",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            None => {}
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  [Enter] send   [Tab] field   [Esc] cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
 
     /// The publish editor.
@@ -470,7 +563,7 @@ impl App {
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = match self.space {
             Space::Traffic => {
-                "Tab space  j/k move  h/l fold  / filter  D diff  p plot  L live  Q query  y copy  : cmds  ? help  q quit"
+                "Tab space  j/k move  h/l fold  / filter  D diff  p plot  L live  Q request  y copy  : cmds  ? help  q quit"
             }
             Space::Network => {
                 "Tab space  j/k move  / filter  D dead only  s scout  y copy  : cmds  d doctor  ? help  q quit"
@@ -530,6 +623,7 @@ impl App {
             ("D", "highlight what changed since the previous message"),
             ("p/P", "plot a numeric field / clear the plot"),
             ("space", "freeze the payload and history being read"),
+            ("L/Q", "live values / compose a request (get)"),
         ] {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {:<6}", keys), Style::default().fg(Color::Yellow)),

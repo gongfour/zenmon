@@ -271,20 +271,27 @@ async fn run_loop(
     spawn_scout_task(config.clone(), tx.clone(), Duration::from_secs(3));
 
     loop {
-        if let Some(key_expr) = app.pending_query.take() {
+        if let Some(req) = app.pending_query.take() {
             if let Some(s) = session.lock().await.as_ref() {
                 app.query_status = QueryStatus::Running;
                 let s = s.clone();
                 let tx = query_tx.clone();
-                let ke = key_expr.clone();
+                // `None` consolidation delivers every reply; the default keeps
+                // one per key, which hides all but the fastest queryable when
+                // several serve the same expression.
+                let consolidation = if req.all_replies {
+                    zenmon_core::query::ConsolidationMode::None
+                } else {
+                    zenmon_core::query::ConsolidationMode::Auto
+                };
                 tokio::spawn(async move {
                     match zenmon_core::query::get(
                         &s,
-                        &ke,
-                        None,
+                        &req.key_expr,
+                        req.payload.as_deref(),
                         Duration::from_secs(5),
                         None,
-                        zenmon_core::query::ConsolidationMode::Auto,
+                        consolidation,
                     )
                     .await
                     {
