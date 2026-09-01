@@ -177,7 +177,10 @@ impl App {
         // Line 1 (skipped when compact): counts summary.
         if !compact {
             let mut counts = format!(
-                "{} sessions · {} services · {} keys · {:.0} msg/s · {}",
+                // "tokens", not "services": zenoh's word for these is
+                // liveliness token, and a contract's `service` is a different
+                // thing entirely.
+                "{} sessions · {} tokens · {} keys · {:.0} msg/s · {}",
                 self.nodes.len(),
                 self.liveliness_tokens.len(),
                 self.key_tree.len(),

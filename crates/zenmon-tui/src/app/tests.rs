@@ -1876,7 +1876,7 @@ fn network_selection_resolves_session_then_service() {
     app.network_selected = 1;
     assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(1)));
     app.network_selected = 2;
-    assert_eq!(app.selected_network_row(), Some(NetworkRow::Service(0)));
+    assert_eq!(app.selected_network_row(), Some(NetworkRow::Liveliness(0)));
 }
 
 #[test]
