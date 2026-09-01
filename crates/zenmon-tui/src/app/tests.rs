@@ -1150,6 +1150,117 @@ fn p_on_a_branch_does_not_open_the_picker() {
     assert_eq!(app.overlay, Overlay::None);
 }
 
+// ---- network filter -------------------------------------------------------
+
+fn fleet_network() -> App {
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    app.connection_state = ConnectionState::Connected("z1".into());
+    app.nodes.push(make_node("z1", "router"));
+    app.nodes.push(make_node("z2", "peer"));
+    for (key, alive) in [
+        ("agv/f001/node/planner", true),
+        ("agv/f002/node/planner", false),
+        ("agv/f003/node/planner", true),
+        ("srv/fleet/node/dispatcher", true),
+    ] {
+        app.liveliness_tokens.push(make_token(key, alive));
+    }
+    app
+}
+
+fn token_keys(app: &App) -> Vec<String> {
+    app.network_rows()
+        .into_iter()
+        .filter_map(|r| match r {
+            NetworkRow::Liveliness(i) => Some(app.liveliness_tokens[i].key_expr.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn dead_tokens_sort_first() {
+    // The one that stopped is the finding; on a fleet it is a handful of rows
+    // among thousands and scrolling to them is the work this removes.
+    let app = fleet_network();
+    assert_eq!(token_keys(&app)[0], "agv/f002/node/planner");
+}
+
+#[test]
+fn the_filter_matches_token_keys_and_session_fields() {
+    let mut app = fleet_network();
+    app.network_filter = "f002".into();
+    assert_eq!(token_keys(&app), vec!["agv/f002/node/planner"]);
+    assert!(!app
+        .network_rows()
+        .iter()
+        .any(|r| matches!(r, NetworkRow::Session(_))));
+
+    app.network_filter = "router".into();
+    let rows = app.network_rows();
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(rows[0], NetworkRow::Session(_)));
+}
+
+#[test]
+fn dead_only_hides_the_live_tokens_and_the_sessions() {
+    // A transport session has no alive/dead state to filter on, so showing it
+    // under "dead only" would pad the answer with rows that cannot be it.
+    let mut app = fleet_network();
+    app.handle_key(key(KeyCode::Char('D')));
+    assert!(app.network_dead_only);
+    assert_eq!(token_keys(&app), vec!["agv/f002/node/planner"]);
+    assert!(!app
+        .network_rows()
+        .iter()
+        .any(|r| matches!(r, NetworkRow::Session(_))));
+}
+
+#[test]
+fn a_filter_that_hides_everything_says_so_rather_than_nothing_is_running() {
+    // The most alarming thing this space could say wrongly.
+    let mut app = fleet_network();
+    app.network_filter = "zzz".into();
+    assert_eq!(app.nodes_empty_reason(), EmptyReason::FilteredOut);
+    let text = buffer_text(&draw(&mut app, 100, 20));
+    assert!(text.contains("filter"), "{text}");
+}
+
+#[test]
+fn the_header_counts_what_is_on_screen() {
+    // A header claiming 4 while showing 1 makes the filter look broken.
+    let mut app = fleet_network();
+    app.network_filter = "f002".into();
+    let text = buffer_text(&draw(&mut app, 100, 20));
+    assert!(text.contains("Liveliness (0/1 alive)"), "{text}");
+}
+
+#[test]
+fn the_title_says_when_rows_are_being_hidden() {
+    let mut app = fleet_network();
+    app.handle_key(key(KeyCode::Char('D')));
+    assert!(buffer_text(&draw(&mut app, 100, 20)).contains("dead only"));
+
+    app.handle_key(key(KeyCode::Char('D')));
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "f002".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert!(buffer_text(&draw(&mut app, 100, 20)).contains("/f002"));
+}
+
+#[test]
+fn the_cursor_stays_inside_the_list_when_a_filter_shrinks_it() {
+    let mut app = fleet_network();
+    app.network_selected = app.network_rows().len() - 1;
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "f002".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert!(app.network_selected < app.network_rows().len());
+}
+
 // ---- pause ----------------------------------------------------------------
 
 fn numbered(key: &str, n: i64) -> ZenohMessage {
@@ -1746,6 +1857,34 @@ fn dump_frames() {
         let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC live vs long-idle keys =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // A fleet-sized liveliness list, and the same list narrowed to the one
+    // token that is not alive — the question this space gets asked.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Network;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        app.nodes.push(make_node("a3f19c0011223344", "router"));
+        for i in 0..6 {
+            for node in ["planner", "safety", "drive"] {
+                let alive = !(i == 3 && node == "safety");
+                app.liveliness_tokens.push(make_token(
+                    &format!("agv/f{i:03}/node/{node}_a6f6902{i}"),
+                    alive,
+                ));
+            }
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== NETWORK liveliness, all =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+
+        app.network_dead_only = true;
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== NETWORK dead only =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 

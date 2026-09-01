@@ -432,6 +432,17 @@ pub struct App {
     pub profile_name_input: String,
     /// Cursor in the load picker.
     pub profile_selected: usize,
+
+    /// Substring filter over the Network list, matched against a session's zid
+    /// and kind and a token's key expression.
+    pub network_filter: String,
+    pub network_filtering: bool,
+    /// Show only liveliness tokens that are not alive.
+    ///
+    /// The question this space gets asked is "which one died", and on a fleet
+    /// the answer is a handful of rows among thousands. Sorting dead-first
+    /// helps; being able to see nothing else is what actually answers it.
+    pub network_dead_only: bool,
     pub topic_detail_scroll: u16,
 
     pub topic_msg_counts: HashMap<String, u32>,
@@ -558,6 +569,9 @@ impl App {
             profiles: zenmon_core::profile::TuiProfiles::default(),
             profile_name_input: String::new(),
             profile_selected: 0,
+            network_filter: String::new(),
+            network_filtering: false,
+            network_dead_only: false,
             topic_detail_scroll: 0,
             topic_msg_counts: HashMap::new(),
             topic_hz: HashMap::new(),
@@ -702,12 +716,20 @@ impl App {
         }
     }
 
-    /// Why the Nodes list is empty (only meaningful when it is).
+    /// Why the Network list is empty (only meaningful when it is).
     pub(crate) fn nodes_empty_reason(&self) -> EmptyReason {
         if let Some(r) = self.connection_empty_reason() {
             return r;
         }
-        EmptyReason::NoDataYet
+        // A filter or the dead-only toggle hiding everything must not read as
+        // "nothing is running" — on this space that is the most alarming
+        // possible thing to say wrongly.
+        let has_any = !self.nodes.is_empty() || !self.liveliness_tokens.is_empty();
+        if has_any && (!self.network_filter.is_empty() || self.network_dead_only) {
+            EmptyReason::FilteredOut
+        } else {
+            EmptyReason::NoDataYet
+        }
     }
 
     /// Rebuild the flattened rows if the tree, the expansion state or the filter
