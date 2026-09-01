@@ -525,6 +525,12 @@ impl App {
                     self.pending_scout_request = true;
                 }
             }
+            KeyCode::Char('/') => self.network_filtering = true,
+            KeyCode::Char('D') => {
+                self.network_dead_only = !self.network_dead_only;
+                self.clamp_network_selection();
+                self.node_detail_scroll = 0;
+            }
             KeyCode::Char('y') => self.copy_selected_participant(),
             _ => {}
         }
@@ -563,16 +569,49 @@ impl App {
     /// impose, so related tokens land together without the view having to
     /// decide what "related" means.
     pub(crate) fn network_rows(&self) -> Vec<NetworkRow> {
-        let mut rows: Vec<NetworkRow> = (0..self.nodes.len()).map(NetworkRow::Session).collect();
+        let needle = self.network_filter.to_lowercase();
+        let matches = |hay: &str| needle.is_empty() || hay.to_lowercase().contains(&needle);
 
-        let mut token_idx: Vec<usize> = (0..self.liveliness_tokens.len()).collect();
+        // Sessions are hidden entirely by the dead-only toggle: it exists to
+        // answer "which token died", and a transport session has no such state
+        // to be filtered on.
+        let mut rows: Vec<NetworkRow> = if self.network_dead_only {
+            Vec::new()
+        } else {
+            (0..self.nodes.len())
+                .filter(|&i| {
+                    let n = &self.nodes[i];
+                    matches(&n.zid) || matches(&n.kind)
+                })
+                .map(NetworkRow::Session)
+                .collect()
+        };
+
+        let mut token_idx: Vec<usize> = (0..self.liveliness_tokens.len())
+            .filter(|&i| {
+                let t = &self.liveliness_tokens[i];
+                (!self.network_dead_only || !t.alive) && matches(&t.key_expr)
+            })
+            .collect();
+        // Dead first, then by key. A token that stopped is the finding; on a
+        // fleet it is a handful of rows among thousands, and scrolling to them
+        // is the work this ordering removes.
         token_idx.sort_by(|&a, &b| {
-            self.liveliness_tokens[a]
-                .key_expr
-                .cmp(&self.liveliness_tokens[b].key_expr)
+            let (ta, tb) = (&self.liveliness_tokens[a], &self.liveliness_tokens[b]);
+            ta.alive.cmp(&tb.alive).then(ta.key_expr.cmp(&tb.key_expr))
         });
         rows.extend(token_idx.into_iter().map(NetworkRow::Liveliness));
         rows
+    }
+
+    /// Keep the cursor inside the row list after a filter changes it.
+    pub(crate) fn clamp_network_selection(&mut self) {
+        let len = self.network_rows().len();
+        self.network_selected = if len == 0 {
+            0
+        } else {
+            self.network_selected.min(len - 1)
+        };
     }
 
     /// The participant row under the unified cursor, if any.
@@ -587,6 +626,7 @@ impl App {
 
     pub(crate) fn is_text_input_active(&self) -> bool {
         self.topics_filtering
+            || self.network_filtering
             || self.query_editing
             || self.overlay == Overlay::Palette
             || self.overlay == Overlay::ScoutPort
@@ -762,6 +802,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.topics_filtering = false;
+                self.network_filtering = false;
                 self.query_editing = false;
             }
             KeyCode::Enter => {
@@ -775,10 +816,16 @@ impl App {
                 if self.topics_filtering {
                     self.topics_filtering = false;
                 }
+                if self.network_filtering {
+                    self.network_filtering = false;
+                }
             }
             KeyCode::Char(c) => {
                 if self.topics_filtering {
                     self.topic_filter.push(c);
+                } else if self.network_filtering {
+                    self.network_filter.push(c);
+                    self.clamp_network_selection();
                 } else if self.query_editing {
                     self.query_input.push(c);
                 }
@@ -786,6 +833,9 @@ impl App {
             KeyCode::Backspace => {
                 if self.topics_filtering {
                     self.topic_filter.pop();
+                } else if self.network_filtering {
+                    self.network_filter.pop();
+                    self.clamp_network_selection();
                 } else if self.query_editing {
                     self.query_input.pop();
                 }

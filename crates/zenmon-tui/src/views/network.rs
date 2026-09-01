@@ -64,12 +64,26 @@ fn header_item(label: String) -> ListItem<'static> {
 }
 
 fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Network — participants ");
+    // The title carries the filter and the dead-only state, because a list
+    // that is hiding rows must say so — an empty Network pane that looks like
+    // "nothing is running" would be the worst possible lie from this space.
+    let mut title = " Network".to_string();
+    if app.network_dead_only {
+        title.push_str(" — dead only");
+    }
+    if app.network_filtering {
+        title.push_str(&format!(" · /{}_", app.network_filter));
+    } else if !app.network_filter.is_empty() {
+        title.push_str(&format!(" · /{}", app.network_filter));
+    }
+    if !app.network_dead_only && app.network_filter.is_empty() {
+        title.push_str(" — participants");
+    }
+    title.push(' ');
+    let block = Block::default().borders(Borders::ALL).title(title);
 
     // Both sections empty → a single contextual empty state, no list chrome.
-    if app.nodes.is_empty() && app.liveliness_tokens.is_empty() {
+    if app.network_rows().is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         super::render_empty_state(frame, inner, app.nodes_empty_reason());
@@ -85,9 +99,25 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
     let now = SystemTime::now();
     let self_zid = app.self_zid.clone();
 
-    let total_tokens = app.liveliness_tokens.len();
-    let total_alive = app.liveliness_tokens.iter().filter(|t| t.alive).count();
-    let n_sessions = app.nodes.len();
+    // Counts describe what is on screen, not what exists: a header claiming
+    // 14 while showing 2 makes the filter look broken.
+    let shown_sessions = rows
+        .iter()
+        .filter(|r| matches!(r, NetworkRow::Session(_)))
+        .count();
+    let shown_tokens: Vec<usize> = rows
+        .iter()
+        .filter_map(|r| match r {
+            NetworkRow::Liveliness(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    let total_tokens = shown_tokens.len();
+    let total_alive = shown_tokens
+        .iter()
+        .filter(|&&i| app.liveliness_tokens[i].alive)
+        .count();
+    let n_sessions = shown_sessions;
 
     let mut items: Vec<ListItem> = Vec::new();
     // One entry per display row (parallel to `items`): `Some(selectable_index)`

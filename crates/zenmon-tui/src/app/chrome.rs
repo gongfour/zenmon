@@ -473,7 +473,7 @@ impl App {
                 "Tab space  j/k move  h/l fold  / filter  D diff  p plot  L live  Q query  y copy  : cmds  ? help  q quit"
             }
             Space::Network => {
-                "Tab space  j/k move  Enter drill  s scout  y copy  : cmds  d doctor  ? help  q quit"
+                "Tab space  j/k move  / filter  D dead only  s scout  y copy  : cmds  d doctor  ? help  q quit"
             }
         };
         frame.render_widget(
@@ -536,6 +536,22 @@ impl App {
                 Span::styled(what.to_string(), Style::default().fg(Color::White)),
             ]));
         }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Network",
+            Style::default().fg(Color::Cyan),
+        )));
+        for (keys, what) in [
+            ("/", "filter sessions and tokens"),
+            ("D", "show only tokens that are not alive"),
+            ("s", "rescan for nodes"),
+        ] {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<6}", keys), Style::default().fg(Color::Yellow)),
+                Span::styled(what.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
+
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "`:` opens the command palette · j/k or ↑↓ to scroll · Esc/q/? to close",
