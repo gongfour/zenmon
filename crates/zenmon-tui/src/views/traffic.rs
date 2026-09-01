@@ -661,7 +661,7 @@ fn query_body(app: &App) -> Vec<Line<'_>> {
 
     let status = match &app.query_status {
         QueryStatus::Idle => Span::styled(
-            "Idle — press Q to run a get on this key",
+            "Idle — press Q to ask this key for its current value",
             Style::default().fg(Color::DarkGray),
         ),
         QueryStatus::Running => Span::styled("Running…", Style::default().fg(Color::Yellow)),
@@ -678,8 +678,17 @@ fn query_body(app: &App) -> Vec<Line<'_>> {
     lines.push(section("─ results ─"));
 
     if app.query_results.is_empty() {
+        // Zero replies is the normal answer for a plain pub/sub topic, and
+        // saying only "(no results)" made that look like a failure. A query
+        // reaches queryables and storages; a publisher is neither.
+        let explain = match app.query_status {
+            QueryStatus::Done(0) => {
+                "  No queryable or storage answers this key — nothing serves it                  on demand. Live (L) shows what gets published instead."
+            }
+            _ => "  (no results)",
+        };
         lines.push(Line::from(Span::styled(
-            "  (no results)",
+            explain,
             Style::default().fg(Color::DarkGray),
         )));
     } else {

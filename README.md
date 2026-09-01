@@ -15,8 +15,9 @@ designed to be driven by scripts and AI agents.
 
 - **Live** — `sub` / `pub` / `query` / `nodes` with attachments, MessagePack
   auto-decode, and bounded runs (`--count`, `--duration`) that always terminate
-- **TUI dashboard** — five views: overview, topics with live values, message
-  stream, interactive query, node table
+- **TUI dashboard** — a key tree that collapses a fleet to a handful of rows,
+  a per-key history that highlights what changed, and sparklines over any
+  numeric field in the payload
 - **Time-shifted** — a rotating capture store (`capture --dir`, or the tray)
   plus pure offline readers (`trace stats` / `trace read`): see what happened
   while you were away, without a live session
@@ -559,38 +560,153 @@ zenmon scenario --preset stall --prefix myfleet --for 15s --explain
 
 ```bash
 zenmon tui
+zenmon --mode peer tui                    # no router needed
+zenmon --contract fleet.contract.yaml tui # annotate keys against a contract
+zenmon tui --allow-publish                # opt in to writing (see below)
 ```
 
-Interactive terminal dashboard with 5 views:
+Two spaces — **Traffic** (`1`) and **Network** (`2`) — each a master list with a
+detail pane. `Tab` switches; `Enter`/`Esc` move focus between the panes.
 
-| Key | View | Description |
-|-----|------|-------------|
-| `1` | Dashboard | Connection status, recent messages, node summary |
-| `2` | Topics | Topic list + real-time latest value detail panel |
-| `3` | Subscribe | Live message stream with pause/resume |
-| `4` | Query | Interactive Zenoh GET with status feedback |
-| `5` | Nodes | Discovered Zenoh nodes table |
+### Traffic — what is on the wire
 
-### Key Bindings
+The master pane is the key hierarchy, not a flat list. A fleet publishing
+`agv/f000/pose` … `agv/f199/state` is 600 keys and two rows:
 
-| Key | Action |
-|-----|--------|
-| `1`-`5` | Switch views |
-| `q` | Quit |
-| `Esc` | Back to Dashboard |
-| `j`/`k` | Navigate lists |
-| `/` | Filter (Topics) / Edit query (Query) |
-| `i` | Enter query input (Query view) |
-| `Space` | Pause/resume (Subscribe view) |
-| `Shift+J`/`Shift+K` | Scroll detail panel (Topics view) |
-| `Enter` | Subscribe to selected topic (Topics view) |
+```
+┌ Traffic — 601 keys ──────────────┐┌ agv/ ─────────────────────────┐
+│▸ agv/         600 keys           ││keys        600                │
+│▸ srv/         1 key              ││rate        2400.0 Hz          │
+│                                  ││bandwidth   4.3 KB/s           │
+│                                  ││busiest                        │
+│                                  ││    10.0 Hz  f000/pose         │
+```
 
-### Features
+Expanding a branch with more children than fit shows one summary row rather
+than hundreds; `/` searches inside it. Selecting a branch answers "how busy is
+all of `agv/**`", which a flat list cannot express.
 
-- **Graceful connection** — TUI starts even without zenohd, auto-reconnects every 5s
-- **Real-time topic monitoring** — Topics view shows latest value updating in place with age indicator
-- **Attachment display** — Zenoh attachments shown in magenta across all views
-- **Non-blocking** — Reconnection and queries run in background, UI stays responsive
+A key that has gone quiet dims and says for how long, because *stopped* and
+*stopped two hours ago* are different findings:
+
+```
+│      pose       10.0 Hz ▄█▅▅█▆▅▆│   publishing
+│      battery   2h10m            │   silent, dimmed
+```
+
+The detail pane holds a **per-key history** (128 messages) and marks what moved
+since the previous one. On a status blob republished at 10 Hz where one field
+flips, this is the difference between reading the pane and scanning it:
+
+```
+0.0 Hz · application/json · 128 held · 1 field changed
+─ latest · changes vs previous ─
+  { mode: "stalled"      ← changed fields highlighted
+    speed: 0.0           ← unchanged ones dimmed
+    battery: 87 }
+```
+
+`p` plots any numeric field in the payload over that history — the master
+sparkbar shows *bandwidth*, this shows the value:
+
+```
+─ percent ─
+  ▁▁▁▁▂▂▂▃▃▃▄▄▅▅▅▆▆▆▇▇▇█  86   min 48  max 88  n 60
+```
+
+### Network — who is connected, and what died
+
+Two sections. **Sessions** are zenoh transport nodes, discovered from the admin
+space and by scouting: this is socket-level truth, independent of what any
+application does. **Liveliness** are tokens applications declared about
+themselves; zenoh reclaims a token when its process dies, so this is the only
+section that can tell you something *stopped*.
+
+Dead tokens sort to the top, `D` shows only those, and `/` filters both
+sections:
+
+```
+┌ Network — dead only ─────────────────┐
+│── Liveliness (0/1 alive) ──          │
+│○ agv/f003/node/safety_a6f69023       │
+```
+
+### Live vs Query
+
+The detail pane has two modes, and they answer different questions:
+
+| | `L` Live | `Q` Query |
+|---|---|---|
+| direction | **push** — waits for someone to publish | **pull** — asks now, gets an answer |
+| shows | messages seen *since zenmon connected* | what a queryable answers *right now* |
+| answered by | publishers | queryables and storages |
+
+Query is how you see a value you missed. A config key published once an hour is
+invisible to Live until the next hour; if a storage or queryable serves that
+key, `Q` returns the current value immediately. On a plain pub/sub topic, `Q`
+correctly returns nothing — a publisher does not answer questions — and the
+pane says so rather than looking broken.
+
+### Keys
+
+| | Traffic |
+|---|---|
+| `j`/`k` `↑`/`↓` | move |
+| `h`/`l` `←`/`→` | collapse / expand — on a key, `l` moves to the detail pane |
+| `z` · `E`/`C` | toggle one branch · expand / collapse everything |
+| `/` | filter (searches inside collapsed groups) |
+| `L` / `Q` | Live / Query mode |
+| `D` | toggle change highlighting |
+| `p` / `P` | plot a numeric field / clear it |
+| `space` | freeze the payload and history being read |
+| `y` / `Y` | copy payload / key |
+
+| | Network |
+|---|---|
+| `j`/`k` | move |
+| `/` | filter sessions and tokens |
+| `D` | show only tokens that are not alive |
+| `s` | rescan for nodes |
+| `y` | copy the selected participant |
+
+| | Anywhere |
+|---|---|
+| `Tab` · `1`/`2` | switch space |
+| `Enter` / `Esc` | focus detail / master |
+| `Shift+J`/`Shift+K` | scroll the detail pane |
+| `:` | command palette — mode, scout port, publish, saved views |
+| `d` · `?` · `q` | doctor · help · quit |
+
+**Typed with a Korean IME on, the letter keys still work.** `ㅓ` reads as `j`,
+`ㅂ` as `q`, and so on across the dubeolsik layout — a forgotten IME used to
+make the whole keyboard silently inert. Text you are actually typing (a filter,
+a payload, a profile name) is left exactly as entered, so Korean stays typeable.
+
+### Saved views
+
+`:` → *Save this view…* stores the filter, which branches were open and which
+field each key was plotting, under a name; *Load a saved view…* brings it back.
+Views live in `tui-profiles.toml` beside `remotes.toml` in zenmon's config
+directory (`ZENMON_TUI_PROFILES` overrides the path).
+
+### Publishing from the dashboard
+
+Off unless you ask for it. `zenmon tui --allow-publish` enables `:` →
+*Publish to a key…*; without the flag the command explains itself rather than
+being absent. A writable session shows a `WRITE` badge in the header for its
+whole lifetime, there is no single-key shortcut, `Ctrl+Enter` sends (plain
+`Enter` does not), and the editor names the target key again before it commits.
+Wildcards are refused: a wildcard put reaches every matching subscriber, which
+on a fleet is every vehicle at once.
+
+### Behaviour worth knowing
+
+- **Starts without a router** — the TUI comes up disconnected and reconnects
+  every 5s, so you can launch it before `zenohd`.
+- **Bounded memory** — keys, per-key history and rate windows are all capped;
+  what gets dropped is reported (`N aged out`) rather than silently forgotten.
+- **Non-blocking** — reconnects, queries, scouting and doctor runs happen in
+  the background; the UI never waits on the network.
 
 ## Desktop tray app
 
@@ -648,17 +764,17 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 ## Roadmap
 
 ### Phase 1 — Network Visibility
-1. [ ] `zenmon scout` — discover all Zenoh nodes on the network (ZID, type, locators)
-2. [ ] `zenmon info` — show current session info, connected peers/routers, locators
-3. [ ] Topic Hz/throughput — display message rate (msgs/sec) per topic in TUI Topics view
+1. [x] `zenmon scout` — discover all Zenoh nodes on the network (ZID, type, locators)
+2. [x] `zenmon info` — show current session info, connected peers/routers, locators
+3. [x] Topic Hz/throughput — per-key rate and a bandwidth sparkbar in the TUI key tree
 
 ### Phase 2 — Message Metadata
-4. [ ] Encoding display — show payload encoding (`application/json`, `text/plain`, etc.) in sub/TUI
+4. [x] Encoding display — show payload encoding (`application/json`, `text/plain`, etc.) in sub/TUI
 5. [ ] QoS display — show Priority, Reliability, Congestion control per message (`--qos` flag)
 6. [ ] HLC timestamp parsing — human-readable time + source node ID instead of raw HLC
 
 ### Phase 3 — Liveliness & Events
-7. [ ] Liveliness subscription — real-time node online/offline detection in TUI Nodes view
+7. [x] Liveliness subscription — live join/leave in the TUI Network space, dead tokens first
 8. [ ] Transport events — connect/disconnect notifications in TUI
 9. [ ] Pub matching — show whether subscribers exist when publishing
 
@@ -682,6 +798,15 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 22. [ ] Strict contract payload validation (field/type checks against the schema)
 23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
 24. [x] `zenmon-tray` — always-on capture from the system tray, no terminal required
+
+### Phase 7 — Reading a fleet
+25. [x] Hierarchical key tree — collapse a namespace to a handful of rows, fold high-cardinality branches, filter inside them
+26. [x] Per-key history + payload diff — mark what changed since the previous message on a key
+27. [x] Field sparklines — plot any numeric field of a payload over its history
+28. [x] Publish from the TUI, behind an opt-in flag and a confirmation
+29. [x] Saved views — restore a filter, expansion and plots by name
+30. [ ] Aggregate rows for a folded branch — one line for a whole fleet's pose rate, not just its key count
+31. [ ] Pinned diff baseline — compare against a message you chose, not just the previous one
 
 ## License
 

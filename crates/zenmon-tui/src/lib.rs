@@ -1,6 +1,7 @@
 pub mod app;
 pub mod diff;
 pub mod event;
+pub mod hangul;
 pub mod history;
 pub mod plot;
 pub mod tree;
