@@ -159,11 +159,7 @@ impl App {
                     self.pending_query = Some(key_expr);
                 }
             }
-            KeyCode::Char(' ') => self.sub_paused = !self.sub_paused,
-            KeyCode::Char('f') => {
-                self.follow_stream();
-                self.topic_detail_scroll = 0;
-            }
+            KeyCode::Char(' ') => self.history_paused = !self.history_paused,
             KeyCode::Char('D') => self.diff_enabled = !self.diff_enabled,
             KeyCode::Char('p') => self.open_plot_picker(),
             KeyCode::Char('P') => self.clear_plot_field(),
@@ -599,7 +595,6 @@ impl App {
 
     pub(crate) fn is_text_input_active(&self) -> bool {
         self.topics_filtering
-            || self.stream_filtering
             || self.query_editing
             || self.overlay == Overlay::Palette
             || self.overlay == Overlay::ScoutPort
@@ -775,7 +770,6 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.topics_filtering = false;
-                self.stream_filtering = false;
                 self.query_editing = false;
             }
             KeyCode::Enter => {
@@ -789,18 +783,10 @@ impl App {
                 if self.topics_filtering {
                     self.topics_filtering = false;
                 }
-                if self.stream_filtering {
-                    self.stream_filtering = false;
-                    self.clamp_stream_selection();
-                }
             }
             KeyCode::Char(c) => {
                 if self.topics_filtering {
                     self.topic_filter.push(c);
-                } else if self.stream_filtering {
-                    self.stream_key_filter = None;
-                    self.stream_filter.push(c);
-                    self.clamp_stream_selection();
                 } else if self.query_editing {
                     self.query_input.push(c);
                 }
@@ -808,10 +794,6 @@ impl App {
             KeyCode::Backspace => {
                 if self.topics_filtering {
                     self.topic_filter.pop();
-                } else if self.stream_filtering {
-                    self.stream_key_filter = None;
-                    self.stream_filter.pop();
-                    self.clamp_stream_selection();
                 } else if self.query_editing {
                     self.query_input.pop();
                 }

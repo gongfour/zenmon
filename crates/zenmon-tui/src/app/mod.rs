@@ -25,9 +25,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Instant, SystemTime};
 use zenmon_core::config::ConnectMode;
 use zenmon_core::doctor::DoctorReport;
-use zenmon_core::types::{
-    LivelinessToken, MessagePayload, NodeInfo, PortScoutResult, ZenohMessage,
-};
+use zenmon_core::types::{LivelinessToken, NodeInfo, PortScoutResult, ZenohMessage};
 
 /// Numeric fields offered in the plot picker. A payload with more than this
 /// many numbers is a table, not a set of signals, and a list that long stops
@@ -89,10 +87,6 @@ struct TreeViewCache {
     filter: String,
     /// Distinguishes "cached an empty tree" from "never built".
     built: bool,
-}
-
-fn payload_to_string(p: &MessagePayload) -> String {
-    p.pretty()
 }
 
 /// A top-level navigation space. The redesign folds the old seven tabs into two
@@ -394,17 +388,10 @@ pub struct App {
     pub admin_nodes: Vec<NodeInfo>,
     pub scout_nodes: Vec<NodeInfo>,
     pub nodes: Vec<NodeInfo>,
-    pub recent_messages: VecDeque<ZenohMessage>,
-
-    pub sub_messages: VecDeque<ZenohMessage>,
-    pub sub_paused: bool,
-    pub sub_selected: usize,
-    pub stream_follow: bool,
-    pub stream_filter: String,
-    /// Exact key selected through Topics → Stream navigation. When present,
-    /// this takes precedence over the general substring filter.
-    pub stream_key_filter: Option<String>,
-    pub stream_filtering: bool,
+    /// Freeze the payload and history the detail pane is showing, so a value
+    /// can be read without it changing underneath. Rates and the key tree
+    /// keep moving: that the traffic continues is information, not noise.
+    pub history_paused: bool,
 
     pub topic_filter: String,
     /// Cursor over the visible rows of [`App::tree_rows`].
@@ -555,14 +542,7 @@ impl App {
             admin_nodes: Vec::new(),
             scout_nodes: Vec::new(),
             nodes: Vec::new(),
-            recent_messages: VecDeque::with_capacity(100),
-            sub_messages: VecDeque::with_capacity(500),
-            sub_paused: false,
-            sub_selected: 0,
-            stream_follow: true,
-            stream_filter: String::new(),
-            stream_key_filter: None,
-            stream_filtering: false,
+            history_paused: false,
             topic_filter: String::new(),
             tree_selected: 0,
             topics_filtering: false,
@@ -674,10 +654,6 @@ impl App {
         self.tree_selected = 0;
         self.topic_detail_scroll = 0;
         self.list_scroll_offset = 0;
-
-        self.sub_messages.clear();
-        self.recent_messages.clear();
-        self.sub_selected = 0;
 
         self.admin_nodes.clear();
         self.scout_nodes.clear();
@@ -911,54 +887,6 @@ impl App {
         (hz, bytes)
     }
 
-    pub fn filtered_sub_messages(&self) -> Vec<&ZenohMessage> {
-        self.sub_messages
-            .iter()
-            .filter(|msg| self.stream_message_matches(msg))
-            .collect()
-    }
-
-    fn stream_message_matches(&self, msg: &ZenohMessage) -> bool {
-        if let Some(key) = &self.stream_key_filter {
-            return msg.key_expr == *key;
-        }
-
-        if self.stream_filter.is_empty() {
-            return true;
-        }
-
-        msg.key_expr.contains(&self.stream_filter)
-            || payload_to_string(&msg.payload).contains(&self.stream_filter)
-            || msg
-                .attachment
-                .as_ref()
-                .map(|att| payload_to_string(att).contains(&self.stream_filter))
-                .unwrap_or(false)
-    }
-
-    fn clamp_stream_selection(&mut self) {
-        let filtered_len = self.filtered_sub_messages().len();
-        if filtered_len == 0 {
-            self.sub_selected = 0;
-        } else if self.sub_selected >= filtered_len {
-            self.sub_selected = filtered_len - 1;
-        }
-    }
-
-    fn follow_stream(&mut self) {
-        self.stream_follow = true;
-        self.sub_selected = 0;
-    }
-
-    #[allow(dead_code)]
-    fn pin_stream_at(&mut self, idx: usize) {
-        self.stream_follow = false;
-        self.sub_selected = idx;
-        self.clamp_stream_selection();
-    }
-
-    /// How the active space splits `body`: two side-by-side panes on wide
-    /// terminals, or a single focused pane when narrow (Termux/tablet target).
     pub(crate) fn body_layout(&self, body: Rect) -> BodyLayout {
         if is_narrow(body.width) {
             BodyLayout::Single {

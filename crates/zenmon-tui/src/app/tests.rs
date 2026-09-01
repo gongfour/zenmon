@@ -13,6 +13,7 @@ use crate::tree::RowKind;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use std::time::Duration;
+use zenmon_core::types::MessagePayload;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -242,124 +243,6 @@ fn list_hit_respects_scroll_offset() {
 }
 
 #[test]
-fn sub_selected_zero_stays_on_new_message() {
-    let mut app = App::new("test".into());
-    app.sub_selected = 0;
-    let msg = ZenohMessage {
-        key_expr: "a".into(),
-        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
-        encoding: String::new(),
-        payload_bytes: 0,
-        timestamp: None,
-        kind: "put".into(),
-        attachment: None,
-        attachment_bytes: None,
-    };
-    app.handle_zenoh_message(msg);
-    assert_eq!(app.sub_selected, 0);
-}
-
-#[test]
-fn sub_selected_nonzero_follows_message_through_shift() {
-    let mut app = App::new("test".into());
-    let make = |k: &str| ZenohMessage {
-        key_expr: k.into(),
-        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
-        encoding: String::new(),
-        payload_bytes: 0,
-        timestamp: None,
-        kind: "put".into(),
-        attachment: None,
-        attachment_bytes: None,
-    };
-    app.handle_zenoh_message(make("a"));
-    app.handle_zenoh_message(make("b"));
-    app.handle_zenoh_message(make("c"));
-    app.pin_stream_at(1);
-    app.handle_zenoh_message(make("d"));
-    assert!(!app.stream_follow);
-    assert_eq!(app.sub_selected, 2);
-}
-
-#[test]
-fn filtered_sub_messages_match_key_and_payload() {
-    let mut app = App::new("test".into());
-    app.handle_zenoh_message(ZenohMessage {
-        key_expr: "robot/pose".into(),
-        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!({"x": 1})),
-        encoding: String::new(),
-        payload_bytes: 0,
-        timestamp: None,
-        kind: "put".into(),
-        attachment: None,
-        attachment_bytes: None,
-    });
-    app.handle_zenoh_message(ZenohMessage {
-        key_expr: "robot/status".into(),
-        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!("idle")),
-        encoding: String::new(),
-        payload_bytes: 0,
-        timestamp: None,
-        kind: "put".into(),
-        attachment: None,
-        attachment_bytes: None,
-    });
-
-    app.stream_filter = "pose".into();
-    assert_eq!(app.filtered_sub_messages().len(), 1);
-    assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/pose");
-
-    app.stream_filter = "idle".into();
-    assert_eq!(app.filtered_sub_messages().len(), 1);
-    assert_eq!(app.filtered_sub_messages()[0].key_expr, "robot/status");
-}
-
-#[test]
-fn sub_selected_only_shifts_for_matching_filtered_message() {
-    let mut app = App::new("test".into());
-    let make = |k: &str| ZenohMessage {
-        key_expr: k.into(),
-        payload: zenmon_core::types::MessagePayload::from_json(&serde_json::json!(null)),
-        encoding: String::new(),
-        payload_bytes: 0,
-        timestamp: None,
-        kind: "put".into(),
-        attachment: None,
-        attachment_bytes: None,
-    };
-    app.handle_zenoh_message(make("alpha/1"));
-    app.handle_zenoh_message(make("beta/1"));
-    app.handle_zenoh_message(make("alpha/2"));
-
-    app.stream_filter = "alpha".into();
-    app.pin_stream_at(1);
-
-    app.handle_zenoh_message(make("beta/2"));
-    assert_eq!(app.sub_selected, 1);
-
-    app.handle_zenoh_message(make("alpha/3"));
-    assert_eq!(app.sub_selected, 2);
-}
-
-#[test]
-fn follow_stream_resets_selection_to_latest() {
-    let mut app = App::new("test".into());
-    app.stream_follow = false;
-    app.sub_selected = 3;
-    app.follow_stream();
-    assert!(app.stream_follow);
-    assert_eq!(app.sub_selected, 0);
-}
-
-#[test]
-fn pin_stream_disables_follow() {
-    let mut app = App::new("test".into());
-    app.pin_stream_at(2);
-    assert!(!app.stream_follow);
-    assert_eq!(app.sub_selected, 0);
-}
-
-#[test]
 fn clear_network_state_clears_topics_messages_and_nodes() {
     let mut app = App::new("test".into());
     let make = |k: &str| ZenohMessage {
@@ -379,7 +262,6 @@ fn clear_network_state_clears_topics_messages_and_nodes() {
     app.tree_selected = 1;
     app.topic_detail_scroll = 4;
     app.list_scroll_offset = 5;
-    app.sub_selected = 1;
     app.admin_nodes.push(zenmon_core::types::NodeInfo {
         zid: "z1".into(),
         kind: "router".into(),
@@ -414,9 +296,7 @@ fn clear_network_state_clears_topics_messages_and_nodes() {
     assert_eq!(app.topic_detail_scroll, 0);
     assert_eq!(app.list_scroll_offset, 0);
 
-    assert!(app.sub_messages.is_empty());
-    assert!(app.recent_messages.is_empty());
-    assert_eq!(app.sub_selected, 0);
+    assert!(app.history.get("a").is_none(), "history goes with the keys");
 
     assert!(app.admin_nodes.is_empty());
     assert!(app.scout_nodes.is_empty());
@@ -441,9 +321,7 @@ fn clear_network_state_preserves_query_history_and_filters() {
         attachment_bytes: None,
     });
     app.topic_filter = "abc".into();
-    app.stream_filter = "xyz".into();
-    app.stream_follow = false;
-    app.sub_paused = true;
+    app.history_paused = true;
 
     app.clear_network_state();
 
@@ -451,9 +329,7 @@ fn clear_network_state_preserves_query_history_and_filters() {
     assert_eq!(app.query_history, vec!["demo/**".to_string()]);
     assert_eq!(app.query_results.len(), 1);
     assert_eq!(app.topic_filter, "abc");
-    assert_eq!(app.stream_filter, "xyz");
-    assert!(!app.stream_follow);
-    assert!(app.sub_paused);
+    assert!(app.history_paused);
 }
 
 /// Seed the key tree and bring the row cache up to date, as a burst of
@@ -795,7 +671,7 @@ fn render_traffic_with_data_wide_and_narrow_shows_key() {
         };
         app.topic_latest
             .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
-        app.sub_messages.push_front(msg);
+        app.history.record(&msg);
         app.topic_hz.insert("demo/robot/pose".into(), 12.0);
 
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -842,7 +718,7 @@ fn render_traffic_narrow_detail_pane_does_not_panic() {
     };
     app.topic_latest
         .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
-    app.sub_messages.push_front(msg);
+    app.history.record(&msg);
 
     // Put the cursor on the key itself; rows 0 and 1 are the `demo/` and
     // `robot/` branches, which get a subtree summary rather than a payload.
@@ -1274,6 +1150,80 @@ fn p_on_a_branch_does_not_open_the_picker() {
     assert_eq!(app.overlay, Overlay::None);
 }
 
+// ---- pause ----------------------------------------------------------------
+
+fn numbered(key: &str, n: i64) -> ZenohMessage {
+    ZenohMessage {
+        key_expr: key.into(),
+        payload: MessagePayload::from_json(&serde_json::json!({ "n": n })),
+        encoding: "application/json".into(),
+        payload_bytes: 12,
+        timestamp: None,
+        kind: "put".into(),
+        attachment: None,
+        attachment_bytes: None,
+    }
+}
+
+#[test]
+fn space_freezes_the_payload_being_read() {
+    // Before the firehose went, `space` paused a ring nothing rendered: the
+    // header said "paused" while the pane kept changing. It has to stop the
+    // thing the user is actually looking at.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.handle_zenoh_message(numbered("agv/f001/state", 1));
+
+    app.handle_key(key(KeyCode::Char(' ')));
+    assert!(app.history_paused);
+
+    app.handle_zenoh_message(numbered("agv/f001/state", 2));
+    let held = app.history.get("agv/f001/state").unwrap();
+    assert_eq!(held.len(), 1, "history froze");
+    assert_eq!(held.latest().unwrap().view, serde_json::json!({"n": 1}));
+    assert_eq!(
+        app.topic_latest["agv/f001/state"].0.payload.to_view(),
+        serde_json::json!({"n": 1}),
+        "the latest payload froze too"
+    );
+
+    app.handle_key(key(KeyCode::Char(' ')));
+    app.handle_zenoh_message(numbered("agv/f001/state", 3));
+    assert_eq!(app.history.get("agv/f001/state").unwrap().len(), 2);
+}
+
+#[test]
+fn pausing_does_not_stop_the_rates_or_hide_new_keys() {
+    // Pausing is "hold this still while I read it", not "stop monitoring".
+    // That the traffic continues — and that a key appeared — is information.
+    let mut app = App::new("test".into());
+    app.history_paused = true;
+    app.handle_zenoh_message(numbered("agv/f009/pose", 1));
+
+    assert!(
+        app.key_tree.contains("agv/f009/pose"),
+        "the key still shows"
+    );
+    assert_eq!(app.total_msg_count, 1, "the counters still run");
+    assert_eq!(app.topic_msg_counts["agv/f009/pose"], 1);
+}
+
+#[test]
+fn the_history_header_says_when_it_is_paused() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.handle_zenoh_message(numbered("agv/f001/state", 1));
+    app.auto_expand();
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+
+    assert!(buffer_text(&draw(&mut app, 88, 20)).contains("space=pause"));
+    app.handle_key(key(KeyCode::Char(' ')));
+    assert!(buffer_text(&draw(&mut app, 88, 20)).contains("PAUSED"));
+}
+
 // ---- saved views ----------------------------------------------------------
 
 fn viewing_app() -> App {
@@ -1593,7 +1543,7 @@ fn dump_frames() {
         };
         app.topic_latest
             .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
-        app.sub_messages.push_front(msg);
+        app.history.record(&msg);
         app.total_hz = 43.0;
         // Nodes + services.
         app.nodes.push(make_node("a3f19c0011223344", "router"));

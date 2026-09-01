@@ -627,8 +627,8 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
 
     lines.push(Line::from(""));
     let held = history.map_or(0, |h| h.len());
-    let hist_header = if app.sub_paused {
-        format!("─ history · {held} held (paused, space=resume) ─")
+    let hist_header = if app.history_paused {
+        format!("─ history · {held} held · PAUSED (space=resume) ─")
     } else {
         format!("─ history · {held} held (space=pause) ─")
     };

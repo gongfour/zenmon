@@ -150,9 +150,15 @@ impl App {
             self.auto_expand();
         }
 
-        self.topic_latest
-            .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
-        self.history.record(&msg);
+        // Pausing freezes what the detail pane reads — the latest payload and
+        // the history behind the diff — and nothing else. The counters below
+        // keep running, so the pane can say the key is still publishing at
+        // 10 Hz while holding the message you stopped to read.
+        if !self.history_paused {
+            self.topic_latest
+                .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
+            self.history.record(&msg);
+        }
 
         *self
             .topic_msg_counts
@@ -168,26 +174,6 @@ impl App {
             .entry(msg.key_expr.clone())
             .or_insert(0) += bytes;
         self.total_byte_count += bytes;
-
-        self.recent_messages.push_front(msg.clone());
-        if self.recent_messages.len() > 100 {
-            self.recent_messages.pop_back();
-        }
-
-        if !self.sub_paused {
-            let matches_stream_filter = self.stream_message_matches(&msg);
-            self.sub_messages.push_front(msg);
-            if self.sub_messages.len() > 500 {
-                self.sub_messages.pop_back();
-            }
-            if !self.stream_follow && matches_stream_filter && self.sub_selected > 0 {
-                self.sub_selected += 1;
-            }
-            self.clamp_stream_selection();
-            if self.stream_follow {
-                self.sub_selected = 0;
-            }
-        }
     }
 
     /// Drop the longest-idle keys once the tree exceeds [`MAX_KEYS`].
