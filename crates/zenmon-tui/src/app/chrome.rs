@@ -10,6 +10,29 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use zenmon_core::doctor::CheckStatus;
 
+/// Shorten to `max` columns by eliding the middle.
+///
+/// The middle, not the tail: a connection failure's useful half is at the end
+/// ("connection refused"), and its prefix is boilerplate the header has already
+/// implied. Cutting the tail would keep exactly the wrong part.
+fn truncate_middle(text: &str, max: usize) -> String {
+    let len = text.chars().count();
+    if len <= max {
+        return text.to_string();
+    }
+    if max <= 1 {
+        return "…".repeat(max.min(1));
+    }
+    let keep = max - 1;
+    let head = keep / 3;
+    let tail = keep - head;
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(chars[len - tail..].iter());
+    out
+}
+
 /// Human label for a scout/multicast port. Ports in the Zenoh domain range
 /// (7446..=7546, i.e. domains 0..=100) are shown as their domain id; anything
 /// else is a custom port and is labeled as a port, not a domain — so an
@@ -80,12 +103,40 @@ impl App {
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
-        let conn_text = match &self.connection_state {
-            ConnectionState::Connected(zid) => {
-                format!("Connected zid:{}", &zid[..zid.len().min(16)])
-            }
-            ConnectionState::Connecting => "Connecting...".to_string(),
-            ConnectionState::Disconnected(reason) => format!("Disconnected: {}", reason),
+        // Split rather than one string: the failure reason is what gets
+        // shortened when the line is tight, and the part after it — the retry
+        // count, or what to press — has to survive whole. Truncating the
+        // composed string ate the reason's end ("…connection refused") and kept
+        // the boilerplate, which is exactly backwards.
+        let (conn_reason, conn_suffix) = match &self.connection_state {
+            ConnectionState::Connected(zid) => (
+                format!("Connected zid:{}", &zid[..zid.len().min(16)]),
+                String::new(),
+            ),
+            ConnectionState::Connecting => ("Connecting...".to_string(), String::new()),
+            // Say how long and how often, not just what failed a moment ago.
+            // "connection refused" reads the same at three seconds and at forty
+            // minutes, and those are different problems.
+            ConnectionState::Retrying {
+                reason,
+                attempts,
+                since,
+            } => (
+                reason.clone(),
+                format!(
+                    " · retrying, {attempts} {} over {}",
+                    if *attempts == 1 {
+                        "attempt"
+                    } else {
+                        "attempts"
+                    },
+                    format_elapsed(since.elapsed().as_secs())
+                ),
+            ),
+            ConnectionState::Unusable(reason) => (
+                reason.clone(),
+                " — press : to change endpoint or mode".to_string(),
+            ),
         };
 
         // Health dot: reflects the last `doctor` run's overall status when a
@@ -113,7 +164,11 @@ impl App {
             None => match &self.connection_state {
                 ConnectionState::Connected(_) => ("●", Color::Green, "OK".to_string()),
                 ConnectionState::Connecting => ("●", Color::Yellow, "connecting".to_string()),
-                ConnectionState::Disconnected(_) => ("●", Color::Red, "offline".to_string()),
+                // Retrying is amber, not red: something is still working on it.
+                // A config error is red and stays red — nothing is working on
+                // that but the user.
+                ConnectionState::Retrying { .. } => ("●", Color::Yellow, "retrying".to_string()),
+                ConnectionState::Unusable(_) => ("✖", Color::Red, "unusable".to_string()),
             },
         };
 
@@ -137,7 +192,25 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             ));
         }
-        spans.push(Span::styled(conn_text, Style::default().fg(Color::Gray)));
+        // The space tabs are navigation and must never be pushed off the line
+        // by a long failure reason — which a retry message, being the longest
+        // thing that can appear here, will do on a narrow terminal. Budget the
+        // connection text against what the tabs need and truncate it instead.
+        let tabs_width: usize = SPACE_TITLES
+            .iter()
+            .map(|t| t.chars().count() + 3)
+            .sum::<usize>()
+            + if self.allow_publish { 9 } else { 0 };
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let budget = (line0.width as usize)
+            .saturating_sub(used + tabs_width + conn_suffix.chars().count() + 2);
+        spans.push(Span::styled(
+            truncate_middle(&conn_reason, budget),
+            Style::default().fg(Color::Gray),
+        ));
+        if !conn_suffix.is_empty() {
+            spans.push(Span::styled(conn_suffix, Style::default().fg(Color::Gray)));
+        }
         spans.push(Span::raw("  "));
         // Guard 3 of 4: a session that can write says so on every frame. There
         // must never be a moment where the user does not know which kind of

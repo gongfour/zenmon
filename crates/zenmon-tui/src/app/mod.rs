@@ -66,6 +66,26 @@ pub(crate) enum KeyFreshness {
 /// Deliberately blunt. The number answers "did this stop just now or hours
 /// ago", and a second-accurate figure next to a dimmed row would invite
 /// reading precision into something the 1 Hz sampling cannot support.
+/// Elapsed time for something still in progress: seconds, then minutes, then
+/// hours.
+///
+/// Unlike [`format_idle`], which is deliberately blunt because a key's silence
+/// is sampled once a second, an outage's first minute is exactly when the
+/// seconds matter — "refused for 8s" and "refused for 50s" are different
+/// situations, and rounding both to `0m` hides that.
+pub(crate) fn format_elapsed(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        match (secs / 60, secs % 60) {
+            (m, 0) => format!("{m}m"),
+            (m, s) => format!("{m}m{s}s"),
+        }
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
 pub(crate) fn format_idle(secs: u64) -> String {
     if secs < 3600 {
         format!("{}m", secs / 60)
@@ -353,9 +373,54 @@ pub(crate) fn empty_state_text(reason: EmptyReason) -> (&'static str, &'static s
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionState {
-    Disconnected(String),
+    /// Never connected, or lost the session and still trying. `attempts` and
+    /// `since` are what turn "it is broken" into "it has been broken this long,
+    /// consistently" — the distinction the retry loop used to erase by showing
+    /// only the latest failure.
+    Retrying {
+        reason: String,
+        attempts: u32,
+        since: Instant,
+    },
+    /// The configuration cannot produce a session — a malformed endpoint, an
+    /// unknown mode. Retrying will never fix it, so it does not.
+    Unusable(String),
     Connecting,
     Connected(String),
+}
+
+impl ConnectionState {
+    /// A failed attempt. `config_error` comes from the error's own kind, not
+    /// from reading its text: `open_session` already separates a bad config
+    /// from an unreachable router, and that verdict was being thrown away.
+    pub fn failed(self, reason: String, config_error: bool) -> Self {
+        if config_error {
+            return ConnectionState::Unusable(reason);
+        }
+        match self {
+            // Keep counting across attempts; a fresh failure after a
+            // successful session starts a new count.
+            ConnectionState::Retrying {
+                attempts, since, ..
+            } => ConnectionState::Retrying {
+                reason,
+                attempts: attempts.saturating_add(1),
+                since,
+            },
+            _ => ConnectionState::Retrying {
+                reason,
+                attempts: 1,
+                since: Instant::now(),
+            },
+        }
+    }
+
+    /// Whether the loop should keep trying. A configuration error is the one
+    /// case where it should stop: 720 identical failures an hour teach nobody
+    /// anything a single message could not.
+    pub fn should_retry(&self) -> bool {
+        !matches!(self, ConnectionState::Unusable(_))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -738,7 +803,9 @@ impl App {
     fn connection_empty_reason(&self) -> Option<EmptyReason> {
         match &self.connection_state {
             ConnectionState::Connecting => Some(EmptyReason::Connecting),
-            ConnectionState::Disconnected(_) => Some(EmptyReason::Disconnected),
+            ConnectionState::Retrying { .. } | ConnectionState::Unusable(_) => {
+                Some(EmptyReason::Disconnected)
+            }
             ConnectionState::Connected(_) => None,
         }
     }
