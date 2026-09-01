@@ -14,9 +14,10 @@
 //!   installer owns the file layout, uninstall registry entries and shortcuts,
 //!   so re-running it *is* the update path.
 
-// `Path` is only touched by the .app unpack/swap helpers, which are gated the
-// same way — an unconditional import warns on every Windows build.
-#[cfg(any(target_os = "macos", test))]
+// `Path` is used by the .app unpack/swap helpers on macOS and by the detached
+// relaunch on Windows; on any other target the module is the no-op stub at the
+// bottom of the file and an unconditional import would fail CI's `-D warnings`.
+#[cfg(any(target_os = "macos", windows, test))]
 use std::path::Path;
 use std::path::PathBuf;
 // Every `Command` here shells out to a platform tool — `pgrep`/`pkill`/`open`
@@ -286,11 +287,41 @@ pub fn install(current: &TrayInstall, artifact: &ReleaseArtifact, bytes: &[u8]) 
     }
 
     if was_running {
-        if let Err(err) = Command::new(&current.path).spawn() {
+        if let Err(err) = spawn_detached(&current.path) {
             eprintln!("note: could not relaunch {}: {err}", current.path.display());
         }
     }
     Ok(())
+}
+
+/// Launch the tray so it outlives this process.
+///
+/// A plain `Command::spawn` makes it a console-inheriting child of the CLI, and
+/// it then dies when the console session that ran `zenmon update apply` is torn
+/// down — which is how a tray that was running before an update ended up not
+/// running after one, with no error to show for it. The tray's own WebView
+/// teardown message appearing in the update output was the tell: its stderr was
+/// ours.
+///
+/// `DETACHED_PROCESS` gives it no console to inherit and
+/// `CREATE_NEW_PROCESS_GROUP` keeps a Ctrl+C in the launching terminal from
+/// reaching it. Null stdio so nothing of the tray's is left pointing at a
+/// handle that is about to close.
+#[cfg(windows)]
+fn spawn_detached(exe: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
+
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+    Command::new(exe)
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
 }
 
 #[cfg(windows)]
