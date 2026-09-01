@@ -15,6 +15,32 @@ use ratatui::layout::Rect;
 use std::time::Duration;
 use zenmon_core::types::MessagePayload;
 
+/// A contract declaring one service (request schema) and one plain topic.
+const CONTRACT_YAML: &str = r#"
+version: "0.2"
+project: test
+encoding:
+  default: application/json
+types: {}
+services: []
+topics:
+  - key: call/safety/estop
+    request: { active: bool }
+  - key: agv/*/pose
+"#;
+
+/// The same without any service.
+const PLAIN_CONTRACT_YAML: &str = r#"
+version: "0.2"
+project: test
+encoding:
+  default: application/json
+types: {}
+services: []
+topics:
+  - key: agv/*/pose
+"#;
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -308,7 +334,6 @@ fn clear_network_state_clears_topics_messages_and_nodes() {
 #[test]
 fn clear_network_state_preserves_query_history_and_filters() {
     let mut app = App::new("test".into());
-    app.query_input = "demo/**".into();
     app.query_history.push("demo/**".into());
     app.query_results.push(ZenohMessage {
         key_expr: "demo/x".into(),
@@ -325,7 +350,6 @@ fn clear_network_state_preserves_query_history_and_filters() {
 
     app.clear_network_state();
 
-    assert_eq!(app.query_input, "demo/**");
     assert_eq!(app.query_history, vec!["demo/**".to_string()]);
     assert_eq!(app.query_results.len(), 1);
     assert_eq!(app.topic_filter, "abc");
@@ -344,7 +368,9 @@ fn seed_topics(app: &mut App, keys: &[&str]) {
 }
 
 #[test]
-fn traffic_q_runs_query_on_selected_key() {
+fn q_composes_a_request_rather_than_firing_one() {
+    // A bare `get` on a keystroke treated request/response as a fancy read,
+    // and on a contract with `call/*` services meant one key could invoke one.
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     seed_topics(&mut app, &["demo/a", "demo/b"]);
@@ -352,8 +378,109 @@ fn traffic_q_runs_query_on_selected_key() {
     app.tree_selected = 2; // demo/b
     app.handle_key(key(KeyCode::Char('Q')));
     assert_eq!(app.detail_mode, DetailMode::Query);
-    assert_eq!(app.pending_query, Some("demo/b".to_string()));
+    assert_eq!(app.overlay, Overlay::Query);
+    assert_eq!(app.query_key, "demo/b");
+    assert!(app.pending_query.is_none(), "nothing sent yet");
+
+    app.handle_key(key(KeyCode::Enter));
+    let req = app.pending_query.clone().unwrap();
+    assert_eq!(req.key_expr, "demo/b");
+    assert_eq!(req.payload, None);
     assert_eq!(app.query_history, vec!["demo/b".to_string()]);
+}
+
+#[test]
+fn an_empty_request_field_means_no_payload_at_all() {
+    // A storage expects no payload; an empty one is a different thing and some
+    // queryables reject it.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["demo/a"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.handle_key(key(KeyCode::Char('Q')));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.pending_query.unwrap().payload, None);
+}
+
+#[test]
+fn a_typed_request_is_sent_as_the_payload() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["call/safety/estop"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.handle_key(key(KeyCode::Char('Q')));
+    for c in r#"{"active":true}"#.chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    let req = app.pending_query.unwrap();
+    assert_eq!(req.key_expr, "call/safety/estop");
+    assert_eq!(req.payload.as_deref(), Some(r#"{"active":true}"#));
+}
+
+#[test]
+fn esc_leaves_the_editor_without_sending() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["demo/a"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.handle_key(key(KeyCode::Char('Q')));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.overlay, Overlay::None);
+    assert!(app.pending_query.is_none());
+}
+
+#[test]
+fn the_editor_names_a_key_the_contract_calls_a_service() {
+    // The declared request schema is what separates a service from a storage,
+    // and it is the one thing worth saying before sending.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(
+        zenmon_core::contract::Contract::from_yaml_str(CONTRACT_YAML).expect("fixture parses"),
+    );
+    seed_topics(&mut app, &["call/safety/estop"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.handle_key(key(KeyCode::Char('Q')));
+
+    let text = buffer_text(&draw(&mut app, 100, 24));
+    assert!(text.contains("this key is a service"), "{text}");
+}
+
+#[test]
+fn a_plain_topic_is_not_announced_as_a_service() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.pane_focus = PaneFocus::Detail;
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.contract = Some(
+        zenmon_core::contract::Contract::from_yaml_str(PLAIN_CONTRACT_YAML)
+            .expect("fixture parses"),
+    );
+    seed_topics(&mut app, &["agv/f001/pose"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.handle_key(key(KeyCode::Char('Q')));
+
+    let text = buffer_text(&draw(&mut app, 100, 24));
+    assert!(!text.contains("is a service"), "{text}");
+}
+
+#[test]
+fn consolidation_rides_along_with_the_request() {
+    // Zenoh's default hides all but the fastest queryable, which is the wrong
+    // answer to "which of them replied".
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["call/thing"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.run_palette_action(PaletteAction::ToggleQueryReplies);
+    assert!(app.query_all_replies);
+
+    app.handle_key(key(KeyCode::Char('Q')));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.pending_query.unwrap().all_replies);
 }
 
 #[test]
@@ -1862,6 +1989,29 @@ fn dump_frames() {
         app.overlay = Overlay::PlotPicker;
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC plot-field picker =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // The query editor on a key the contract calls a service.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.pane_focus = PaneFocus::Detail;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        app.contract = Some(zenmon_core::contract::Contract::from_yaml_str(CONTRACT_YAML).unwrap());
+        for k in ["call/safety/estop", "agv/f001/pose"] {
+            app.key_tree.insert(k);
+        }
+        app.auto_expand();
+        app.refresh_tree_rows();
+        // Rows sort agv/ before call/, so the service key is the last one.
+        app.tree_selected = app.tree_rows().len() - 1;
+        app.handle_key(key(KeyCode::Char('Q')));
+        app.query_payload = r#"{"active":true}"#.into();
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC query editor (contract says service) =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 

@@ -633,19 +633,40 @@ sections:
 
 ### Live vs Query
 
-The detail pane has two modes, and they answer different questions:
+The detail pane has two modes over the same key, and they use different zenoh
+primitives. Live is pub/sub; **Query is zenoh's request/response side** — the
+counterpart to pub/sub, not a variant of it.
 
 | | `L` Live | `Q` Query |
 |---|---|---|
-| direction | **push** — waits for someone to publish | **pull** — asks now, gets an answer |
-| shows | messages seen *since zenmon connected* | what a queryable answers *right now* |
-| answered by | publishers | queryables and storages |
+| primitive | subscriber | `get` → queryable |
+| direction | **push** — waits for someone to publish | **pull** — sends a request, gets replies |
+| shows | messages seen *since zenmon connected* | what whoever serves that key replies now |
+| answered by | publishers | queryables: services, storages, computed values |
 
-Query is how you see a value you missed. A config key published once an hour is
-invisible to Live until the next hour; if a storage or queryable serves that
-key, `Q` returns the current value immediately. On a plain pub/sub topic, `Q`
-correctly returns nothing — a publisher does not answer questions — and the
-pane says so rather than looking broken.
+What a queryable *is* depends on who declared it:
+
+- **A service.** Request/response is how RPC is done in zenoh — a contract
+  declaring `call/safety/estop` with `request` and `response` schemas is a
+  service, and querying it calls it.
+- **A storage.** Returns the stored value for a key, which is how you see a
+  value published before you were watching.
+- **A computed value.** Something too expensive to publish continuously, worked
+  out when asked.
+
+`Q` opens a request editor rather than firing immediately: a key, a request
+payload, and how replies are consolidated. That is what makes it request/
+response instead of a fancy read — and it means a service is never called by a
+single keystroke. When a contract declares a request schema for the key, the
+editor shows it.
+
+Consolidation matters when several queryables share one key expression, which
+is normal for a service fanned across a fleet. Zenoh's default keeps only the
+fastest reply; `all` delivers every one.
+
+On a plain pub/sub topic a query returns nothing, which is correct — a
+publisher is not something that answers questions — and the pane says so rather
+than looking broken.
 
 ### Keys
 
@@ -655,7 +676,7 @@ pane says so rather than looking broken.
 | `h`/`l` `←`/`→` | collapse / expand — on a key, `l` moves to the detail pane |
 | `z` · `E`/`C` | toggle one branch · expand / collapse everything |
 | `/` | filter (searches inside collapsed groups) |
-| `L` / `Q` | Live / Query mode |
+| `L` / `Q` | Live mode / compose a query |
 | `D` | toggle change highlighting |
 | `p` / `P` | plot a numeric field / clear it |
 | `space` | freeze the payload and history being read |

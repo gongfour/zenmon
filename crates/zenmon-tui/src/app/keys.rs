@@ -63,6 +63,10 @@ impl App {
             self.handle_publish_key(key);
             return;
         }
+        if self.overlay == Overlay::Query {
+            self.handle_query_key(key);
+            return;
+        }
         if self.overlay == Overlay::ProfileSave {
             self.handle_profile_save_key(key);
             return;
@@ -166,13 +170,7 @@ impl App {
             KeyCode::Char('C') => self.tree_collapse_all(),
             KeyCode::Char('/') => self.topics_filtering = true,
             KeyCode::Char('L') => self.detail_mode = DetailMode::Live,
-            KeyCode::Char('Q') => {
-                self.detail_mode = DetailMode::Query;
-                if let Some(key_expr) = self.selected_topic_key() {
-                    self.query_history.push(key_expr.clone());
-                    self.pending_query = Some(key_expr);
-                }
-            }
+            KeyCode::Char('Q') => self.open_query_editor(),
             KeyCode::Char(' ') => self.history_paused = !self.history_paused,
             KeyCode::Char('D') => self.diff_enabled = !self.diff_enabled,
             KeyCode::Char('p') => self.open_plot_picker(),
@@ -240,6 +238,90 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Open the request editor for the selected key.
+    ///
+    /// `Q` used to fire a bare `get` on the spot. That treated a
+    /// request/response primitive as a fancy read, and on a system whose
+    /// contract declares `call/*` services it meant one keystroke could invoke
+    /// one. Composing the request is both the honest shape and the guard.
+    fn open_query_editor(&mut self) {
+        let Some(key) = self.selected_topic_key() else {
+            self.set_error_toast("Select a key to query");
+            return;
+        };
+        self.detail_mode = DetailMode::Query;
+        self.query_key = key;
+        self.query_payload.clear();
+        self.query_field = QueryField::Payload;
+        self.overlay = Overlay::Query;
+    }
+
+    /// The request schema a loaded contract declares for the key being
+    /// composed, if any. Its presence is what marks the key as a service.
+    pub(crate) fn query_request_schema(&self) -> Option<serde_json::Value> {
+        self.contract
+            .as_ref()?
+            .request_schema(self.query_key.trim())
+    }
+
+    fn handle_query_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.overlay = Overlay::None,
+            KeyCode::Tab | KeyCode::Down | KeyCode::Up => {
+                self.query_field = match self.query_field {
+                    QueryField::Key => QueryField::Payload,
+                    QueryField::Payload => QueryField::Key,
+                };
+            }
+            KeyCode::Enter => self.send_query(),
+            KeyCode::Backspace => match self.query_field {
+                QueryField::Key => {
+                    self.query_key.pop();
+                }
+                QueryField::Payload => {
+                    self.query_payload.pop();
+                }
+            },
+            KeyCode::Char(c) => match self.query_field {
+                QueryField::Key => self.query_key.push(c),
+                QueryField::Payload => self.query_payload.push(c),
+            },
+            _ => {}
+        }
+    }
+
+    /// Toggle reply consolidation. Bound outside the editor's text fields, on
+    /// the palette, so typing a payload cannot flip it.
+    pub(crate) fn toggle_query_replies(&mut self) {
+        self.query_all_replies = !self.query_all_replies;
+        self.set_toast(if self.query_all_replies {
+            "Queries will deliver every reply"
+        } else {
+            "Queries will keep one reply per key"
+        });
+    }
+
+    fn send_query(&mut self) {
+        let key_expr = self.query_key.trim().to_string();
+        if key_expr.is_empty() {
+            self.set_error_toast("Key expression is empty");
+            return;
+        }
+        let payload = {
+            let p = self.query_payload.trim();
+            // An empty field means "no payload", not "an empty payload": a
+            // storage expects the former and would reject the latter.
+            (!p.is_empty()).then(|| p.to_string())
+        };
+        self.query_history.push(key_expr.clone());
+        self.pending_query = Some(QueryRequest {
+            key_expr,
+            payload,
+            all_replies: self.query_all_replies,
+        });
+        self.overlay = Overlay::None;
     }
 
     /// Open the publish editor, prefilled with the selected key.
@@ -646,13 +728,15 @@ impl App {
     /// are free text too, and both can legitimately be Korean.
     fn accepts_text(&self) -> bool {
         self.is_text_input_active()
-            || matches!(self.overlay, Overlay::Publish | Overlay::ProfileSave)
+            || matches!(
+                self.overlay,
+                Overlay::Publish | Overlay::ProfileSave | Overlay::Query
+            )
     }
 
     pub(crate) fn is_text_input_active(&self) -> bool {
         self.topics_filtering
             || self.network_filtering
-            || self.query_editing
             || self.overlay == Overlay::Palette
             || self.overlay == Overlay::ScoutPort
     }
@@ -739,6 +823,7 @@ impl App {
                 self.scout_port_input.clear();
             }
             PaletteAction::OpenPublish => self.open_publish_editor(),
+            PaletteAction::ToggleQueryReplies => self.toggle_query_replies(),
             PaletteAction::SaveProfile => {
                 self.profile_name_input.clear();
                 self.overlay = Overlay::ProfileSave;
@@ -828,16 +913,8 @@ impl App {
             KeyCode::Esc => {
                 self.topics_filtering = false;
                 self.network_filtering = false;
-                self.query_editing = false;
             }
             KeyCode::Enter => {
-                if self.query_editing {
-                    self.query_editing = false;
-                    if !self.query_input.is_empty() {
-                        self.query_history.push(self.query_input.clone());
-                        self.pending_query = Some(self.query_input.clone());
-                    }
-                }
                 if self.topics_filtering {
                     self.topics_filtering = false;
                 }
@@ -851,8 +928,6 @@ impl App {
                 } else if self.network_filtering {
                     self.network_filter.push(c);
                     self.clamp_network_selection();
-                } else if self.query_editing {
-                    self.query_input.push(c);
                 }
             }
             KeyCode::Backspace => {
@@ -861,8 +936,6 @@ impl App {
                 } else if self.network_filtering {
                     self.network_filter.pop();
                     self.clamp_network_selection();
-                } else if self.query_editing {
-                    self.query_input.pop();
                 }
             }
             _ => {}
