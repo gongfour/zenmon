@@ -1274,6 +1274,115 @@ fn p_on_a_branch_does_not_open_the_picker() {
     assert_eq!(app.overlay, Overlay::None);
 }
 
+// ---- saved views ----------------------------------------------------------
+
+fn viewing_app() -> App {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["agv/f001/battery", "agv/f002/pose"]);
+    app.topic_filter = "agv".into();
+    app.plot_field
+        .insert("agv/f001/battery".into(), "/percent".into());
+    app.diff_enabled = false;
+    app
+}
+
+#[test]
+fn a_view_captures_what_you_were_looking_at() {
+    let app = viewing_app();
+    let p = app.snapshot_profile("stall");
+    assert_eq!(p.name, "stall");
+    assert_eq!(p.filter, "agv");
+    assert_eq!(p.plot_fields["agv/f001/battery"], "/percent");
+    assert!(!p.diff_enabled);
+    // Sets iterate arbitrarily, so a re-save must not churn the file.
+    let mut sorted = p.expanded.clone();
+    sorted.sort();
+    assert_eq!(p.expanded, sorted);
+}
+
+#[test]
+fn loading_a_view_restores_it() {
+    let saved = viewing_app().snapshot_profile("stall");
+
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["agv/f001/battery", "agv/f002/pose"]);
+    app.topic_filter.clear();
+    app.diff_enabled = true;
+
+    app.apply_profile(&saved);
+    assert_eq!(app.topic_filter, "agv");
+    assert_eq!(
+        app.plot_field.get("agv/f001/battery").map(String::as_str),
+        Some("/percent")
+    );
+    assert!(!app.diff_enabled);
+    assert_eq!(app.tree_expanded, saved.expanded.iter().cloned().collect());
+}
+
+#[test]
+fn loading_a_view_stops_the_automatic_expansion() {
+    // Otherwise a new key would reopen branches the saved view had closed —
+    // loading a view is every bit as deliberate as expanding by hand.
+    let mut app = App::new("test".into());
+    seed_topics(&mut app, &["agv/f001/pose"]);
+    let closed = zenmon_core::profile::TuiProfile {
+        name: "closed".into(),
+        filter: String::new(),
+        expanded: Vec::new(),
+        unfolded: Vec::new(),
+        plot_fields: Default::default(),
+        diff_enabled: true,
+    };
+    app.apply_profile(&closed);
+    assert!(app.tree_user_touched);
+    assert_eq!(app.tree_rows().len(), 1, "everything stayed closed");
+}
+
+#[test]
+fn a_view_does_not_capture_where_the_cursor_happened_to_be() {
+    // Cursor and scroll are where you stopped, not what you were looking at;
+    // restoring them would fight the user on load.
+    let mut app = viewing_app();
+    app.tree_selected = 2;
+    app.topic_detail_scroll = 7;
+    let p = app.snapshot_profile("v");
+
+    app.apply_profile(&p);
+    assert_eq!(app.tree_selected, 0);
+    assert_eq!(app.topic_detail_scroll, 0);
+}
+
+#[test]
+fn loading_with_no_saved_views_says_so_rather_than_opening_an_empty_list() {
+    let mut app = viewing_app();
+    app.run_palette_action(PaletteAction::LoadProfile);
+    assert_eq!(app.overlay, Overlay::None);
+    assert!(app.toast.is_some());
+}
+
+#[test]
+fn saving_without_a_name_is_refused() {
+    let mut app = viewing_app();
+    app.run_palette_action(PaletteAction::SaveProfile);
+    assert_eq!(app.overlay, Overlay::ProfileSave);
+    app.handle_key(key(KeyCode::Enter));
+    // Still open, nothing stored.
+    assert_eq!(app.overlay, Overlay::ProfileSave);
+    assert!(app.profiles.profiles.is_empty());
+}
+
+#[test]
+fn the_save_dialog_says_what_it_is_about_to_capture() {
+    let mut app = viewing_app();
+    app.connection_state = ConnectionState::Connected("zid".into());
+    app.run_palette_action(PaletteAction::SaveProfile);
+    let text = buffer_text(&draw(&mut app, 100, 24));
+    assert!(text.contains("filter 'agv'"), "{text}");
+    assert!(text.contains("plotted"), "{text}");
+}
+
 // ---- publish guards -------------------------------------------------------
 //
 // Four guards stand between a keystroke and a write to a live network. Each
@@ -1637,6 +1746,35 @@ fn dump_frames() {
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC publish editor (WRITE session) =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // Saving and loading a view.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        app.space = Space::Traffic;
+        app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
+        for k in ["agv/f001/battery", "agv/f001/pose", "agv/f002/pose"] {
+            app.key_tree.insert(k);
+        }
+        app.auto_expand();
+        app.topic_filter = "agv".into();
+        app.plot_field
+            .insert("agv/f001/battery".into(), "/percent".into());
+        app.refresh_tree_rows();
+        app.profile_name_input = "stall-hunt".into();
+        app.overlay = Overlay::ProfileSave;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 18)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC save-view dialog =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+
+        app.profiles.upsert(app.snapshot_profile("stall-hunt"));
+        app.profiles.upsert(app.snapshot_profile("fleet-overview"));
+        app.overlay = Overlay::ProfileLoad;
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== TRAFFIC load-view picker =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 

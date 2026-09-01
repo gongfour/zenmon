@@ -34,6 +34,12 @@ pub async fn run(
     let mut app = App::new(endpoint);
     app.contract = contract;
     app.allow_publish = allow_publish;
+    // A broken profiles file should not stop the dashboard from starting; it
+    // is reported and the session runs without saved views.
+    match zenmon_core::profile::load() {
+        Ok(profiles) => app.profiles = profiles,
+        Err(e) => app.set_error_toast(format!("Saved views unavailable: {e}")),
+    }
     app.scout_port_current = config.scout_port;
     app.current_mode = config.mode;
 
