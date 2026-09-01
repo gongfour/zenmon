@@ -32,7 +32,21 @@ pub(crate) fn apply_detail_scroll(scroll: u16, action: DetailScroll) -> u16 {
 }
 
 impl App {
-    pub(crate) fn handle_key(&mut self, key: KeyEvent) {
+    pub(crate) fn handle_key(&mut self, mut key: KeyEvent) {
+        // A forgotten Korean IME turns every command into a jamo the app does
+        // not bind, so the keyboard goes silently dead. Map it back — but only
+        // where a key means a command. Where the user is typing, what they
+        // typed is what they meant.
+        if !self.accepts_text() {
+            if let KeyCode::Char(c) = key.code {
+                let shift = key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT);
+                if let Some(latin) = crate::hangul::latin_key(c, shift) {
+                    key.code = KeyCode::Char(latin);
+                }
+            }
+        }
         if self.overlay == Overlay::Palette {
             self.handle_palette_key(key);
             return;
@@ -622,6 +636,17 @@ impl App {
     fn switch_space(&mut self, space: Space) {
         self.space = space;
         self.pane_focus = PaneFocus::Master;
+    }
+
+    /// Whether the next character typed is text the user is composing, rather
+    /// than a command.
+    ///
+    /// Wider than [`is_text_input_active`](Self::is_text_input_active), which
+    /// only covers the inline editors: the publish payload and a profile name
+    /// are free text too, and both can legitimately be Korean.
+    fn accepts_text(&self) -> bool {
+        self.is_text_input_active()
+            || matches!(self.overlay, Overlay::Publish | Overlay::ProfileSave)
     }
 
     pub(crate) fn is_text_input_active(&self) -> bool {

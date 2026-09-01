@@ -1150,6 +1150,83 @@ fn p_on_a_branch_does_not_open_the_picker() {
     assert_eq!(app.overlay, Overlay::None);
 }
 
+// ---- Korean IME -----------------------------------------------------------
+
+#[test]
+fn commands_work_with_a_forgotten_korean_ime() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["a", "b", "c"]);
+
+    // ㅓ/ㅏ are what `j`/`k` produce with the IME on.
+    app.handle_key(key(KeyCode::Char('ㅓ')));
+    assert_eq!(app.tree_selected, 1);
+    app.handle_key(key(KeyCode::Char('ㅏ')));
+    assert_eq!(app.tree_selected, 0);
+
+    // ㅂ is `q`.
+    app.handle_key(key(KeyCode::Char('ㅂ')));
+    assert!(app.should_quit);
+}
+
+#[test]
+fn the_shift_distinction_survives_the_mapping() {
+    // `q` quits, `Q` queries. Collapsing them would be worse than not mapping.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    seed_topics(&mut app, &["demo/a"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+
+    app.handle_key(key(KeyCode::Char('ㅃ'))); // Q
+    assert!(!app.should_quit);
+    assert_eq!(app.detail_mode, DetailMode::Query);
+}
+
+#[test]
+fn typed_korean_is_left_alone_in_a_filter() {
+    // The mapping must not reach text the user is composing, or Korean becomes
+    // untypeable anywhere in the app.
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "지게차".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.topic_filter, "지게차");
+}
+
+#[test]
+fn typed_korean_is_left_alone_in_a_publish_payload_and_a_profile_name() {
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.allow_publish = true;
+    seed_topics(&mut app, &["agv/f001/cmd"]);
+    app.tree_selected = app.tree_rows().len() - 1;
+    app.run_palette_action(PaletteAction::OpenPublish);
+    for c in "정지".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.publish_payload, "정지");
+
+    let mut app = App::new("test".into());
+    app.run_palette_action(PaletteAction::SaveProfile);
+    for c in "지게차".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.profile_name_input, "지게차");
+}
+
+#[test]
+fn the_mapping_reaches_navigation_overlays_too() {
+    // The doctor and help overlays scroll with j/k, and are just as dead
+    // without this as the main list.
+    let mut app = App::new("test".into());
+    app.handle_key(key(KeyCode::Char('?')));
+    assert_eq!(app.overlay, Overlay::Help);
+    app.handle_key(key(KeyCode::Char('ㅓ')));
+    assert_eq!(app.help_scroll, 1);
+}
+
 // ---- network filter -------------------------------------------------------
 
 fn fleet_network() -> App {
