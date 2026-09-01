@@ -93,7 +93,13 @@ pub async fn run(
 
 enum ConnectResult {
     Connected(Session),
-    Failed(String),
+    /// `config_error` is the error's own kind, carried through rather than
+    /// re-derived from its text. `open_session` already knows the difference
+    /// between a config it cannot use and a router that is not there.
+    Failed {
+        reason: String,
+        config_error: bool,
+    },
 }
 
 enum QueryResult {
@@ -134,8 +140,12 @@ fn spawn_connect(config: ZenmonConfig, tx: mpsc::UnboundedSender<ConnectResult>)
                 let _ = tx.send(ConnectResult::Connected(s));
             }
             Err(e) => {
+                let config_error = e.kind == zenmon_core::error::ErrorKind::InvalidInput;
                 let reason = format!("{}", e).chars().take(60).collect::<String>();
-                let _ = tx.send(ConnectResult::Failed(reason));
+                let _ = tx.send(ConnectResult::Failed {
+                    reason,
+                    config_error,
+                });
             }
         }
     });
@@ -418,15 +428,26 @@ async fn run_loop(
                         app.pending_doctor_request = true;
                         *session.lock().await = Some(s);
                     }
-                    ConnectResult::Failed(reason) => {
-                        app.connection_state = ConnectionState::Disconnected(reason);
+                    ConnectResult::Failed {
+                        reason,
+                        config_error,
+                    } => {
+                        let previous =
+                            std::mem::replace(&mut app.connection_state, ConnectionState::Connecting);
+                        app.connection_state = previous.failed(reason, config_error);
                     }
                 }
                 needs_redraw = true;
             }
             _ = refresh_interval.tick() => {
-                if !app.is_connected() && !reconnect_pending {
-                    app.connection_state = ConnectionState::Connecting;
+                if !app.is_connected()
+                    && !reconnect_pending
+                    && app.connection_state.should_retry()
+                {
+                    // Deliberately *not* reset to `Connecting`: a session
+                    // that has never come up should not flip between
+                    // "connecting" and "failed" every five seconds. The retry
+                    // is reported by the attempt count, not by the state.
                     reconnect_pending = true;
                     spawn_connect(config.clone(), conn_tx.clone());
                     needs_redraw = true;

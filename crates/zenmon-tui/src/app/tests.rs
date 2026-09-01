@@ -103,7 +103,7 @@ fn empty_reason_reflects_connection_state() {
     let mut app = App::new("test".into());
     app.connection_state = ConnectionState::Connecting;
     assert_eq!(app.topics_empty_reason(), EmptyReason::Connecting);
-    app.connection_state = ConnectionState::Disconnected("x".into());
+    app.connection_state = ConnectionState::Unusable("x".into());
     assert_eq!(app.nodes_empty_reason(), EmptyReason::Disconnected);
 }
 
@@ -1277,6 +1277,142 @@ fn p_on_a_branch_does_not_open_the_picker() {
     assert_eq!(app.overlay, Overlay::None);
 }
 
+// ---- connection state -----------------------------------------------------
+
+#[test]
+fn repeated_failures_accumulate_rather_than_replacing_each_other() {
+    // Showing only the latest failure made three seconds look like forty
+    // minutes. The count and the elapsed time are the whole point.
+    let mut st = ConnectionState::Connecting;
+    for _ in 0..3 {
+        st = st.failed("connection refused".into(), false);
+    }
+    match st {
+        ConnectionState::Retrying {
+            attempts, reason, ..
+        } => {
+            assert_eq!(attempts, 3);
+            assert_eq!(reason, "connection refused");
+        }
+        other => panic!("expected Retrying, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_successful_session_resets_the_count() {
+    let st = ConnectionState::Connecting
+        .failed("refused".into(), false)
+        .failed("refused".into(), false);
+    // A reconnect after a good session is a new outage, not a continuation.
+    let after = ConnectionState::Connected("zid".into()).failed("refused".into(), false);
+    assert!(matches!(st, ConnectionState::Retrying { attempts: 2, .. }));
+    assert!(matches!(
+        after,
+        ConnectionState::Retrying { attempts: 1, .. }
+    ));
+}
+
+#[test]
+fn a_config_error_stops_the_retry_loop() {
+    // 720 identical failures an hour teach nobody what one message can.
+    let st = ConnectionState::Connecting.failed("invalid Zenoh config".into(), true);
+    assert!(matches!(st, ConnectionState::Unusable(_)));
+    assert!(!st.should_retry());
+}
+
+#[test]
+fn an_unreachable_router_keeps_retrying() {
+    // Starting the TUI before zenohd is the normal order, not an error.
+    let st = ConnectionState::Connecting.failed("connection refused".into(), false);
+    assert!(st.should_retry());
+}
+
+#[test]
+fn a_config_error_after_failures_takes_over_from_them() {
+    // Changing to a bad endpoint mid-session must stop the loop, not inherit
+    // the previous outage's count.
+    let st = ConnectionState::Connecting
+        .failed("refused".into(), false)
+        .failed("invalid Zenoh config".into(), true);
+    assert!(matches!(st, ConnectionState::Unusable(_)));
+    assert!(!st.should_retry());
+}
+
+#[test]
+fn elapsed_keeps_seconds_while_they_still_matter() {
+    // An outage's first minute is exactly when seconds are the information;
+    // `format_idle`'s minute granularity rounded all of it to "0m".
+    assert_eq!(format_elapsed(0), "0s");
+    assert_eq!(format_elapsed(8), "8s");
+    assert_eq!(format_elapsed(59), "59s");
+    assert_eq!(format_elapsed(60), "1m");
+    assert_eq!(format_elapsed(95), "1m35s");
+    assert_eq!(format_elapsed(3600), "1h0m");
+}
+
+#[test]
+fn a_long_failure_reason_never_pushes_the_space_tabs_off_the_line() {
+    // The tabs are navigation. A retry message is the longest thing that can
+    // appear beside them, and on a narrow terminal it used to win.
+    let mut app = App::new("test".into());
+    let mut st = ConnectionState::Connecting;
+    for _ in 0..999 {
+        st = st.failed(
+            "failed to open Zenoh session: a very long transport error indeed".into(),
+            false,
+        );
+    }
+    app.connection_state = st;
+    for width in [70u16, 90, 110, 160] {
+        let text = buffer_text(&draw(&mut app, width, 12));
+        assert!(text.contains("[Traffic]"), "lost at {width}: {text}");
+        assert!(text.contains("[Network]"), "lost at {width}: {text}");
+    }
+}
+
+#[test]
+fn truncation_keeps_the_end_of_a_reason() {
+    // The useful half of "failed to open Zenoh session: connection refused" is
+    // the last two words; the prefix is boilerplate the header already implies.
+    let mut app = App::new("test".into());
+    app.connection_state = ConnectionState::Connecting.failed(
+        "failed to open Zenoh session: connection refused".into(),
+        false,
+    );
+    let text = buffer_text(&draw(&mut app, 80, 12));
+    assert!(text.contains("refused"), "{text}");
+}
+
+#[test]
+fn the_header_says_how_long_and_how_often() {
+    let mut app = App::new("tcp/127.0.0.1:7447".into());
+    app.connection_state = ConnectionState::Connecting
+        .failed("connection refused".into(), false)
+        .failed("connection refused".into(), false);
+
+    let text = buffer_text(&draw(&mut app, 110, 12));
+    assert!(text.contains("retrying"), "{text}");
+    assert!(text.contains("2 attempts"), "{text}");
+}
+
+#[test]
+fn a_single_attempt_reads_as_one_attempt() {
+    let mut app = App::new("test".into());
+    app.connection_state = ConnectionState::Connecting.failed("refused".into(), false);
+    let text = buffer_text(&draw(&mut app, 110, 12));
+    assert!(text.contains("1 attempt "), "{text}");
+}
+
+#[test]
+fn an_unusable_config_points_at_the_way_to_fix_it() {
+    // There is nothing to wait for, so the header has to say what to do.
+    let mut app = App::new("bogus".into());
+    app.connection_state = ConnectionState::Unusable("invalid Zenoh config".into());
+    let text = buffer_text(&draw(&mut app, 110, 12));
+    assert!(text.contains("press :"), "{text}");
+    assert!(text.contains("unusable"), "{text}");
+}
+
 // ---- Korean IME -----------------------------------------------------------
 
 #[test]
@@ -1989,6 +2125,30 @@ fn dump_frames() {
         app.overlay = Overlay::PlotPicker;
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC plot-field picker =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+    }
+
+    // The two ways a connection can be down, which used to look identical.
+    {
+        let mut app = App::new("tcp/127.0.0.1:7447".into());
+        let mut st = ConnectionState::Connecting;
+        for _ in 0..37 {
+            st = st.failed(
+                "failed to open Zenoh session: connection refused".into(),
+                false,
+            );
+        }
+        app.connection_state = st;
+        let mut terminal = Terminal::new(TestBackend::new(110, 10)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== HEADER retrying =====");
+        print!("{}", buffer_grid(terminal.backend().buffer()));
+
+        let mut app = App::new("tpc/localhost:7447".into());
+        app.connection_state =
+            ConnectionState::Unusable("invalid Zenoh config: unknown protocol 'tpc'".into());
+        terminal.draw(|f| app.render(f)).unwrap();
+        println!("\n===== HEADER unusable config =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 
