@@ -252,13 +252,13 @@ pub enum DetailMode {
 }
 
 /// A selectable row in the unified Network participant list: either a transport
-/// **Session** (index into `nodes`) or a liveliness **Service** (index into
-/// `liveliness_tokens`). Section/group headers are drawn by the view and are not
-/// part of this list — `network_selected` is a cursor over these rows only.
+/// **Session** (index into `nodes`) or a **Liveliness** token (index into
+/// `liveliness_tokens`). Section headers are drawn by the view and are not part
+/// of this list — `network_selected` is a cursor over these rows only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkRow {
     Session(usize),
-    Service(usize),
+    Liveliness(usize),
 }
 
 /// Minimum body width (columns) at which master and detail render side by side.
@@ -345,7 +345,6 @@ pub struct LivelinessEventRecord {
     pub is_join: bool,
     pub key_expr: String,
     pub node_name: String,
-    pub group: String,
 }
 
 const LIVELINESS_EVENT_CAP: usize = 200;
@@ -482,7 +481,7 @@ pub struct App {
 
     /// One entry per rendered Network-master display row: `Some(selectable_index)`
     /// (an index into [`App::network_rows`] / the `network_selected` space) for a
-    /// Session/Service row, or `None` for a non-selectable section/group header.
+    /// Session/Liveliness row, or `None` for a non-selectable section header.
     /// Rebuilt every Network render so clicks map back to the right participant.
     pub network_click_map: Vec<Option<usize>>,
 

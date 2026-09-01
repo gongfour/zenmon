@@ -1,10 +1,15 @@
 //! Network space — master/detail over the unified participant list.
 //!
 //! Left (master): one scrollable list with two labeled sections — **Sessions**
-//! (transport nodes from `app.nodes`) and **Services** (liveliness tokens from
-//! `app.liveliness_tokens`, grouped by a generic `/`-split prefix). Right
-//! (detail): the selected participant — a session's kind/locators/links or a
-//! service's key/group/status plus its join/leave history.
+//! (transport nodes from `app.nodes`) and **Liveliness** (tokens from
+//! `app.liveliness_tokens`, in key order). Right (detail): the selected
+//! participant — a session's kind/locators/links, or a token's key and status
+//! plus its join/leave history.
+//!
+//! "Liveliness" rather than "Services" because that is what zenoh calls these
+//! and what `zenmon liveliness` prints. `service` already means something else
+//! here: a contract declares named services with typed endpoints, and one of
+//! those may declare any number of tokens, or none.
 
 use crate::app::{App, BodyLayout, NetworkRow, PaneFocus};
 use ratatui::layout::Rect;
@@ -12,7 +17,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
-use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 use zenmon_core::topology::build_topology;
 use zenmon_core::types::{LivelinessToken, NodeInfo};
@@ -81,18 +85,6 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
     let now = SystemTime::now();
     let self_zid = app.self_zid.clone();
 
-    // Per-group alive/total for the Service sub-headers.
-    let mut group_stats: HashMap<String, (usize, usize)> = HashMap::new();
-    for token in &app.liveliness_tokens {
-        let group = token
-            .group_prefix()
-            .unwrap_or_else(|| "(ungrouped)".to_string());
-        let entry = group_stats.entry(group).or_insert((0, 0));
-        entry.1 += 1;
-        if token.alive {
-            entry.0 += 1;
-        }
-    }
     let total_tokens = app.liveliness_tokens.len();
     let total_alive = app.liveliness_tokens.iter().filter(|t| t.alive).count();
     let n_sessions = app.nodes.len();
@@ -104,7 +96,6 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
     let mut click_map: Vec<Option<usize>> = Vec::new();
     let mut selected_display: Option<usize> = None;
     let mut last_section: Option<u8> = None;
-    let mut last_group: Option<String> = None;
 
     for (sel_idx, row) in rows.iter().enumerate() {
         match *row {
@@ -120,33 +111,19 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                 items.push(node_item(&app.nodes[i], now, self_zid.as_deref()));
                 click_map.push(Some(sel_idx));
             }
-            NetworkRow::Service(i) => {
+            NetworkRow::Liveliness(i) => {
                 if last_section != Some(1) {
                     items.push(header_item(format!(
-                        "── Services ({}/{}) ──",
+                        "── Liveliness ({}/{} alive) ──",
                         total_alive, total_tokens
                     )));
                     click_map.push(None);
                     last_section = Some(1);
-                    last_group = None;
                 }
-                let token = &app.liveliness_tokens[i];
-                let group = token
-                    .group_prefix()
-                    .unwrap_or_else(|| "(ungrouped)".to_string());
-                if last_group.as_deref() != Some(group.as_str()) {
-                    let (alive, total) = group_stats.get(&group).copied().unwrap_or((0, 0));
-                    items.push(header_item(format!(
-                        "── {} ({}/{}) ──",
-                        group, alive, total
-                    )));
-                    click_map.push(None);
-                    last_group = Some(group);
-                }
-                if selected_row == Some(NetworkRow::Service(i)) {
+                if selected_row == Some(NetworkRow::Liveliness(i)) {
                     selected_display = Some(items.len());
                 }
-                items.push(token_item(token));
+                items.push(token_item(&app.liveliness_tokens[i]));
                 click_map.push(Some(sel_idx));
             }
         }
@@ -210,32 +187,50 @@ fn node_item(node: &NodeInfo, now: SystemTime, self_zid: Option<&str>) -> ListIt
     ListItem::new(Line::from(spans))
 }
 
+/// A token row: the whole key expression, with the instance hash dimmed.
+///
+/// The key is what zenoh actually declared, so it is shown rather than a name
+/// derived from it. The trailing `_a6f69029` that ROS-style stacks append is
+/// dimmed instead of stripped — it distinguishes two instances of the same
+/// node, which is exactly what you need when one of them is the dead one.
 fn token_item(token: &LivelinessToken) -> ListItem<'static> {
     let (dot, color) = if token.alive {
         ("●", Color::Green)
     } else {
         ("○", Color::Red)
     };
-    let name = token.node_name().unwrap_or_else(|| token.key_expr.clone());
-    let group = token.group_prefix().unwrap_or_default();
-
+    let (stem, hash) = split_instance_hash(&token.key_expr);
     let mut spans = vec![
         Span::styled(format!("{} ", dot), Style::default().fg(color)),
-        Span::styled(name, Style::default().fg(Color::White)),
+        Span::styled(stem, Style::default().fg(Color::White)),
     ];
-    if !group.is_empty() {
-        spans.push(Span::styled(
-            format!("  {}", group),
-            Style::default().fg(Color::DarkGray),
-        ));
+    if !hash.is_empty() {
+        spans.push(Span::styled(hash, Style::default().fg(Color::DarkGray)));
     }
     ListItem::new(Line::from(spans))
+}
+
+/// Split a trailing `_<hex>` instance suffix off a key expression.
+///
+/// Returns `(stem, suffix)`, with an empty suffix when there is none. Purely a
+/// display convention — zenoh attaches no meaning to it — so a key that does
+/// not follow it is passed through whole.
+fn split_instance_hash(key: &str) -> (String, String) {
+    let last = key.rsplit('/').next().unwrap_or(key);
+    if let Some(pos) = last.rfind('_') {
+        let suffix = &last[pos + 1..];
+        if suffix.len() >= 6 && suffix.chars().all(|c| c.is_ascii_hexdigit()) {
+            let cut = key.len() - (last.len() - pos);
+            return (key[..cut].to_string(), key[cut..].to_string());
+        }
+    }
+    (key.to_string(), String::new())
 }
 
 fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     match app.selected_network_row() {
         Some(NetworkRow::Session(i)) => render_session_detail(app, frame, area, i),
-        Some(NetworkRow::Service(i)) => render_service_detail(app, frame, area, i),
+        Some(NetworkRow::Liveliness(i)) => render_liveliness_detail(app, frame, area, i),
         None => {
             let block = Block::default().borders(Borders::ALL).title(" Detail ");
             let inner = block.inner(area);
@@ -347,10 +342,9 @@ fn render_session_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) {
     frame.render_widget(para, inner);
 }
 
-fn render_service_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) {
+fn render_liveliness_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) {
     let token = &app.liveliness_tokens[i];
     let name = token.node_name().unwrap_or_else(|| token.key_expr.clone());
-    let group = token.group_prefix().unwrap_or_default();
 
     let title = format!(" {} ", name);
     let block = Block::default().borders(Borders::ALL).title(title);
@@ -374,17 +368,6 @@ fn render_service_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) {
         Line::from(vec![
             Span::styled("key: ", Style::default().fg(Color::Gray)),
             Span::styled(token.key_expr.clone(), Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("group: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                if group.is_empty() {
-                    "(ungrouped)".to_string()
-                } else {
-                    group
-                },
-                Style::default().fg(Color::White),
-            ),
         ]),
     ];
 
@@ -428,4 +411,42 @@ fn render_service_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) {
         .wrap(Wrap { trim: false })
         .scroll((app.node_detail_scroll, 0));
     frame.render_widget(para, inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_instance_hash;
+
+    #[test]
+    fn a_ros_style_instance_suffix_is_split_off_for_dimming() {
+        let (stem, hash) = split_instance_hash("dotori/ph_eb/node/mission_manager_a6f69029");
+        assert_eq!(stem, "dotori/ph_eb/node/mission_manager");
+        assert_eq!(hash, "_a6f69029");
+    }
+
+    #[test]
+    fn a_key_without_the_convention_is_passed_through_whole() {
+        // zenoh attaches no meaning to the suffix, so a key that does not use
+        // it must not be silently truncated — which is exactly how the old
+        // group heuristic went wrong on `stack/kang/ph_eb`.
+        for key in [
+            "dotori/ph_eb/stack/kang/ph_eb",
+            "fleet/robot1",
+            "a_b",
+            "plain",
+        ] {
+            let (stem, hash) = split_instance_hash(key);
+            assert_eq!(stem, key, "{key} was altered");
+            assert!(hash.is_empty(), "{key} grew a suffix");
+        }
+    }
+
+    #[test]
+    fn only_the_last_segment_is_considered() {
+        // An underscore-and-hex earlier in the path is part of the namespace,
+        // not an instance id.
+        let (stem, hash) = split_instance_hash("robot_deadbeef/node/planner");
+        assert_eq!(stem, "robot_deadbeef/node/planner");
+        assert!(hash.is_empty());
+    }
 }

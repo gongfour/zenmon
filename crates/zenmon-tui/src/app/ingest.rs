@@ -92,7 +92,6 @@ impl App {
             is_join,
             key_expr: token.key_expr.clone(),
             node_name: token.node_name().unwrap_or_else(|| token.key_expr.clone()),
-            group: token.group_prefix().unwrap_or_default(),
         };
         self.liveliness_events.push_front(record);
         if self.liveliness_events.len() > LIVELINESS_EVENT_CAP {

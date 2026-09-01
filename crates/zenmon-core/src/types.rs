@@ -360,17 +360,6 @@ impl LivelinessToken {
         }
         Some(last.to_string())
     }
-
-    /// Extract the group/robot prefix from the key expression.
-    /// e.g. "fleet/r1/node/action_executor_ec98a701" -> "fleet/r1"
-    pub fn group_prefix(&self) -> Option<String> {
-        let parts: Vec<&str> = self.key_expr.split('/').collect();
-        if parts.len() >= 3 {
-            Some(parts[..parts.len() - 2].join("/"))
-        } else {
-            None
-        }
-    }
 }
 
 #[cfg(test)]

@@ -1876,7 +1876,7 @@ fn network_selection_resolves_session_then_service() {
     app.network_selected = 1;
     assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(1)));
     app.network_selected = 2;
-    assert_eq!(app.selected_network_row(), Some(NetworkRow::Service(0)));
+    assert_eq!(app.selected_network_row(), Some(NetworkRow::Liveliness(0)));
 }
 
 #[test]
@@ -2239,11 +2239,12 @@ fn network_click_map_marks_headers_and_rows() {
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
 
-    // Display rows: Sessions header, z1, z2, Services header, group header,
-    // token. Headers → None; participants → their `network_rows()` index.
+    // Display rows: Sessions header, z1, z2, Liveliness header, token. The
+    // group sub-header that used to sit between the last two is gone with the
+    // invented grouping. Headers → None; participants → `network_rows()` index.
     assert_eq!(
         app.network_click_map,
-        vec![None, Some(0), Some(1), None, None, Some(2)]
+        vec![None, Some(0), Some(1), None, Some(2)]
     );
 
     // Clicking the z2 display row (index 2) selects network_rows() index 1.

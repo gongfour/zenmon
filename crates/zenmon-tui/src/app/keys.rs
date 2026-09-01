@@ -548,7 +548,7 @@ impl App {
                 let zid = self.nodes[i].zid.clone();
                 self.copy_to_clipboard(zid, "zid");
             }
-            Some(NetworkRow::Service(i)) => {
+            Some(NetworkRow::Liveliness(i)) => {
                 let key = self.liveliness_tokens[i].key_expr.clone();
                 self.copy_to_clipboard(key, "key");
             }
@@ -557,29 +557,21 @@ impl App {
     }
 
     /// The unified list of selectable participant rows, in display order: every
-    /// transport session (in node order) followed by every liveliness service.
-    /// Services are ordered so tokens of the same group are contiguous (groups in
-    /// first-appearance order), which is exactly the order the view draws them —
-    /// so `network_selected` maps 1:1 onto the rendered rows.
+    /// transport session (in node order) followed by every liveliness token.
+    ///
+    /// Tokens sort by key expression. That is the order the keys themselves
+    /// impose, so related tokens land together without the view having to
+    /// decide what "related" means.
     pub(crate) fn network_rows(&self) -> Vec<NetworkRow> {
         let mut rows: Vec<NetworkRow> = (0..self.nodes.len()).map(NetworkRow::Session).collect();
 
-        let mut group_order: Vec<String> = Vec::new();
-        let mut by_group: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, token) in self.liveliness_tokens.iter().enumerate() {
-            let group = token
-                .group_prefix()
-                .unwrap_or_else(|| "(ungrouped)".to_string());
-            if !by_group.contains_key(&group) {
-                group_order.push(group.clone());
-            }
-            by_group.entry(group).or_default().push(i);
-        }
-        for group in &group_order {
-            for &i in &by_group[group] {
-                rows.push(NetworkRow::Service(i));
-            }
-        }
+        let mut token_idx: Vec<usize> = (0..self.liveliness_tokens.len()).collect();
+        token_idx.sort_by(|&a, &b| {
+            self.liveliness_tokens[a]
+                .key_expr
+                .cmp(&self.liveliness_tokens[b].key_expr)
+        });
+        rows.extend(token_idx.into_iter().map(NetworkRow::Liveliness));
         rows
     }
 
