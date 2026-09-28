@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tokio::sync::watch;
 
-use zenmon_core::capture::CaptureRecord;
+use zenmon_core::capture::{CaptureExclude, CaptureRecord};
 use zenmon_core::trace::{enforce_retention, SegmentWriter};
 use zenmon_core::{open_session, subscriber, ZenmonConfig};
 
@@ -44,6 +44,9 @@ pub struct CaptureStatus {
     pub state: CaptureState,
     pub profile_name: String,
     pub messages_written: u64,
+    /// Messages dropped by the profile's `exclude` list this session — shown
+    /// so an exclusion is visible rather than a silent gap in the capture.
+    pub messages_excluded: u64,
     /// Approximate total bytes written this session (NDJSON line lengths
     /// summed client-side; `SegmentWriter` doesn't expose its own counter).
     pub bytes_written: u64,
@@ -66,6 +69,7 @@ impl CaptureStatus {
             state: CaptureState::Idle,
             profile_name: profile_name.to_string(),
             messages_written: 0,
+            messages_excluded: 0,
             bytes_written: 0,
             started_at_ms: None,
             last_message_at_ms: None,
@@ -139,6 +143,20 @@ async fn run_capture(
     mut stop_rx: watch::Receiver<bool>,
     status_tx: watch::Sender<CaptureStatus>,
 ) {
+    // Validate before connecting, so a typo fails the start instead of
+    // recording everything (or nothing) without a word.
+    // Blank lines come from the settings textarea (one expression per line).
+    let exclude_exprs: Vec<&str> = profile
+        .exclude
+        .iter()
+        .map(|e| e.trim())
+        .filter(|e| !e.is_empty())
+        .collect();
+    let exclude = match CaptureExclude::parse(&exclude_exprs) {
+        Ok(exclude) => exclude,
+        Err(err) => return fail(&status_tx, err),
+    };
+
     let session = match open_session(&zenmon_config).await {
         Ok(session) => session,
         Err(err) => return fail(&status_tx, err),
@@ -175,6 +193,7 @@ async fn run_capture(
     });
 
     let mut last_retention_check = Instant::now();
+    let mut excluded_pending: u64 = 0;
 
     loop {
         tokio::select! {
@@ -186,6 +205,12 @@ async fn run_capture(
             }
             item = rx.recv() => match item {
                 Some(msg) => {
+                    if exclude.excludes(&msg.key_expr) {
+                        // Counted, but not pushed per message: the status
+                        // channel ticks once per *written* message already.
+                        excluded_pending += 1;
+                        continue;
+                    }
                     let now = SystemTime::now();
                     let record = CaptureRecord::from_message(&msg, start.elapsed(), now);
                     let line = match serde_json::to_string(&record) {
@@ -211,8 +236,10 @@ async fn run_capture(
                     }
 
                     let written_bytes = line.len() as u64 + 1; // + newline
+                    let excluded_now = std::mem::take(&mut excluded_pending);
                     status_tx.send_modify(|s| {
                         s.messages_written += 1;
+                        s.messages_excluded += excluded_now;
                         s.bytes_written += written_bytes;
                         s.last_message_at_ms = epoch_millis(now);
                     });
@@ -233,6 +260,7 @@ async fn run_capture(
     let _ = session.close().await;
 
     status_tx.send_modify(|s| {
+        s.messages_excluded += excluded_pending;
         if let Some(err) = end.error() {
             s.last_error = Some(err.to_string());
         }

@@ -1097,6 +1097,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
 
         Command::Capture {
             key_expr,
+            exclude,
             output,
             dir,
             rotate_size,
@@ -1108,8 +1109,12 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         } => {
             warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
             use std::io::Write;
-            use zenmon_core::capture::CaptureRecord;
+            use zenmon_core::capture::{CaptureExclude, CaptureRecord};
 
+            // Validate before connecting: a bad exclude must not start a
+            // capture that silently drops nothing (or everything).
+            let exclude_exprs = exclude;
+            let exclude = CaptureExclude::parse(&exclude_exprs)?;
             let session = zenmon_core::session::open_session(&config).await?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let subscription = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
@@ -1159,9 +1164,14 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 Sink::File(std::io::BufWriter::new(file))
             };
 
+            if !cli.json && !exclude.is_empty() {
+                eprintln!("Excluding: {}", exclude_exprs.join(", "));
+            }
+
             let start = std::time::Instant::now();
             let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
             let mut written: u64 = 0;
+            let mut excluded: u64 = 0;
             let mut stop = false;
             loop {
                 let deadline = budget.deadline();
@@ -1176,6 +1186,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                     item = rx.recv() => match item {
                         Some(msg) => {
+                            // Excluded messages don't count toward --count.
+                            if exclude.excludes(&msg.key_expr) {
+                                excluded += 1;
+                                continue;
+                            }
                             let now = std::time::SystemTime::now();
                             let rec = CaptureRecord::from_message(&msg, start.elapsed(), now);
                             let line = serde_json::to_string(&rec)?;
@@ -1227,11 +1242,17 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     serde_json::to_string(&serde_json::json!({
                         "ok": true,
                         "captured": written,
+                        "excluded": excluded,
                         "output": output_label,
                     }))?
                 );
-            } else {
+            } else if exclude.is_empty() {
                 eprintln!("Captured {} record(s) to {}", written, output_label);
+            } else {
+                eprintln!(
+                    "Captured {} record(s) to {} ({} excluded)",
+                    written, output_label, excluded
+                );
             }
             subscription.stop().await;
             session.close().await.map_err(internal_err)?;
