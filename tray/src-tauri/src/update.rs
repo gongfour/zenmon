@@ -180,7 +180,7 @@ pub async fn apply(app: &AppHandle, confirmed: bool) -> Result<(), String> {
     let capturing = {
         let state = app.state::<AppState>();
         let inner = state.inner.lock().expect("state poisoned");
-        inner.capture.is_some()
+        crate::state::capture_active(&inner)
     };
     if capturing && !confirmed {
         // Sentinel the frontend recognizes to raise its confirm dialog. Raised

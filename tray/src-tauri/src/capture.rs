@@ -30,6 +30,15 @@ pub enum CaptureState {
     Failed,
 }
 
+impl CaptureState {
+    /// Whether a capture is under way — i.e. a click should *stop* it.
+    /// `Failed` and `Idle` are both terminal: the task has ended, so a click
+    /// should start a fresh one.
+    pub fn is_active(self) -> bool {
+        matches!(self, CaptureState::Starting | CaptureState::Running)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CaptureStatus {
     pub state: CaptureState,
@@ -88,6 +97,12 @@ impl CaptureHandle {
 
     pub fn status(&self) -> CaptureStatus {
         self.status_rx.borrow().clone()
+    }
+
+    /// See [`CaptureState::is_active`]. A failed handle is kept around only so
+    /// its error stays visible; it no longer counts as capturing.
+    pub fn is_active(&self) -> bool {
+        self.status_rx.borrow().state.is_active()
     }
 
     /// Await the task's teardown. Only meant to be called after `stop()`,
