@@ -411,6 +411,24 @@ export function App() {
 
               <div className="row">
                 <label>
+                  Compression
+                  <span className="hint">zstd: several times smaller, .ndjson.zst</span>
+                </label>
+                <div className="seg">
+                  {(["none", "zstd"] as const).map((c) => (
+                    <button
+                      key={c}
+                      className={(profile.compression ?? "none") === c ? "on" : ""}
+                      onClick={() => patchProfile({ compression: c })}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="row">
+                <label>
                   Rotate size
                   <span className="hint">start a new segment past this size</span>
                 </label>
