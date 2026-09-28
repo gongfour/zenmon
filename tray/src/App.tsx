@@ -269,7 +269,8 @@ export function App() {
             {status?.last_error
               ? status.last_error
               : status && status.state === "running"
-                ? `${status.profile_name} · ${status.messages_written} msgs · ${formatBytes(status.bytes_written)}`
+                ? `${status.profile_name} · ${status.messages_written} msgs · ${formatBytes(status.bytes_written)}` +
+                  (status.messages_excluded ? ` · ${status.messages_excluded} excluded` : "")
                 : (config.app.selected_profile || "no profile")}
           </div>
         </div>
@@ -385,6 +386,21 @@ export function App() {
                   <input
                     value={profile.key_expr}
                     onChange={(e) => patchProfile({ key_expr: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="row">
+                <label>
+                  Exclude
+                  <span className="hint">one key expression per line — dropped before writing</span>
+                </label>
+                <div className="inp">
+                  <textarea
+                    rows={Math.max(2, (profile.exclude ?? []).length + 1)}
+                    value={(profile.exclude ?? []).join("\n")}
+                    placeholder="**/topic/sensor/pcd/**"
+                    onChange={(e) => patchProfile({ exclude: e.target.value.split("\n") })}
                   />
                 </div>
               </div>
