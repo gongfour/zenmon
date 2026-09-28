@@ -115,7 +115,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 .map(|p| p.name.clone())
                 .collect::<Vec<_>>(),
             inner.config.app.selected_profile.clone(),
-            inner.capture.is_some(),
+            crate::state::capture_active(&inner),
         )
     };
 
@@ -165,7 +165,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &sep2,
         &quit,
     ];
-    Menu::with_items(app, &items)
+    let menu = Menu::with_items(app, &items)?;
+    app.state::<AppState>()
+        .inner
+        .lock()
+        .expect("state poisoned")
+        .capture_menu_item = Some(capture);
+    Ok(menu)
 }
 
 /// Patch the icon and tooltip to match the current capture status.
@@ -189,6 +195,18 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
         }
     };
 
+    // Set on every push, not only on state changes: a menu click has already
+    // flipped the item by the time the toggle runs, and a toggle that fails
+    // leaves the state unchanged — this is what puts the checkmark back.
+    let capture_item = {
+        let state = app.state::<AppState>();
+        let inner = state.inner.lock().expect("state poisoned");
+        inner.capture_menu_item.clone()
+    };
+    if let Some(item) = capture_item {
+        let _ = item.set_checked(status.state.is_active());
+    }
+
     if icon_changed {
         let color = match status.state {
             CaptureState::Running => COLOR_ONLINE,
@@ -200,19 +218,25 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
     }
 
     // The hints are how left-click-to-toggle gets discovered — there is no
-    // other affordance for it.
-    let tooltip = match (&status.last_error, status.state) {
+    // other affordance for it — so every state gets one, and it names what a
+    // click will actually do (`state::toggle_capture`).
+    let headline = match (&status.last_error, status.state) {
         (Some(err), _) => format!("zenmon-tray — {}: {err}", status.profile_name),
         (None, CaptureState::Running) => format!(
-            "zenmon-tray — {} · {} msgs\nClick to stop",
+            "zenmon-tray — {} · {} msgs",
             status.profile_name, status.messages_written
         ),
         (None, CaptureState::Starting) => {
             format!("zenmon-tray — {} · connecting…", status.profile_name)
         }
-        (None, _) => "zenmon-tray — not capturing\nClick to start".to_string(),
+        (None, _) => "zenmon-tray — not capturing".to_string(),
     };
-    let _ = tray.set_tooltip(Some(&tooltip));
+    let hint = match status.state {
+        CaptureState::Running | CaptureState::Starting => "Click to stop",
+        CaptureState::Failed => "Click to retry",
+        CaptureState::Idle => "Click to start",
+    };
+    let _ = tray.set_tooltip(Some(&format!("{headline}\n{hint}")));
 }
 
 fn solid_icon(rgba: [u8; 4]) -> Image<'static> {

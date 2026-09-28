@@ -5,7 +5,8 @@
 
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::menu::CheckMenuItem;
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::capture::{self, CaptureHandle, CaptureState, CaptureStatus};
 use crate::config::{self, AppConfig, Paths};
@@ -30,6 +31,11 @@ pub struct Inner {
     /// message rate makes it visibly flicker — this lets the tray skip
     /// no-op icon updates.
     pub tray_icon_state: Option<CaptureState>,
+    /// The tray menu's "Capture" check item, replaced on every menu rebuild.
+    /// Kept so status pushes can set its checkmark: the menu is not rebuilt on
+    /// start/stop, and the platform flips a check item on every click by
+    /// itself, so without this the checkmark drifts from the real state.
+    pub capture_menu_item: Option<CheckMenuItem<Wry>>,
 }
 
 impl AppState {
@@ -40,6 +46,7 @@ impl AppState {
                 config,
                 capture: None,
                 tray_icon_state: None,
+                capture_menu_item: None,
             }),
         }
     }
@@ -61,11 +68,18 @@ fn persist(state: &AppState, inner: &Inner) {
     }
 }
 
-/// Start capture on the selected profile. No-op if already running.
+/// Whether a capture is under way. A failed capture's handle is still held
+/// (so its error stays on screen) but does not count.
+pub fn capture_active(inner: &Inner) -> bool {
+    inner.capture.as_ref().is_some_and(CaptureHandle::is_active)
+}
+
+/// Start capture on the selected profile. No-op if already running; replaces
+/// a failed capture's handle.
 pub fn start_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut inner = state.inner.lock().expect("state poisoned");
-    if inner.capture.is_some() {
+    if capture_active(&inner) {
         return Ok(());
     }
 
@@ -101,11 +115,13 @@ pub fn stop_capture(app: &AppHandle) {
     push_status(app);
 }
 
+/// Stop an active capture, otherwise start one — so clicking a failed capture
+/// retries it rather than merely clearing the error.
 pub fn toggle_capture(app: &AppHandle) -> Result<(), String> {
     let running = {
         let state = app.state::<AppState>();
         let inner = state.inner.lock().expect("state poisoned");
-        inner.capture.is_some()
+        capture_active(&inner)
     };
     if running {
         stop_capture(app);
