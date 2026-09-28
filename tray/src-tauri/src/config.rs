@@ -46,6 +46,10 @@ pub struct Profile {
     #[serde(default)]
     pub namespace: Option<String>,
     pub key_expr: String,
+    /// Key expressions dropped before writing (see `CaptureExclude`). Empty
+    /// for configs written before this field existed.
+    #[serde(default)]
+    pub exclude: Vec<String>,
     pub output_dir: PathBuf,
     pub rotate_size_bytes: u64,
     pub rotate_interval_secs: u64,
@@ -85,6 +89,7 @@ impl Profile {
             mode: "client".to_string(),
             namespace: None,
             key_expr: "**".to_string(),
+            exclude: Vec::new(),
             output_dir: data_local_dir.join("captures").join(name),
             rotate_size_bytes: 64 * 1024 * 1024,
             rotate_interval_secs: 3600,

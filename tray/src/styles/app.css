@@ -90,6 +90,9 @@ button,input,select{font-family:inherit}
   pointer-events:none;font-size:10px}
 .inp{flex:1;min-width:0;max-width:300px}
 .inp input{font-family:var(--mono);cursor:text;padding-right:11px}
+.inp textarea{width:100%;background:var(--sunken);border:1px solid var(--line-strong);color:var(--ink);
+  font-family:var(--mono);font-size:12px;padding:8px 11px;border-radius:5px;resize:vertical}
+.inp textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-ring)}
 .inp.wide{max-width:none}
 /* numeric field + unit suffix */
 .num{display:flex;align-items:center;gap:8px;justify-content:flex-end;flex:0 0 auto}

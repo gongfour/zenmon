@@ -97,10 +97,78 @@ impl CaptureRecord {
     }
 }
 
+/// Key expressions a capture drops before writing — e.g. bulky point clouds
+/// out of an always-on recorder. The subscription itself stays as wide as its
+/// key expression (Zenoh has no "all except" form); exclusion is applied per
+/// received message, so callers count what they drop and report it rather
+/// than letting excluded traffic vanish unnoticed.
+#[derive(Debug, Clone, Default)]
+pub struct CaptureExclude {
+    exprs: Vec<zenoh::key_expr::OwnedKeyExpr>,
+}
+
+impl CaptureExclude {
+    /// Validate every expression up front, so a typo fails the capture at
+    /// start instead of silently excluding nothing.
+    pub fn parse<S: AsRef<str>>(exprs: &[S]) -> Result<Self, ZenmonError> {
+        let exprs = exprs
+            .iter()
+            .map(|s| {
+                let s = s.as_ref().trim();
+                zenoh::key_expr::OwnedKeyExpr::autocanonize(s.to_string()).map_err(|e| {
+                    ZenmonError::invalid_input(format!(
+                        "invalid exclude key expression '{}': {}",
+                        s, e
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { exprs })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.exprs.is_empty()
+    }
+
+    /// True if `key` intersects any exclude expression. A key that is not a
+    /// valid key expression is never excluded (it is recorded as-is).
+    pub fn excludes(&self, key: &str) -> bool {
+        if self.exprs.is_empty() {
+            return false;
+        }
+        match zenoh::key_expr::keyexpr::new(key) {
+            Ok(k) => self.exprs.iter().any(|e| e.intersects(k)),
+            Err(_) => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::MessagePayload;
+
+    #[test]
+    fn exclude_matches_by_intersection() {
+        let ex = CaptureExclude::parse(&["**/topic/sensor/pcd/**", "a/b"]).unwrap();
+        assert!(ex.excludes("dotori/ph-ecs/topic/sensor/pcd/rear"));
+        assert!(ex.excludes("a/b"));
+        assert!(!ex.excludes("dotori/ph-ecs/topic/sensor/og3d/fused"));
+        assert!(!ex.excludes("a/b/c"));
+    }
+
+    #[test]
+    fn exclude_empty_excludes_nothing() {
+        let ex = CaptureExclude::parse::<&str>(&[]).unwrap();
+        assert!(ex.is_empty());
+        assert!(!ex.excludes("anything"));
+    }
+
+    #[test]
+    fn exclude_rejects_invalid_expression() {
+        assert!(CaptureExclude::parse(&[""]).is_err());
+        assert!(CaptureExclude::parse(&["a/#/b"]).is_err());
+    }
 
     fn msg(key: &str, payload: Vec<u8>, attachment: Option<Vec<u8>>) -> ZenohMessage {
         let payload = MessagePayload::from_bytes(payload);
