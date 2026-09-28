@@ -72,6 +72,12 @@ pub fn run() {
         .manage(AppState::new(paths, app_config))
         .manage(update::UpdateState::default())
         .setup(move |app| {
+            // A tray app does not belong in the Dock or the Cmd-Tab switcher.
+            // Accessory keeps the menu-bar icon and still lets the settings
+            // window come forward when opened from the tray.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let handle = app.handle().clone();
             tray::build(&handle)?;
             if resume {
