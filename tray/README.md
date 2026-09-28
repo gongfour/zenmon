@@ -59,7 +59,7 @@ npm run tauri build                    # …and installers
 
 The binary starts hidden — it lives in the system tray:
 
-- **Left click** — start / stop capture
+- **Left click** — start / stop capture (a failed capture: retry). The tooltip names what the click will do
 - **Right click** — menu (capture toggle, profile, Settings…, Open Store Folder, Quit)
 - Closing the settings window hides it; only **Quit** exits (capture survives
   closing the window)
