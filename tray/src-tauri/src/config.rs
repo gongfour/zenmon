@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use zenmon_core::config::{resolve_config_with_env, ConfigEnvironment, ConfigOverrides};
+use zenmon_core::trace::Compression;
 use zenmon_core::{ZenmonConfig, ZenmonError};
 
 const SCHEMA_VERSION: u32 = 1;
@@ -51,6 +52,10 @@ pub struct Profile {
     #[serde(default)]
     pub exclude: Vec<String>,
     pub output_dir: PathBuf,
+    /// Segment encoding. Configs written before this field existed keep
+    /// writing plain NDJSON; new profiles are seeded with zstd.
+    #[serde(default)]
+    pub compression: Compression,
     pub rotate_size_bytes: u64,
     pub rotate_interval_secs: u64,
     pub max_total_size_bytes: u64,
@@ -91,6 +96,7 @@ impl Profile {
             key_expr: "**".to_string(),
             exclude: Vec::new(),
             output_dir: data_local_dir.join("captures").join(name),
+            compression: Compression::Zstd,
             rotate_size_bytes: 64 * 1024 * 1024,
             rotate_interval_secs: 3600,
             max_total_size_bytes: 1024 * 1024 * 1024,
