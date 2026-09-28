@@ -439,6 +439,12 @@ between them. The fix is to decouple collection from reading:
   store stays bounded: rotate at `--rotate-size` (64MB) / `--rotate-interval`
   (1h), prune oldest closed segments over `--max-total-size` (1GB) or older
   than `--max-age` (7d). The active segment is never pruned.
+  `--exclude <KEY_EXPR>` (repeatable) drops matching messages before they are
+  written — e.g. `--exclude '**/topic/sensor/pcd/**'` keeps bulky point clouds
+  out of an always-on store. Zenoh has no "all except" key expression, so the
+  subscription stays wide and exclusion is per message; the excluded count is
+  printed at the end (`"excluded"` in `--json`). The tray profile has the same
+  list (`exclude = [...]`, one per line in Settings).
 - **Reader** — `trace stats` / `trace read` are pure file readers: no Zenoh
   session, safe to call from any agent turn. `trace read` is bounded by
   `--limit` (default 100) and reports `{returned, matched, truncated, cursor}`
