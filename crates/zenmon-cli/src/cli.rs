@@ -258,6 +258,12 @@ pub enum Command {
         /// Key expression to subscribe and record
         key_expr: String,
 
+        /// Drop messages whose key intersects this expression before writing
+        /// (repeatable), e.g. `--exclude '**/topic/sensor/pcd/**'`. The count
+        /// of dropped messages is reported when the capture ends.
+        #[arg(long = "exclude", value_name = "KEY_EXPR")]
+        exclude: Vec<String>,
+
         /// Single-file output (NDJSON). Mutually exclusive with --dir.
         #[arg(long, short, required_unless_present = "dir", conflicts_with = "dir")]
         output: Option<PathBuf>,

@@ -9,6 +9,7 @@ export interface CaptureStatus {
   state: CaptureState;
   profile_name: string;
   messages_written: number;
+  messages_excluded: number;
   bytes_written: number;
   started_at_ms: number | null;
   last_message_at_ms: number | null;
@@ -21,6 +22,7 @@ export interface Profile {
   mode: string;
   namespace: string | null;
   key_expr: string;
+  exclude: string[];
   output_dir: string;
   rotate_size_bytes: number;
   rotate_interval_secs: number;
