@@ -47,8 +47,8 @@ pub struct CaptureStatus {
     /// Messages dropped by the profile's `exclude` list this session — shown
     /// so an exclusion is visible rather than a silent gap in the capture.
     pub messages_excluded: u64,
-    /// Approximate total bytes written this session (NDJSON line lengths
-    /// summed client-side; `SegmentWriter` doesn't expose its own counter).
+    /// Approximate total bytes recorded this session — uncompressed NDJSON
+    /// line lengths summed client-side, so with zstd the disk use is smaller.
     pub bytes_written: u64,
     /// Milliseconds since the Unix epoch, or `None` — JS-friendly, since
     /// `SystemTime` has no natural JSON representation.
@@ -172,10 +172,11 @@ async fn run_capture(
         }
     };
 
-    let mut writer = match SegmentWriter::open(
+    let mut writer = match SegmentWriter::open_with(
         profile.output_dir.clone(),
         profile.rotate_size_bytes,
         profile.rotate_interval(),
+        profile.compression,
     ) {
         Ok(writer) => writer,
         Err(err) => {
@@ -249,7 +250,11 @@ async fn run_capture(
         }
     }
 
-    let _ = writer.flush();
+    // Finish, not just flush: a zstd segment is only complete once its frame
+    // is closed.
+    if let Err(err) = writer.close() {
+        status_tx.send_modify(|s| s.last_error = Some(err.to_string()));
+    }
     let _ = enforce_retention(
         &profile.output_dir,
         Some(profile.max_total_size_bytes),

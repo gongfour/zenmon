@@ -445,6 +445,13 @@ between them. The fix is to decouple collection from reading:
   subscription stays wide and exclusion is per message; the excluded count is
   printed at the end (`"excluded"` in `--json`). The tray profile has the same
   list (`exclude = [...]`, one per line in Settings).
+  `--compress zstd` writes `.ndjson.zst` segments (level 3; ~3.4x smaller on
+  mixed robot traffic, ~17x without point clouds). `--rotate-size` and
+  `--max-total-size` then count compressed bytes. An open segment is flushed
+  every second, so readers see the active one and a crash loses at most ~1 s.
+  `trace` and `replay` detect compression from the file, so stores may mix
+  both kinds. The tray profile has the same switch (`compression = "zstd"`;
+  new profiles default to it, existing ones stay plain until changed).
 - **Reader** — `trace stats` / `trace read` are pure file readers: no Zenoh
   session, safe to call from any agent turn. `trace read` is bounded by
   `--limit` (default 100) and reports `{returned, matched, truncated, cursor}`

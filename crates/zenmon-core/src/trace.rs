@@ -18,6 +18,54 @@ use std::time::{Duration, SystemTime};
 
 const SEG_PREFIX: &str = "zenmon-trace-";
 const SEG_EXT: &str = ".ndjson";
+const SEG_EXT_ZSTD: &str = ".ndjson.zst";
+
+/// zstd level for captures. Measured on a dotori robot's full `**` traffic:
+/// level 3 gives 3.4x overall (17x without point clouds) at ~400 MB/s on one
+/// core — orders of magnitude above a capture's ~1 MB/s. Higher levels bought
+/// 10–20% more at a quarter of the speed or less.
+const ZSTD_LEVEL: i32 = 3;
+
+/// How often an open zstd segment is flushed to a decodable block boundary.
+/// A zstd frame is only fully readable once finished, so between flushes a
+/// crash (or a reader on the active segment) sees nothing of the unflushed
+/// tail. One second bounds that loss; at capture rates the per-block overhead
+/// is negligible.
+const ZSTD_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// On-disk encoding of capture files. Readers detect it from the file's magic
+/// bytes, not its name, so either kind reads the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Compression {
+    /// Plain NDJSON (`.ndjson`).
+    #[default]
+    None,
+    /// zstd-compressed NDJSON (`.ndjson.zst`).
+    Zstd,
+}
+
+impl Compression {
+    fn segment_ext(self) -> &'static str {
+        match self {
+            Compression::None => SEG_EXT,
+            Compression::Zstd => SEG_EXT_ZSTD,
+        }
+    }
+}
+
+impl std::str::FromStr for Compression {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(Compression::None),
+            "zstd" => Ok(Compression::Zstd),
+            other => Err(format!("unknown compression '{}' (expected none or zstd)", other)),
+        }
+    }
+}
 
 /// Compact, colon-free RFC3339-seconds stamp for filenames: `YYYYMMDDTHHMMSSZ`.
 pub fn format_segment_stamp(t: SystemTime) -> String {
@@ -47,19 +95,30 @@ pub fn parse_segment_stamp(s: &str) -> Option<SystemTime> {
 
 /// `zenmon-trace-<stamp>-<seq:05>.ndjson`.
 pub fn segment_file_name(first: SystemTime, seq: u32) -> String {
+    segment_file_name_with(first, seq, Compression::None)
+}
+
+/// [`segment_file_name`] with the extension for `compression`
+/// (`.ndjson` or `.ndjson.zst`).
+pub fn segment_file_name_with(first: SystemTime, seq: u32, compression: Compression) -> String {
     format!(
         "{}{}-{:05}{}",
         SEG_PREFIX,
         format_segment_stamp(first),
         seq,
-        SEG_EXT
+        compression.segment_ext()
     )
 }
 
 /// Parse a segment filename into `(first_timestamp, seq)`. Non-segment files
 /// return `None` (so a directory may hold unrelated files harmlessly).
 pub fn parse_segment_file_name(name: &str) -> Option<(SystemTime, u32)> {
-    let core = name.strip_prefix(SEG_PREFIX)?.strip_suffix(SEG_EXT)?;
+    let rest = name.strip_prefix(SEG_PREFIX)?;
+    // Both kinds are segments: retention must count and prune compressed
+    // ones, and readers must see them, or they would pile up unnoticed.
+    let core = rest
+        .strip_suffix(SEG_EXT_ZSTD)
+        .or_else(|| rest.strip_suffix(SEG_EXT))?;
     let (stamp, seq) = core.rsplit_once('-')?;
     Some((parse_segment_stamp(stamp)?, seq.parse().ok()?))
 }
@@ -104,14 +163,143 @@ pub fn segment_upper_bound(segs: &[Segment], i: usize) -> Option<SystemTime> {
     segs.get(i + 1).map(|s| s.first)
 }
 
+/// `Write` adapter counting bytes that reach the file — for a zstd segment,
+/// the compressed size that rotation and retention should see.
+struct CountingWriter<W> {
+    inner: W,
+    count: u64,
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.count += n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+enum FileSink {
+    Plain(BufWriter<File>),
+    Zstd(zstd::stream::write::Encoder<'static, CountingWriter<BufWriter<File>>>),
+}
+
+/// One capture file being written, plain or zstd. Used by [`SegmentWriter`]
+/// and by `capture --output`. Call [`CaptureFileWriter::finish`] when done: a
+/// zstd frame is only complete once finished (dropping finishes it too, but
+/// swallows any error).
+pub struct CaptureFileWriter {
+    sink: Option<FileSink>,
+    /// Uncompressed bytes written (line lengths + newlines).
+    raw_bytes: u64,
+    last_flush: SystemTime,
+}
+
+fn io_err(what: &str, path: Option<&Path>, e: std::io::Error) -> ZenmonError {
+    match path {
+        Some(p) => ZenmonError::internal(format!("{} {}: {}", what, p.display(), e)),
+        None => ZenmonError::internal(format!("{}: {}", what, e)),
+    }
+}
+
+impl CaptureFileWriter {
+    pub fn create(path: &Path, compression: Compression) -> Result<Self, ZenmonError> {
+        let file = File::create(path).map_err(|e| io_err("cannot create", Some(path), e))?;
+        let file = BufWriter::new(file);
+        let sink = match compression {
+            Compression::None => FileSink::Plain(file),
+            Compression::Zstd => {
+                let counting = CountingWriter {
+                    inner: file,
+                    count: 0,
+                };
+                FileSink::Zstd(
+                    zstd::stream::write::Encoder::new(counting, ZSTD_LEVEL)
+                        .map_err(|e| io_err("cannot start zstd in", Some(path), e))?,
+                )
+            }
+        };
+        Ok(Self {
+            sink: Some(sink),
+            raw_bytes: 0,
+            last_flush: SystemTime::now(),
+        })
+    }
+
+    /// Append one line (a newline is added). A zstd file is flushed to a
+    /// block boundary at most every [`ZSTD_FLUSH_INTERVAL`] (by `now`).
+    pub fn write_line(&mut self, line: &str, now: SystemTime) -> Result<(), ZenmonError> {
+        let sink = self.sink.as_mut().expect("write after finish");
+        let res = match sink {
+            FileSink::Plain(w) => writeln!(w, "{}", line),
+            FileSink::Zstd(w) => writeln!(w, "{}", line),
+        };
+        res.map_err(|e| io_err("write failed", None, e))?;
+        self.raw_bytes += line.len() as u64 + 1;
+        if let FileSink::Zstd(w) = sink {
+            let due = now
+                .duration_since(self.last_flush)
+                .map(|d| d >= ZSTD_FLUSH_INTERVAL)
+                .unwrap_or(true);
+            if due {
+                w.flush().map_err(|e| io_err("flush failed", None, e))?;
+                self.last_flush = now;
+            }
+        }
+        Ok(())
+    }
+
+    /// Bytes on disk so far: the raw size for plain files, the compressed
+    /// size (up to the last emitted block) for zstd.
+    pub fn file_bytes(&self) -> u64 {
+        match &self.sink {
+            Some(FileSink::Plain(_)) | None => self.raw_bytes,
+            Some(FileSink::Zstd(w)) => w.get_ref().count,
+        }
+    }
+
+    /// Uncompressed bytes written.
+    pub fn raw_bytes(&self) -> u64 {
+        self.raw_bytes
+    }
+
+    /// Make everything written so far readable (a block boundary for zstd).
+    pub fn flush(&mut self) -> Result<(), ZenmonError> {
+        let res = match self.sink.as_mut() {
+            Some(FileSink::Plain(w)) => w.flush(),
+            Some(FileSink::Zstd(w)) => w.flush(),
+            None => Ok(()),
+        };
+        res.map_err(|e| io_err("flush failed", None, e))
+    }
+
+    /// Complete the file (ends the zstd frame) and flush it. Idempotent.
+    pub fn finish(&mut self) -> Result<(), ZenmonError> {
+        let res = match self.sink.take() {
+            Some(FileSink::Plain(mut w)) => w.flush(),
+            Some(FileSink::Zstd(w)) => w.finish().and_then(|mut c| c.inner.flush()),
+            None => Ok(()),
+        };
+        res.map_err(|e| io_err("finish failed", None, e))
+    }
+}
+
+impl Drop for CaptureFileWriter {
+    fn drop(&mut self) {
+        let _ = self.finish();
+    }
+}
+
 /// Appends NDJSON lines into rotating segment files under a directory.
 pub struct SegmentWriter {
     dir: PathBuf,
     rotate_size: u64,
     rotate_interval: Duration,
-    writer: Option<BufWriter<File>>,
+    compression: Compression,
+    writer: Option<CaptureFileWriter>,
     seg_first: SystemTime,
-    seg_bytes: u64,
     next_seq: u32,
 }
 
@@ -120,6 +308,18 @@ impl SegmentWriter {
         dir: PathBuf,
         rotate_size: u64,
         rotate_interval: Duration,
+    ) -> Result<Self, ZenmonError> {
+        Self::open_with(dir, rotate_size, rotate_interval, Compression::None)
+    }
+
+    /// [`SegmentWriter::open`] writing `compression` segments. `rotate_size`
+    /// is compared against bytes on disk, so for zstd it bounds the
+    /// compressed segment size — the same unit retention counts in.
+    pub fn open_with(
+        dir: PathBuf,
+        rotate_size: u64,
+        rotate_interval: Duration,
+        compression: Compression,
     ) -> Result<Self, ZenmonError> {
         std::fs::create_dir_all(&dir).map_err(|e| {
             ZenmonError::invalid_input(format!("cannot create {}: {}", dir.display(), e))
@@ -135,18 +335,18 @@ impl SegmentWriter {
             dir,
             rotate_size,
             rotate_interval,
+            compression,
             writer: None,
             seg_first: SystemTime::UNIX_EPOCH,
-            seg_bytes: 0,
             next_seq,
         })
     }
 
     fn should_rotate(&self, now: SystemTime) -> bool {
-        if self.writer.is_none() {
+        let Some(w) = self.writer.as_ref() else {
             return true;
-        }
-        if self.seg_bytes >= self.rotate_size {
+        };
+        if w.file_bytes() >= self.rotate_size {
             return true;
         }
         now.duration_since(self.seg_first)
@@ -156,18 +356,13 @@ impl SegmentWriter {
 
     fn rotate(&mut self, now: SystemTime) -> Result<(), ZenmonError> {
         if let Some(mut w) = self.writer.take() {
-            w.flush()
-                .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+            w.finish()?;
         }
-        let name = segment_file_name(now, self.next_seq);
+        let name = segment_file_name_with(now, self.next_seq, self.compression);
         self.next_seq += 1;
         let path = self.dir.join(name);
-        let file = File::create(&path).map_err(|e| {
-            ZenmonError::internal(format!("cannot create {}: {}", path.display(), e))
-        })?;
-        self.writer = Some(BufWriter::new(file));
+        self.writer = Some(CaptureFileWriter::create(&path, self.compression)?);
         self.seg_first = now;
-        self.seg_bytes = 0;
         Ok(())
     }
 
@@ -178,18 +373,103 @@ impl SegmentWriter {
             self.rotate(now)?;
         }
         let w = self.writer.as_mut().expect("writer present after rotate");
-        writeln!(w, "{}", line)
-            .map_err(|e| ZenmonError::internal(format!("write failed: {}", e)))?;
-        self.seg_bytes += line.len() as u64 + 1;
-        Ok(())
+        w.write_line(line, now)
     }
 
     pub fn flush(&mut self) -> Result<(), ZenmonError> {
-        if let Some(w) = self.writer.as_mut() {
-            w.flush()
-                .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+        match self.writer.as_mut() {
+            Some(w) => w.flush(),
+            None => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Finish the active segment (ends its zstd frame). Call when the
+    /// capture stops; a later `write_line` starts a new segment.
+    pub fn close(&mut self) -> Result<(), ZenmonError> {
+        match self.writer.take() {
+            Some(mut w) => w.finish(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Lines of a capture file, plain or zstd (detected by magic bytes).
+///
+/// A zstd file whose data ends mid-frame — the active segment, or one cut off
+/// by a crash — ends the iteration at the last complete line instead of
+/// erroring: everything up to the last flushed block is intact, and the lost
+/// tail is at most [`ZSTD_FLUSH_INTERVAL`] of records. Corrupt data is still
+/// an error.
+pub struct CaptureLines {
+    reader: Box<dyn BufRead>,
+    compressed: bool,
+    done: bool,
+}
+
+/// Open a capture file for line reading. See [`CaptureLines`].
+pub fn open_capture_lines(path: &Path) -> Result<CaptureLines, ZenmonError> {
+    use std::io::Read as _;
+    let mut file = File::open(path).map_err(|e| io_err("cannot open", Some(path), e))?;
+    let mut magic = [0u8; 4];
+    let n = file
+        .read(&mut magic)
+        .map_err(|e| io_err("cannot read", Some(path), e))?;
+    let compressed = n == 4 && magic == ZSTD_MAGIC;
+    let file = std::io::Cursor::new(magic[..n].to_vec()).chain(file);
+    let reader: Box<dyn BufRead> = if compressed {
+        Box::new(BufReader::new(
+            zstd::stream::read::Decoder::new(file)
+                .map_err(|e| io_err("cannot start zstd for", Some(path), e))?,
+        ))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+    Ok(CaptureLines {
+        reader,
+        compressed,
+        done: false,
+    })
+}
+
+impl CaptureLines {
+    /// Whether the file is zstd-compressed.
+    pub fn is_compressed(&self) -> bool {
+        self.compressed
+    }
+}
+
+impl Iterator for CaptureLines {
+    type Item = Result<String, ZenmonError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let mut buf = String::new();
+        match self.reader.read_line(&mut buf) {
+            Ok(0) => {
+                self.done = true;
+                None
+            }
+            Ok(_) => {
+                if buf.ends_with('\n') {
+                    buf.pop();
+                    if buf.ends_with('\r') {
+                        buf.pop();
+                    }
+                }
+                Some(Ok(buf))
+            }
+            // An unfinished zstd frame: stop at the last complete line.
+            Err(e) if self.compressed && e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                self.done = true;
+                None
+            }
+            Err(e) => {
+                self.done = true;
+                Some(Err(io_err("read failed", None, e)))
+            }
+        }
     }
 }
 
@@ -285,13 +565,7 @@ pub fn load_segment(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let file = std::fs::File::open(path)
-        .map_err(|e| ZenmonError::internal(format!("cannot open {}: {}", path.display(), e)))?;
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = reader
-        .lines()
-        .collect::<std::io::Result<_>>()
-        .map_err(|e| ZenmonError::internal(format!("read failed: {}", e)))?;
+    let lines: Vec<String> = open_capture_lines(path)?.collect::<Result<_, _>>()?;
 
     let mut out = Vec::with_capacity(lines.len());
     let last = lines.len().saturating_sub(1);
@@ -872,6 +1146,108 @@ mod tests {
         let segs = discover_segments(&dir).unwrap();
         assert_eq!(segs[0].first, t(2000));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn zstd_segment_roundtrips_and_is_discovered() {
+        let dir = tempdir_unique("zstdrt");
+        let mut w = SegmentWriter::open_with(
+            dir.clone(),
+            1 << 30,
+            Duration::from_secs(3600),
+            Compression::Zstd,
+        )
+        .unwrap();
+        let a = rec_line("a/b", 1000);
+        let b = rec_line("a/c", 1001);
+        w.write_line(&a, t(1000)).unwrap();
+        w.write_line(&b, t(1001)).unwrap();
+        w.close().unwrap();
+        let segs = discover_segments(&dir).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert!(segs[0].path.to_string_lossy().ends_with(".ndjson.zst"));
+        let recs = load_segment(&segs[0].path, false).unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[1].record.key_expr, "a/c");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn zstd_unfinished_segment_reads_up_to_last_flush() {
+        // A crash (or the live active segment) leaves the frame unfinished;
+        // everything flushed must still read, without an error.
+        let dir = tempdir_unique("zstdopen");
+        let mut w = SegmentWriter::open_with(
+            dir.clone(),
+            1 << 30,
+            Duration::from_secs(3600),
+            Compression::Zstd,
+        )
+        .unwrap();
+        w.write_line(&rec_line("a/b", 1000), t(1000)).unwrap();
+        w.write_line(&rec_line("a/c", 1002), t(1002)).unwrap();
+        w.flush().unwrap();
+        std::mem::forget(w); // no finish: simulates a crash mid-segment
+        let segs = discover_segments(&dir).unwrap();
+        let recs = load_segment(&segs[0].path, false).unwrap();
+        assert_eq!(recs.len(), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn zstd_corrupt_data_is_an_error() {
+        let dir = tempdir_unique("zstdbad");
+        let path = dir.join(segment_file_name_with(t(1000), 0, Compression::Zstd));
+        let mut bytes = ZSTD_MAGIC.to_vec();
+        bytes.extend_from_slice(&[0xFF; 64]);
+        std::fs::write(&path, bytes).unwrap();
+        assert!(load_segment(&path, true).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn zstd_rotation_counts_compressed_bytes() {
+        let dir = tempdir_unique("zstdrot");
+        let mut w = SegmentWriter::open_with(
+            dir.clone(),
+            4096,
+            Duration::from_secs(3600),
+            Compression::Zstd,
+        )
+        .unwrap();
+        let line = rec_line("a/b", 1000); // compresses to almost nothing
+        for i in 0..200 {
+            w.write_line(&line, t(1000 + i)).unwrap(); // flushes every write
+        }
+        w.close().unwrap();
+        // ~40 KB raw would be 10+ plain segments at 4 KB.
+        assert_eq!(count_segments(&dir), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn retention_counts_and_prunes_mixed_segments() {
+        let dir = tempdir_unique("retmixed");
+        let zpath = dir.join(segment_file_name_with(t(1000), 0, Compression::Zstd));
+        let mut zw = CaptureFileWriter::create(&zpath, Compression::Zstd).unwrap();
+        zw.write_line(&"x".repeat(100), t(1000)).unwrap();
+        zw.finish().unwrap();
+        write_segment(&dir, 2000, 1, &["0123456789"]);
+        write_segment(&dir, 3000, 2, &["0123456789"]);
+        assert_eq!(count_segments(&dir), 3);
+        let deleted = enforce_retention(&dir, Some(25), None, t(4000)).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(!zpath.exists()); // the compressed one was oldest
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn compression_parses_and_names_segments() {
+        assert_eq!("zstd".parse::<Compression>().unwrap(), Compression::Zstd);
+        assert_eq!("None".parse::<Compression>().unwrap(), Compression::None);
+        assert!("gzip".parse::<Compression>().is_err());
+        let name = segment_file_name_with(t(1000), 3, Compression::Zstd);
+        assert_eq!(parse_segment_file_name(&name), Some((t(1000), 3)));
     }
 
     #[test]

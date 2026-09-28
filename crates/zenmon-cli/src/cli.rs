@@ -272,6 +272,11 @@ pub enum Command {
         #[arg(long, required_unless_present = "output")]
         dir: Option<PathBuf>,
 
+        /// On-disk compression: none or zstd. zstd segments are named
+        /// `.ndjson.zst`; `trace` and `replay` read either kind.
+        #[arg(long, default_value = "none")]
+        compress: zenmon_core::trace::Compression,
+
         /// Rotate the active segment once it reaches this size (dir mode)
         #[arg(long, default_value = "64MB", value_parser = crate::duration::parse_byte_size_arg)]
         rotate_size: u64,

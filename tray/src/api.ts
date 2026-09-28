@@ -24,6 +24,7 @@ export interface Profile {
   key_expr: string;
   exclude: string[];
   output_dir: string;
+  compression: "none" | "zstd";
   rotate_size_bytes: number;
   rotate_interval_secs: number;
   max_total_size_bytes: number;

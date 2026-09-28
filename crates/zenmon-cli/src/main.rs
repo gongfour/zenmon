@@ -1100,6 +1100,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             exclude,
             output,
             dir,
+            compress,
             rotate_size,
             rotate_interval,
             max_total_size,
@@ -1108,7 +1109,6 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             duration,
         } => {
             warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
-            use std::io::Write;
             use zenmon_core::capture::{CaptureExclude, CaptureRecord};
 
             // Validate before connecting: a bad exclude must not start a
@@ -1122,7 +1122,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // Two sinks: one file (pairs with replay) or a rotating store
             // (pairs with trace).
             enum Sink {
-                File(std::io::BufWriter<std::fs::File>),
+                File(zenmon_core::trace::CaptureFileWriter),
                 Dir {
                     writer: zenmon_core::trace::SegmentWriter,
                     dir: std::path::PathBuf,
@@ -1131,10 +1131,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 },
             }
             let mut sink = if let Some(dir) = dir {
-                let writer = zenmon_core::trace::SegmentWriter::open(
+                let writer = zenmon_core::trace::SegmentWriter::open_with(
                     dir.clone(),
                     rotate_size,
                     rotate_interval,
+                    compress,
                 )?;
                 if !cli.json {
                     eprintln!(
@@ -1151,9 +1152,14 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             } else {
                 let out = output.clone().expect("clap guarantees output or dir");
-                let file = std::fs::File::create(&out).map_err(|e| {
-                    ZenmonError::invalid_input(format!("cannot create {}: {}", out.display(), e))
-                })?;
+                let file = zenmon_core::trace::CaptureFileWriter::create(&out, compress)
+                    .map_err(|e| {
+                        ZenmonError::invalid_input(format!(
+                            "cannot create {}: {}",
+                            out.display(),
+                            e
+                        ))
+                    })?;
                 if !cli.json {
                     eprintln!(
                         "Capturing '{}' to {} ... (Ctrl+C to stop)",
@@ -1161,7 +1167,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         out.display()
                     );
                 }
-                Sink::File(std::io::BufWriter::new(file))
+                Sink::File(file)
             };
 
             if !cli.json && !exclude.is_empty() {
@@ -1195,11 +1201,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                             let rec = CaptureRecord::from_message(&msg, start.elapsed(), now);
                             let line = serde_json::to_string(&rec)?;
                             match &mut sink {
-                                Sink::File(w) => {
-                                    writeln!(w, "{}", line).map_err(|e| {
-                                        ZenmonError::internal(format!("write failed: {}", e))
-                                    })?;
-                                }
+                                Sink::File(w) => w.write_line(&line, now)?,
                                 Sink::Dir { writer, dir, max_total_size, max_age } => {
                                     writer.write_line(&line, now)?;
                                     // Cheap: early-returns when nothing to prune.
@@ -1226,12 +1228,11 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // Flush the last records on any exit path (count/duration/Ctrl+C).
             let output_label = match &mut sink {
                 Sink::File(w) => {
-                    w.flush()
-                        .map_err(|e| ZenmonError::internal(format!("flush failed: {}", e)))?;
+                    w.finish()?;
                     output.map(|p| p.display().to_string()).unwrap_or_default()
                 }
                 Sink::Dir { writer, dir, .. } => {
-                    writer.flush()?;
+                    writer.close()?;
                     dir.display().to_string()
                 }
             };
@@ -1265,14 +1266,13 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             key_prefix,
             dry_run,
         } => {
-            use std::io::BufRead;
             use tokio::time::Instant;
             use zenmon_core::capture::CaptureRecord;
 
-            let file = std::fs::File::open(&input).map_err(|e| {
+            // Plain or zstd, detected from the file itself.
+            let reader = zenmon_core::trace::open_capture_lines(&input).map_err(|e| {
                 ZenmonError::invalid_input(format!("cannot open {}: {}", input.display(), e))
             })?;
-            let reader = std::io::BufReader::new(file);
 
             let session = if dry_run {
                 None
@@ -1284,9 +1284,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let mut published: u64 = 0;
             let mut seq: u64 = 0; // for fixed-rate scheduling
 
-            for (i, line) in reader.lines().enumerate() {
-                let line =
-                    line.map_err(|e| ZenmonError::internal(format!("read failed: {}", e)))?;
+            for (i, line) in reader.enumerate() {
+                let line = line?;
                 if line.trim().is_empty() {
                     continue;
                 }
