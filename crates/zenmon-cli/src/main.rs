@@ -9,7 +9,6 @@ mod watch;
 use clap::Parser;
 use cli::{Cli, Command};
 use cmd::Ctx;
-use common::{internal_err, load_contract_opt};
 use zenmon_core::config::{resolve_config, ConfigOverrides, ResolvedConfig};
 use zenmon_core::error::ZenmonError;
 
@@ -183,10 +182,10 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // `--contract` / ZENMON_CONTRACT is global, so the TUI picks it up
             // the same way `sub` and `discover` do; without one the detail pane
             // simply shows no contract badge.
-            let contract = load_contract_opt(&ctx.contract)?;
+            let contract = common::load_contract_opt(&ctx.contract)?;
             zenmon_tui::run(config, refresh, contract, allow_publish)
                 .await
-                .map_err(internal_err)?;
+                .map_err(common::internal_err)?;
         }
 
         Command::Contract { command } => cmd::contract::run(&ctx, command)?,
