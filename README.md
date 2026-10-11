@@ -832,7 +832,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 ### Phase 2 — Message Metadata
 4. [x] Encoding display — show payload encoding (`application/json`, `text/plain`, etc.) in sub/TUI
 5. [ ] QoS display — show Priority, Reliability, Congestion control per message (`--qos` flag)
-6. [ ] HLC timestamp parsing — human-readable time + source node ID instead of raw HLC
+6. [x] HLC timestamp parsing — `sub --timestamp` and the TUI show UTC time + the stamping node
 
 ### Phase 3 — Liveliness & Events
 7. [x] Liveliness subscription — live join/leave in the TUI Network space, dead tokens first

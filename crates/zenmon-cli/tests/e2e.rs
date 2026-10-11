@@ -403,3 +403,48 @@ fn pub_reports_whether_a_subscriber_matched() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("no subscriber matches"), "{stderr}");
 }
+
+/// `--timestamp` shows wall-clock time and the stamping node, not raw HLC.
+#[test]
+fn sub_timestamp_is_readable() {
+    let hub = Hub::open();
+    let p = prefix("ts");
+    let session = hub.session.clone();
+    let key = format!("{p}/a");
+    let k = key.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let feeder = thread::spawn(move || {
+        while !flag.load(Ordering::Relaxed) {
+            session
+                .put(&k, "1")
+                .timestamp(session.new_timestamp())
+                .wait()
+                .unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    let sel = format!("{p}/**");
+    let out = run(hub.zenmon(&[
+        "sub",
+        &sel,
+        "--timestamp",
+        "--count",
+        "1",
+        "--duration",
+        "20s",
+    ]));
+    stop.store(true, Ordering::Relaxed);
+    feeder.join().unwrap();
+
+    let line = String::from_utf8(out.stdout).unwrap();
+    let zid = hub.session.zid().to_string();
+    // e.g. `[2026-10-11 13:22:15.123456 @5f3a…] zenmon-e2e/…/a | 1`
+    assert!(line.starts_with("[20"), "{line}");
+    assert!(
+        line.contains(&format!("@{}]", &zid[..zid.len().min(16)])),
+        "{line} / {zid}"
+    );
+    assert!(line.trim_end().ends_with(&format!("{key} | 1")), "{line}");
+}

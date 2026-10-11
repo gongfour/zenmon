@@ -215,7 +215,15 @@ fn render_sub_message(
         .map(|a| format!(" [att: {}]", a))
         .unwrap_or_default();
     if timestamp {
-        let ts = msg.timestamp.as_deref().unwrap_or("--");
+        // Wall-clock time and the stamping node (first 16 hex digits, as the
+        // TUI shortens IDs), not the raw `<NTP64>/<id>`.
+        let ts = match msg.timestamp.as_deref() {
+            None => "--".to_string(),
+            Some(raw) => match zenmon_core::time::parse_hlc(raw) {
+                Some(hlc) => format!("{} @{}", hlc.time, &hlc.source[..hlc.source.len().min(16)]),
+                None => raw.to_string(),
+            },
+        };
         let _ = writeln!(
             buf,
             "[{}] {} | {}{}",

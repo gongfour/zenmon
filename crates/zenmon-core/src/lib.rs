@@ -120,6 +120,8 @@ pub mod scout;
 /// Opening a Zenoh session from a `ZenmonConfig`.
 pub mod session;
 pub mod subscriber;
+/// Readable Zenoh HLC timestamps.
+pub mod time;
 /// Data types crossing the API boundary: messages, payloads, nodes, tokens.
 pub mod types;
 
