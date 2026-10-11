@@ -439,6 +439,13 @@ pub struct LivelinessEventRecord {
     pub node_name: String,
 }
 
+/// One transport opening or closing, as the Network detail lists it.
+#[derive(Debug, Clone)]
+pub struct TransportEventRecord {
+    pub timestamp: Instant,
+    pub change: zenmon_core::types::TransportChange,
+}
+
 /// A publish the editor sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sent {
@@ -619,6 +626,11 @@ pub struct App {
     liveliness_index: HashMap<String, usize>,
     pub liveliness_selected: usize,
     pub liveliness_events: VecDeque<LivelinessEventRecord>,
+    /// This session's transports opening and closing, newest first.
+    pub transport_events: VecDeque<TransportEventRecord>,
+    /// Peers whose transport closed this session — a later open is then a
+    /// reconnect worth saying, not the initial connect.
+    transports_lost: HashSet<String>,
     pub liveliness_log_scroll: u16,
 
     pub help_scroll: u16,
@@ -733,6 +745,8 @@ impl App {
             liveliness_index: HashMap::new(),
             liveliness_selected: 0,
             liveliness_events: VecDeque::with_capacity(LIVELINESS_EVENT_CAP),
+            transport_events: VecDeque::new(),
+            transports_lost: HashSet::new(),
             liveliness_log_scroll: 0,
             help_scroll: 0,
             dash_node_rect: None,
@@ -755,8 +769,11 @@ impl App {
         self.toast_is_error = false;
     }
 
-    /// Forget every liveliness token and event (a new session replays them).
+    /// Forget every liveliness token and event (a new session replays them),
+    /// and the old session's transport history.
     pub fn clear_liveliness(&mut self) {
+        self.transport_events.clear();
+        self.transports_lost.clear();
         self.liveliness_tokens.clear();
         self.liveliness_index.clear();
         self.liveliness_events.clear();
@@ -788,6 +805,25 @@ impl App {
             None => None,
         };
         i.map(|i| &mut self.liveliness_tokens[i])
+    }
+
+    /// Record a transport change. A close is announced; an open only when it
+    /// follows a close of the same peer — the initial connect is not news.
+    pub(crate) fn handle_transport(&mut self, change: zenmon_core::types::TransportChange) {
+        let short = &change.zid[..change.zid.len().min(16)];
+        if change.opened {
+            if self.transports_lost.remove(&change.zid) {
+                self.set_toast(format!("Reconnected to {} {short}", change.whatami));
+            }
+        } else {
+            self.transports_lost.insert(change.zid.clone());
+            self.set_error_toast(format!("Lost connection to {} {short}", change.whatami));
+        }
+        self.transport_events.push_front(TransportEventRecord {
+            timestamp: Instant::now(),
+            change,
+        });
+        self.transport_events.truncate(LIVELINESS_EVENT_CAP);
     }
 
     pub(crate) fn push_liveliness_token(&mut self, token: LivelinessToken) {

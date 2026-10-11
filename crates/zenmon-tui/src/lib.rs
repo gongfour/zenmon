@@ -225,6 +225,27 @@ fn spawn_admin_polling_task(
     });
 }
 
+fn spawn_transport_listener(session: &Session, tx: mpsc::UnboundedSender<AppEvent>) {
+    let (change_tx, mut change_rx) = mpsc::unbounded_channel();
+    let session = session.clone();
+    let error_tx = tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = zenmon_core::discover::subscribe_transport_events(&session, change_tx).await
+        {
+            let _ = error_tx.send(AppEvent::Error(format!(
+                "Transport events unavailable: {e}"
+            )));
+        }
+    });
+    tokio::spawn(async move {
+        while let Some(change) = change_rx.recv().await {
+            if tx.send(AppEvent::Transport(change)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
 fn spawn_liveliness_subscriber(session: &Session, tx: mpsc::UnboundedSender<AppEvent>) {
     let (liveliness_tx, mut liveliness_rx) =
         mpsc::unbounded_channel::<zenmon_core::types::LivelinessEvent>();
@@ -442,6 +463,7 @@ async fn run_loop(
                             Err(e) => app.set_error_toast(format!("Traffic subscription failed: {e}")),
                         }
                         spawn_liveliness_subscriber(&s, tx.clone());
+                        spawn_transport_listener(&s, tx.clone());
                         // Run diagnostics on every (re)connect so the header
                         // health dot reflects a fresh doctor report.
                         app.pending_doctor_request = true;

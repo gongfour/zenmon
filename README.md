@@ -837,7 +837,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 
 ### Phase 3 — Liveliness & Events
 7. [x] Liveliness subscription — live join/leave in the TUI Network space, dead tokens first
-8. [ ] Transport events — connect/disconnect notifications in TUI
+8. [x] Transport events — the TUI announces a lost/regained connection and lists it in the session detail
 9. [x] Pub matching — `pub` (and the TUI editor) say when no subscriber matches the key
 
 ### Phase 4 — Debugging Utilities
