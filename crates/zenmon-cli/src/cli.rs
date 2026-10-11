@@ -268,6 +268,18 @@ pub struct QueryArgs {
     /// is visible; use `none` to receive every reply.
     #[arg(long, value_enum, default_value_t = ConsolidationArg::Auto)]
     pub consolidation: ConsolidationArg,
+
+    /// Ask storages for history from this far back: a relative age (10m,
+    /// 1h) or an RFC3339 time. Sent as Zenoh's `_time` selector parameter;
+    /// storages without history still answer with their latest value. With
+    /// a time range, `auto` consolidation becomes `none` so every sample in
+    /// the window comes back.
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// End of the history window (default: now)
+    #[arg(long)]
+    pub until: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]

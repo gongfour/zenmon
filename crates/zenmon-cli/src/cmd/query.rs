@@ -14,13 +14,24 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: QueryArgs) -> Result<(),
         timeout,
         limit,
         consolidation,
+        since,
+        until,
     } = args;
     warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
     let limit = limit.map(|n| n as usize);
+    let history = since.is_some() || until.is_some();
+    let selector =
+        zenmon_core::query::with_time_range(&key_expr, since.as_deref(), until.as_deref())?;
+    // Consolidation keeps one value per key — exactly what a history query
+    // must not do.
+    let consolidation = match consolidation {
+        crate::cli::ConsolidationArg::Auto if history => crate::cli::ConsolidationArg::None,
+        other => other,
+    };
     let session = zenmon_core::session::open_session(&config).await?;
     let outcome = zenmon_core::query::get(
         &session,
-        &key_expr,
+        &selector,
         payload.as_deref(),
         timeout,
         limit,
@@ -43,7 +54,12 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: QueryArgs) -> Result<(),
                 .as_ref()
                 .map(|a| format!(" [att: {}]", a))
                 .unwrap_or_default();
-            println!("{} | {}{}", msg.key_expr, msg.payload, att_str);
+            // History is a time series: say when each value is from.
+            let when = match (history, msg.timestamp.as_deref()) {
+                (true, Some(raw)) => format!("[{}] ", zenmon_core::time::readable_hlc(raw)),
+                _ => String::new(),
+            };
+            println!("{when}{} | {}{}", msg.key_expr, msg.payload, att_str);
         }
         for err in &outcome.errors {
             println!("error reply: {}", err.message);

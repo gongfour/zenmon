@@ -23,6 +23,44 @@ pub struct QueryOutcome {
     pub errors: Vec<QueryReplyError>,
 }
 
+/// One bound of a `_time` range: a relative age (`10m`, `1h`, `90s`) becomes
+/// `now(-<secs>s)`, resolved where the storage evaluates it; an RFC3339
+/// instant passes through.
+fn time_expr(bound: &str) -> Result<String, ZenmonError> {
+    let t = bound.trim();
+    if let Ok(age) = humantime::parse_duration(t) {
+        return Ok(format!("now(-{}s)", age.as_secs_f64()));
+    }
+    humantime::parse_rfc3339_weak(t).map_err(|e| {
+        ZenmonError::invalid_input(format!(
+            "invalid time '{bound}': {e} (try 10m or an RFC3339 timestamp)"
+        ))
+    })?;
+    Ok(t.to_string())
+}
+
+/// `key_expr` with a Zenoh `_time` selector parameter for `[since..until]`,
+/// which storages with history answer with every value in the window
+/// instead of the latest. Either bound may be open. Existing parameters are
+/// kept (Zenoh separates them with `;`).
+pub fn with_time_range(
+    key_expr: &str,
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Result<String, ZenmonError> {
+    if since.is_none() && until.is_none() {
+        return Ok(key_expr.to_string());
+    }
+    let start = since.map(time_expr).transpose()?.unwrap_or_default();
+    let end = until.map(time_expr).transpose()?.unwrap_or_default();
+    let param = format!("_time=[{start}..{end}]");
+    Ok(match key_expr.split_once('?') {
+        Some((_, params)) if !params.is_empty() => format!("{key_expr};{param}"),
+        Some((key, _)) => format!("{key}?{param}"),
+        None => format!("{key_expr}?{param}"),
+    })
+}
+
 /// Send a Zenoh GET query and collect replies.
 ///
 /// When `limit` is `Some(n)`, collection of successful replies stops after `n`
@@ -100,4 +138,30 @@ pub async fn get(
         replies: results,
         errors,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_time_range_becomes_a_selector_parameter() {
+        assert_eq!(with_time_range("a/**", None, None).unwrap(), "a/**");
+        assert_eq!(
+            with_time_range("a/**", Some("10m"), None).unwrap(),
+            "a/**?_time=[now(-600s)..]"
+        );
+        assert_eq!(
+            with_time_range("a/b?x=1", Some("2026-10-11T10:00:00Z"), Some("90s")).unwrap(),
+            "a/b?x=1;_time=[2026-10-11T10:00:00Z..now(-90s)]"
+        );
+        assert!(with_time_range("a", Some("yesterday"), None).is_err());
+    }
+
+    #[test]
+    fn zenoh_parses_what_we_build() {
+        let s = with_time_range("a/**", Some("1h"), Some("2026-10-11T10:00:00Z")).unwrap();
+        let range = s.split_once("_time=").unwrap().1;
+        assert!(range.parse::<zenoh::query::TimeRange>().is_ok(), "{range}");
+    }
 }

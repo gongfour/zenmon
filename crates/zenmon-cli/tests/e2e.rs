@@ -709,3 +709,44 @@ fn admin_decls_names_who_subscribes_to_a_key() {
     ]));
     assert!(String::from_utf8_lossy(&out.stdout).contains("No router reports"));
 }
+
+/// `query --since` asks storages for history through Zenoh's `_time`
+/// parameter, and every sample in the window comes back — not one per key.
+#[test]
+fn query_since_asks_for_history_and_keeps_every_sample() {
+    let hub = Hub::open();
+    let key = format!("{}/temp", prefix("history"));
+    let reply_key = key.clone();
+    let seen = Arc::new(std::sync::Mutex::new(String::new()));
+    let seen_cb = seen.clone();
+    let session = hub.session.clone();
+    let _storage = hub
+        .session
+        .declare_queryable(&key)
+        .callback(move |q| {
+            let time = q.parameters().get("_time").unwrap_or("").to_string();
+            *seen_cb.lock().unwrap() = time.clone();
+            // A storage with history answers with each value in the window.
+            let n = if time.is_empty() { 1 } else { 3 };
+            for v in 0..n {
+                q.reply(&reply_key, v.to_string())
+                    .timestamp(session.new_timestamp())
+                    .wait()
+                    .unwrap();
+            }
+        })
+        .wait()
+        .unwrap();
+
+    let out = run(hub.zenmon(&["--json", "query", &key, "--since", "1h", "--timeout", "5s"]));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["count"], 3, "{v}");
+    assert_eq!(seen.lock().unwrap().as_str(), "[now(-3600s)..]");
+
+    let out = run(hub.zenmon(&["query", &key, "--since", "1h", "--timeout", "5s"]));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.lines().next().unwrap().starts_with("[20"),
+        "history shows times: {text}"
+    );
+}
