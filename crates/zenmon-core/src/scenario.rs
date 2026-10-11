@@ -258,6 +258,7 @@ pub fn build_events_from_tracks(tracks: &Value) -> Value {
             for tr in trs {
                 events.push(json!({
                     "t_rel_ms": tr.get("t_rel_ms").cloned().unwrap_or(Value::Null),
+                    "kind": "change",
                     "key": key,
                     "field": field,
                     "from": tr.get("from").cloned().unwrap_or(Value::Null),
@@ -268,6 +269,73 @@ pub fn build_events_from_tracks(tracks: &Value) -> Value {
     }
     events.sort_by_key(|e| e["t_rel_ms"].as_u64().unwrap_or(0));
     Value::Array(events)
+}
+
+/// A key must have this many messages before its rhythm means anything.
+const RHYTHM_MIN_MESSAGES: usize = 5;
+/// A gap counts as silence past this multiple of the key's median interval…
+const SILENCE_FACTOR: u64 = 4;
+/// …and past this floor, so jitter on a fast key is not reported.
+const SILENCE_FLOOR_MS: u64 = 200;
+
+/// Events found without being asked for, from timing and kinds alone — no
+/// payload knowledge, no domain judgement:
+///
+/// - `silence`: a key that publishes steadily went quiet for well over its
+///   usual interval, then resumed (`gap_ms`, `typical_ms`).
+/// - `stopped`: such a key went quiet and stayed quiet until the window
+///   ended at `end_ms` (`last_t_rel_ms`, `typical_ms`).
+/// - `deleted`: a DELETE sample.
+///
+/// The trigger's own synthetic event is ignored.
+pub fn build_auto_events(events: &[ScenarioEvent], end_ms: u64) -> Vec<Value> {
+    let mut by_key: std::collections::BTreeMap<&str, Vec<&ScenarioEvent>> = Default::default();
+    for e in events.iter().filter(|e| !e.trigger) {
+        by_key.entry(e.key_expr.as_str()).or_default().push(e);
+    }
+    let mut out = Vec::new();
+    for (key, mut evs) in by_key {
+        evs.sort_by_key(|e| e.t_rel_ms);
+        for e in &evs {
+            if e.kind == crate::types::KIND_DELETE {
+                out.push(json!({ "t_rel_ms": e.t_rel_ms, "kind": "deleted", "key": key }));
+            }
+        }
+        if evs.len() < RHYTHM_MIN_MESSAGES {
+            continue;
+        }
+        let mut gaps: Vec<u64> = evs
+            .windows(2)
+            .map(|w| w[1].t_rel_ms - w[0].t_rel_ms)
+            .collect();
+        let mut sorted = gaps.clone();
+        sorted.sort_unstable();
+        let typical = sorted[sorted.len() / 2].max(1);
+        let threshold = (typical * SILENCE_FACTOR).max(SILENCE_FLOOR_MS);
+        for (i, gap) in gaps.drain(..).enumerate() {
+            if gap > threshold {
+                out.push(json!({
+                    "t_rel_ms": evs[i].t_rel_ms + typical,
+                    "kind": "silence",
+                    "key": key,
+                    "gap_ms": gap,
+                    "typical_ms": typical,
+                }));
+            }
+        }
+        let last = evs.last().map(|e| e.t_rel_ms).unwrap_or(0);
+        if end_ms.saturating_sub(last) > threshold {
+            out.push(json!({
+                "t_rel_ms": last + typical,
+                "kind": "stopped",
+                "key": key,
+                "last_t_rel_ms": last,
+                "typical_ms": typical,
+            }));
+        }
+    }
+    out.sort_by_key(|e| e["t_rel_ms"].as_u64().unwrap_or(0));
+    out
 }
 
 /// Distinct concrete keys (in first-seen order) whose events match the wildcard
@@ -554,15 +622,15 @@ mod tests {
         assert_eq!(arr.len(), 3);
         assert_eq!(
             arr[0],
-            json!({ "t_rel_ms": 10, "key": "b/y", "field": "level", "from": 1, "to": 0 })
+            json!({ "t_rel_ms": 10, "kind": "change", "key": "b/y", "field": "level", "from": 1, "to": 0 })
         );
         assert_eq!(
             arr[1],
-            json!({ "t_rel_ms": 30, "key": "a/x", "field": "kind", "from": 0, "to": 2 })
+            json!({ "t_rel_ms": 30, "kind": "change", "key": "a/x", "field": "kind", "from": 0, "to": 2 })
         );
         assert_eq!(
             arr[2],
-            json!({ "t_rel_ms": 50, "key": "b/y", "field": "level", "from": 0, "to": 3 })
+            json!({ "t_rel_ms": 50, "kind": "change", "key": "b/y", "field": "level", "from": 0, "to": 3 })
         );
     }
 
@@ -664,5 +732,61 @@ mod tests {
     fn expand_preset_does_not_double_slashes() {
         let keys = expand_preset(&preset(&["/topic/state"]), "myfleet/");
         assert_eq!(keys, ["myfleet/topic/state"]);
+    }
+
+    fn steady(key: &str, times: impl IntoIterator<Item = u64>) -> Vec<ScenarioEvent> {
+        times
+            .into_iter()
+            .map(|t| ev(t, key, None, json!({})))
+            .collect()
+    }
+
+    #[test]
+    fn a_steady_key_that_pauses_is_a_silence() {
+        // 10 Hz, then a 1.5 s hole, then 10 Hz again.
+        let mut events = steady("pose", (0..10).map(|i| i * 100));
+        events.extend(steady("pose", (0..10).map(|i| 2400 + i * 100)));
+        let auto = build_auto_events(&events, 3300);
+        assert_eq!(auto.len(), 1, "{auto:#?}");
+        assert_eq!(auto[0]["kind"], "silence");
+        assert_eq!(auto[0]["gap_ms"], 1500);
+        assert_eq!(auto[0]["typical_ms"], 100);
+        assert_eq!(auto[0]["t_rel_ms"], 1000);
+    }
+
+    #[test]
+    fn a_steady_key_that_ends_early_has_stopped() {
+        let events = steady("pose", (0..10).map(|i| i * 100));
+        let auto = build_auto_events(&events, 5000);
+        assert_eq!(auto[0]["kind"], "stopped");
+        assert_eq!(auto[0]["last_t_rel_ms"], 900);
+    }
+
+    #[test]
+    fn jitter_sparse_keys_and_the_trigger_raise_nothing() {
+        let jittery = steady("fast", [0, 10, 25, 30, 45, 50, 70, 80]);
+        assert!(
+            build_auto_events(&jittery, 90).is_empty(),
+            "under the floor"
+        );
+        let sparse = steady("rare", [0, 3000]);
+        assert!(
+            build_auto_events(&sparse, 9000).is_empty(),
+            "too few to have a rhythm"
+        );
+        let mut trig = ev(0, "cmd", None, json!({}));
+        trig.trigger = true;
+        assert!(build_auto_events(&[trig], 9000).is_empty());
+    }
+
+    #[test]
+    fn a_delete_is_an_event() {
+        let mut d = ev(42, "a/x", None, json!(null));
+        d.kind = crate::types::KIND_DELETE.into();
+        let auto = build_auto_events(&[d], 100);
+        assert_eq!(
+            auto,
+            vec![json!({ "t_rel_ms": 42, "kind": "deleted", "key": "a/x" })]
+        );
     }
 }

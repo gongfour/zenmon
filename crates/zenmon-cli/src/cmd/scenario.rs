@@ -439,12 +439,21 @@ async fn run_scenario(
         ended_reason,
     };
     let mut episode = build_episode(&meta, &events);
+    // One time-ordered list: value changes on tracked fields, plus what
+    // timing alone shows (a key going quiet or stopping, a DELETE).
+    // When observation actually ended — earlier than the window when a task
+    // response cut it short, and a key cannot have "stopped" after that.
+    let window_end = stopwatch.elapsed().as_millis() as u64;
+    let mut all_events = zenmon_core::scenario::build_auto_events(&events, window_end);
     if !specs.is_empty() {
         episode["tracks"] = build_tracks(&events, &specs);
-        let evs = build_events_from_tracks(&episode["tracks"]);
-        if evs.as_array().is_some_and(|a| !a.is_empty()) {
-            episode["events"] = evs;
+        if let Some(changes) = build_events_from_tracks(&episode["tracks"]).as_array() {
+            all_events.extend(changes.iter().cloned());
         }
+    }
+    all_events.sort_by_key(|e| e["t_rel_ms"].as_u64().unwrap_or(0));
+    if !all_events.is_empty() {
+        episode["events"] = serde_json::Value::Array(all_events);
     }
     // Annotate each topics entry with its contract context (reusing enrich), so
     // the episode is self-describing: a reader learns what each topic *is* and
