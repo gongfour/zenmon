@@ -340,3 +340,44 @@ fn detect_misses_reports_a_sequence_gap_inline() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("missed "), "{stderr}");
 }
+
+/// A DELETE prints as such, not as an empty value, and `--kind` filters on it.
+#[test]
+fn sub_shows_deletes_and_filters_by_kind() {
+    let hub = Hub::open();
+    let p = prefix("kind");
+    let key = format!("{p}/a");
+    let session = hub.session.clone();
+    let k = key.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let feeder = thread::spawn(move || {
+        while !flag.load(Ordering::Relaxed) {
+            session.put(&k, "1").wait().unwrap();
+            session.delete(&k).wait().unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    let sel = format!("{p}/**");
+    let out = run(hub.zenmon(&[
+        "sub",
+        &sel,
+        "--kind",
+        "delete",
+        "--count",
+        "2",
+        "--duration",
+        "20s",
+    ]));
+    stop.store(true, Ordering::Relaxed);
+    feeder.join().unwrap();
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [format!("{key} | DELETE"), format!("{key} | DELETE")],
+        "{stdout}"
+    );
+}

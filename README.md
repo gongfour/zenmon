@@ -221,6 +221,7 @@ zenmon query "call/system/params/get" --consolidation none
 zenmon --json sub "sensor/**" --count 10        # stop after 10 messages
 zenmon --json sub "sensor/**" --duration 5s     # stop after 5s
 zenmon sub "sensor/**" --detect-misses          # also report samples lost in transit
+zenmon sub "sensor/**" --kind delete            # only DELETEs (shown as `key | DELETE`)
 zenmon --json nodes --watch --count 1           # one snapshot then exit
 
 # Test how two key expressions relate (pure, no network)
@@ -839,7 +840,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 10. [x] `zenmon keyexpr <A> <B>` — test intersection/inclusion between key expressions
 11. [x] `zenmon pub --rate <HZ>` — repeated publish at fixed frequency for testing
 12. [ ] `zenmon pub --congestion block|drop` — congestion control mode selection
-13. [ ] DELETE message display — color-code PUT vs DELETE, filter by kind
+13. [x] DELETE message display — struck-through key and a DELETE line in the TUI, `sub --kind`
 
 ### Phase 5 — Advanced Inspection
 14. [ ] Admin space explorer — browse `@/**` for router/plugin/storage state

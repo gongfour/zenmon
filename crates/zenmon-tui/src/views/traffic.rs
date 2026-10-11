@@ -19,6 +19,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
+use zenmon_core::types::KIND_DELETE;
 
 /// Unicode block glyphs (low→high) for the master sparkbar.
 const SPARK_GLYPHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -198,6 +199,17 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                             Style::default().fg(Color::DarkGray)
                         }
                     };
+                    // Struck through while the latest sample is a DELETE:
+                    // the key is gone, however recently it spoke.
+                    let deleted = app
+                        .topic_latest
+                        .get(&row.path)
+                        .is_some_and(|(m, _)| m.is_delete());
+                    let key_style = if deleted {
+                        key_style.fg(Color::Red).add_modifier(Modifier::CROSSED_OUT)
+                    } else {
+                        key_style
+                    };
                     let pad = label_width
                         .saturating_sub(prefix.chars().count() + row.segment.chars().count());
                     ListItem::new(Line::from(vec![
@@ -299,6 +311,13 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
         " · {} held",
         app.history.get(&key).map_or(0, |h| h.len())
     ));
+    if app
+        .topic_latest
+        .get(&key)
+        .is_some_and(|(m, _)| m.is_delete())
+    {
+        header.push_str(" · deleted");
+    }
     // How many leaves moved, so "did anything change" is answerable from the
     // header without reading the body.
     if app.diff_enabled {
@@ -585,6 +604,10 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
     lines.push(section(header));
 
     match history.and_then(|h| h.latest()) {
+        Some(entry) if entry.kind == KIND_DELETE => lines.push(Line::from(Span::styled(
+            "  DELETE — the key was removed; there is no value",
+            Style::default().fg(Color::Red),
+        ))),
         Some(entry) => {
             if entry.truncated {
                 lines.push(Line::from(Span::styled(
@@ -642,12 +665,17 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
         Some(h) => {
             for entry in h.iter() {
                 let ts = format_stream_timestamp(entry.timestamp.as_deref().unwrap_or(""));
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{}  ", ts), Style::default().fg(Color::DarkGray)),
+                let value = if entry.kind == KIND_DELETE {
+                    Span::styled("DELETE", Style::default().fg(Color::Red))
+                } else {
                     Span::styled(
                         snippet(&entry.view.to_string(), 60),
                         Style::default().fg(Color::White),
-                    ),
+                    )
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{}  ", ts), Style::default().fg(Color::DarkGray)),
+                    value,
                 ]));
             }
         }
