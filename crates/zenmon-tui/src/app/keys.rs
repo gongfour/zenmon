@@ -173,6 +173,7 @@ impl App {
             KeyCode::Char('Q') => self.open_query_editor(),
             KeyCode::Char(' ') => self.history_paused = !self.history_paused,
             KeyCode::Char('D') => self.diff_enabled = !self.diff_enabled,
+            KeyCode::Char('b') => self.toggle_pinned_baseline(),
             KeyCode::Char('p') => self.open_plot_picker(),
             KeyCode::Char('P') => self.clear_plot_field(),
             KeyCode::Char('y') => self.copy_selected_payload(),

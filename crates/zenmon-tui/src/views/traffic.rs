@@ -334,15 +334,16 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     // How many leaves moved, so "did anything change" is answerable from the
     // header without reading the body.
     if app.diff_enabled {
-        if let Some(h) = app.history.get(&key) {
-            if let (Some(cur), Some(prev)) = (h.latest(), h.previous()) {
-                let n = diff::changed_paths(&cur.view, &prev.view).len();
-                header.push_str(&match n {
-                    0 => " · unchanged".to_string(),
-                    1 => " · 1 field changed".to_string(),
-                    n => format!(" · {n} fields changed"),
-                });
-            }
+        let h = app.history.get(&key);
+        if let (Some(cur), Some((base, _))) =
+            (h.and_then(|h| h.latest()), app.diff_baseline(&key, h))
+        {
+            let n = diff::changed_paths(&cur.view, base).len();
+            header.push_str(&match n {
+                0 => " · unchanged".to_string(),
+                1 => " · 1 field changed".to_string(),
+                n => format!(" · {n} fields changed"),
+            });
         }
     }
     // The master row dims when a key goes quiet; the detail says for how long,
@@ -620,16 +621,18 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
         }
     }
 
-    let previous = if app.diff_enabled {
-        history.and_then(|h| h.previous()).map(|e| &e.view)
+    let baseline = if app.diff_enabled {
+        app.diff_baseline(key, history)
     } else {
         None
     };
+    let previous = baseline.map(|(v, _)| v);
 
-    let header = match (app.diff_enabled, previous.is_some()) {
+    let header = match (app.diff_enabled, baseline) {
         (false, _) => "─ latest (D to diff) ─",
-        (true, false) => "─ latest (no previous message yet) ─",
-        (true, true) => "─ latest · changes vs previous ─",
+        (true, None) => "─ latest (no previous message yet · b to pin one) ─",
+        (true, Some((_, false))) => "─ latest · changes vs previous (b to pin this one) ─",
+        (true, Some((_, true))) => "─ latest · changes vs PINNED message (b to unpin) ─",
     };
     lines.push(section(header));
 

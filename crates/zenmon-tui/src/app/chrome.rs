@@ -698,6 +698,10 @@ impl App {
             ("/", "filter (searches inside folded groups)"),
             ("E/C", "expand / collapse everything"),
             ("D", "highlight what changed since the previous message"),
+            (
+                "b",
+                "pin this message as the diff baseline (again to unpin)",
+            ),
             ("p/P", "plot a numeric field / clear the plot"),
             ("space", "freeze the payload and history being read"),
             ("L/Q", "live values / compose a request (get)"),

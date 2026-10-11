@@ -508,6 +508,9 @@ pub struct App {
     /// On by default: a repeating status blob is unreadable without it, and the
     /// cost when nothing changed is that everything renders dim.
     pub diff_enabled: bool,
+    /// A message the user chose to diff against instead of the previous one:
+    /// the key it belongs to, and the message as it was.
+    pub pinned_baseline: Option<(String, crate::history::HistoryEntry)>,
     /// Loaded from `--contract` / ZENMON_CONTRACT. When present the detail pane
     /// says whether the selected key is declared and whether its encoding
     /// matches — turning "what is this key" into a question the tool answers.
@@ -684,6 +687,7 @@ impl App {
             tree_selected: 0,
             topics_filtering: false,
             diff_enabled: true,
+            pinned_baseline: None,
             contract: None,
             plot_field: HashMap::new(),
             plot_picker_selected: 0,
@@ -1093,6 +1097,47 @@ impl App {
     ///
     /// Scans `topic_hz`, so it is O(keys) and is only ever called for the one
     /// selected branch — never per visible row.
+    /// What `key`'s latest message is diffed against: the pinned message
+    /// when one is pinned for this key, else the previous one. The flag says
+    /// which.
+    pub(crate) fn diff_baseline<'a>(
+        &'a self,
+        key: &str,
+        history: Option<&'a crate::history::KeyHistory>,
+    ) -> Option<(&'a serde_json::Value, bool)> {
+        match &self.pinned_baseline {
+            Some((k, entry)) if k == key => Some((&entry.view, true)),
+            _ => history.and_then(|h| h.previous()).map(|e| (&e.view, false)),
+        }
+    }
+
+    /// Pin the selected key's latest message as its diff baseline, or unpin.
+    /// Pinning turns the diff on: pinning is asking for it.
+    pub(crate) fn toggle_pinned_baseline(&mut self) {
+        let Some(key) = self.selected_topic_key() else {
+            return;
+        };
+        if self
+            .pinned_baseline
+            .as_ref()
+            .is_some_and(|(k, _)| *k == key)
+        {
+            self.pinned_baseline = None;
+            self.set_toast("Diff baseline unpinned — comparing with the previous message");
+            return;
+        }
+        match self.history.get(&key).and_then(|h| h.latest()).cloned() {
+            Some(entry) => {
+                self.pinned_baseline = Some((key, entry));
+                self.diff_enabled = true;
+                self.set_toast(
+                    "Pinned this message — later ones are diffed against it (b to unpin)",
+                );
+            }
+            None => self.set_error_toast("Nothing received on this key yet to pin"),
+        }
+    }
+
     /// Summed rate of every key below each branch, built in one pass over
     /// the rates so the tree can show it on every branch row each frame.
     pub(crate) fn branch_rates(&self) -> HashMap<String, f64> {
