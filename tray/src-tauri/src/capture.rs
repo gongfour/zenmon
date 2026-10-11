@@ -1,25 +1,24 @@
-//! The capture loop, ported from `zenmon-cli`'s `Command::Capture { dir: Some(_), .. }`
-//! arm. Differences from the CLI reference (both deliberate, for an unattended
-//! background recorder rather than a short interactive session):
+//! The tray's capture task. What lands on disk — exclusion, records,
+//! rotation, retention — is zenmon-core's [`Recorder`], the same pipeline
+//! `zenmon capture --dir` runs. What is the tray's own:
 //!
-//! - Stop condition is a `watch<bool>` flipped by the tray toggle, not `ctrl_c()`.
-//! - `enforce_retention` is throttled to once per [`RETENTION_CHECK_INTERVAL`]
-//!   instead of once per message — the CLI's every-write call is cheap for a
-//!   short run, but a `read_dir` per message adds up over hours.
+//! - The stop condition is a `watch<bool>` flipped by the tray toggle, not
+//!   `ctrl_c()`.
+//! - A failed write does not end the capture (a full disk may free up), but
+//!   it shows: `last_error` is set while writes fail and cleared by the next
+//!   one that succeeds, so the tray never says "capturing" over a silent gap.
 
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tokio::sync::watch;
 
-use zenmon_core::capture::{CaptureExclude, CaptureRecord};
-use zenmon_core::trace::{enforce_retention, SegmentWriter};
+use zenmon_core::capture::{CaptureExclude, CaptureSink, Recorded, Recorder, Retention};
+use zenmon_core::trace::SegmentWriter;
 use zenmon_core::{open_session, subscriber, ZenmonConfig};
 
 use crate::config::Profile;
-
-const RETENTION_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -75,6 +74,18 @@ impl CaptureStatus {
             last_message_at_ms: None,
             last_error: None,
         }
+    }
+
+    /// Running, but the latest write failed — the capture is up and
+    /// nothing is landing on disk.
+    pub fn is_degraded(&self) -> bool {
+        self.state == CaptureState::Running && self.last_error.is_some()
+    }
+
+    /// What the tray visibly shows. A change here is pushed at once instead
+    /// of waiting out the 1 Hz coalescing.
+    pub fn visual(&self) -> (CaptureState, bool) {
+        (self.state, self.is_degraded())
     }
 
     fn starting(profile_name: &str) -> Self {
@@ -172,7 +183,7 @@ async fn run_capture(
         }
     };
 
-    let mut writer = match SegmentWriter::open_with(
+    let writer = match SegmentWriter::open_with(
         profile.output_dir.clone(),
         profile.rotate_size_bytes,
         profile.rotate_interval(),
@@ -186,16 +197,24 @@ async fn run_capture(
             return;
         }
     };
+    let mut recorder = Recorder::new(
+        exclude,
+        CaptureSink::Store {
+            writer,
+            dir: profile.output_dir.clone(),
+            retention: Retention {
+                max_total_size: profile.max_total_size_bytes,
+                max_age: profile.max_age(),
+            },
+        },
+    );
 
-    let start = Instant::now();
     status_tx.send_modify(|s| {
         s.state = CaptureState::Running;
         s.started_at_ms = epoch_millis(SystemTime::now());
     });
 
-    let mut last_retention_check = Instant::now();
-    let mut excluded_pending: u64 = 0;
-
+    let mut failing = false;
     loop {
         tokio::select! {
             biased;
@@ -206,44 +225,30 @@ async fn run_capture(
             }
             item = rx.recv() => match item {
                 Some(msg) => {
-                    if exclude.excludes(&msg.key_expr) {
-                        // Counted, but not pushed per message: the status
-                        // channel ticks once per *written* message already.
-                        excluded_pending += 1;
-                        continue;
-                    }
                     let now = SystemTime::now();
-                    let record = CaptureRecord::from_message(&msg, start.elapsed(), now);
-                    let line = match serde_json::to_string(&record) {
-                        Ok(line) => line,
-                        Err(err) => {
-                            status_tx.send_modify(|s| s.last_error = Some(err.to_string()));
-                            continue;
+                    match recorder.record(&msg, now) {
+                        // Not pushed per message: the status channel ticks
+                        // once per *written* message already.
+                        Ok(Recorded::Excluded) => {}
+                        Ok(Recorded::Written { .. }) => {
+                            let recovered = std::mem::take(&mut failing);
+                            let (written, excluded, bytes) =
+                                (recorder.written(), recorder.excluded(), recorder.bytes());
+                            status_tx.send_modify(|s| {
+                                s.messages_written = written;
+                                s.messages_excluded = excluded;
+                                s.bytes_written = bytes;
+                                s.last_message_at_ms = epoch_millis(now);
+                                if recovered {
+                                    s.last_error = None;
+                                }
+                            });
                         }
-                    };
-                    if let Err(err) = writer.write_line(&line, now) {
-                        status_tx.send_modify(|s| s.last_error = Some(err.to_string()));
-                        continue;
+                        Err(err) => {
+                            failing = true;
+                            status_tx.send_modify(|s| s.last_error = Some(err.to_string()));
+                        }
                     }
-
-                    if last_retention_check.elapsed() >= RETENTION_CHECK_INTERVAL {
-                        let _ = enforce_retention(
-                            &profile.output_dir,
-                            Some(profile.max_total_size_bytes),
-                            Some(profile.max_age()),
-                            now,
-                        );
-                        last_retention_check = Instant::now();
-                    }
-
-                    let written_bytes = line.len() as u64 + 1; // + newline
-                    let excluded_now = std::mem::take(&mut excluded_pending);
-                    status_tx.send_modify(|s| {
-                        s.messages_written += 1;
-                        s.messages_excluded += excluded_now;
-                        s.bytes_written += written_bytes;
-                        s.last_message_at_ms = epoch_millis(now);
-                    });
                 }
                 None => break,
             }
@@ -252,20 +257,16 @@ async fn run_capture(
 
     // Finish, not just flush: a zstd segment is only complete once its frame
     // is closed.
-    if let Err(err) = writer.close() {
-        status_tx.send_modify(|s| s.last_error = Some(err.to_string()));
-    }
-    let _ = enforce_retention(
-        &profile.output_dir,
-        Some(profile.max_total_size_bytes),
-        Some(profile.max_age()),
-        SystemTime::now(),
-    );
+    let finished = recorder.finish();
     let end = subscription.stop().await;
     let _ = session.close().await;
 
+    let excluded = recorder.excluded();
     status_tx.send_modify(|s| {
-        s.messages_excluded += excluded_pending;
+        s.messages_excluded = excluded;
+        if let Err(err) = finished {
+            s.last_error = Some(err.to_string());
+        }
         if let Some(err) = end.error() {
             s.last_error = Some(err.to_string());
         }
@@ -275,4 +276,27 @@ async fn run_capture(
             CaptureState::Idle
         };
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_write_error_while_running_is_a_visible_change() {
+        let mut s = CaptureStatus::idle("p");
+        s.state = CaptureState::Running;
+        let healthy = s.visual();
+        s.last_error = Some("disk full".into());
+        assert!(s.is_degraded());
+        assert_ne!(s.visual(), healthy, "must bypass the 1 Hz coalescing");
+    }
+
+    #[test]
+    fn an_error_on_a_stopped_capture_is_not_degraded() {
+        let mut s = CaptureStatus::idle("p");
+        s.state = CaptureState::Failed;
+        s.last_error = Some("connect refused".into());
+        assert!(!s.is_degraded());
+    }
 }

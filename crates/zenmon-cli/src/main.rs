@@ -1109,7 +1109,9 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             duration,
         } => {
             warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
-            use zenmon_core::capture::{CaptureExclude, CaptureRecord};
+            use zenmon_core::capture::{
+                CaptureExclude, CaptureSink, Recorded, Recorder, Retention,
+            };
 
             // Validate before connecting: a bad exclude must not start a
             // capture that silently drops nothing (or everything).
@@ -1119,18 +1121,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let subscription = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
 
-            // Two sinks: one file (pairs with replay) or a rotating store
-            // (pairs with trace).
-            enum Sink {
-                File(zenmon_core::trace::CaptureFileWriter),
-                Dir {
-                    writer: zenmon_core::trace::SegmentWriter,
-                    dir: std::path::PathBuf,
-                    max_total_size: u64,
-                    max_age: std::time::Duration,
-                },
-            }
-            let mut sink = if let Some(dir) = dir {
+            let (sink, output_label) = if let Some(dir) = dir {
                 let writer = zenmon_core::trace::SegmentWriter::open_with(
                     dir.clone(),
                     rotate_size,
@@ -1144,14 +1135,18 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         dir.display()
                     );
                 }
-                Sink::Dir {
+                let label = dir.display().to_string();
+                let sink = CaptureSink::Store {
                     writer,
                     dir,
-                    max_total_size,
-                    max_age,
-                }
+                    retention: Retention {
+                        max_total_size,
+                        max_age,
+                    },
+                };
+                (sink, label)
             } else {
-                let out = output.clone().expect("clap guarantees output or dir");
+                let out = output.expect("clap guarantees output or dir");
                 let file =
                     zenmon_core::trace::CaptureFileWriter::create(&out, compress).map_err(|e| {
                         ZenmonError::invalid_input(format!(
@@ -1167,17 +1162,15 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         out.display()
                     );
                 }
-                Sink::File(file)
+                (CaptureSink::File(file), out.display().to_string())
             };
+            let mut recorder = Recorder::new(exclude, sink);
 
-            if !cli.json && !exclude.is_empty() {
+            if !cli.json && recorder.excludes_anything() {
                 eprintln!("Excluding: {}", exclude_exprs.join(", "));
             }
 
-            let start = std::time::Instant::now();
             let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
-            let mut written: u64 = 0;
-            let mut excluded: u64 = 0;
             let mut stop = false;
             loop {
                 let deadline = budget.deadline();
@@ -1191,30 +1184,10 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         break;
                     }
                     item = rx.recv() => match item {
+                        // Excluded messages don't count toward --count.
                         Some(msg) => {
-                            // Excluded messages don't count toward --count.
-                            if exclude.excludes(&msg.key_expr) {
-                                excluded += 1;
-                                continue;
-                            }
-                            let now = std::time::SystemTime::now();
-                            let rec = CaptureRecord::from_message(&msg, start.elapsed(), now);
-                            let line = serde_json::to_string(&rec)?;
-                            match &mut sink {
-                                Sink::File(w) => w.write_line(&line, now)?,
-                                Sink::Dir { writer, dir, max_total_size, max_age } => {
-                                    writer.write_line(&line, now)?;
-                                    // Cheap: early-returns when nothing to prune.
-                                    zenmon_core::trace::enforce_retention(
-                                        dir,
-                                        Some(*max_total_size),
-                                        Some(*max_age),
-                                        now,
-                                    )?;
-                                }
-                            }
-                            written += 1;
-                            if budget.record() {
+                            let recorded = recorder.record(&msg, std::time::SystemTime::now())?;
+                            if matches!(recorded, Recorded::Written { .. }) && budget.record() {
                                 stop = true;
                             }
                         }
@@ -1226,16 +1199,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             }
             // Flush the last records on any exit path (count/duration/Ctrl+C).
-            let output_label = match &mut sink {
-                Sink::File(w) => {
-                    w.finish()?;
-                    output.map(|p| p.display().to_string()).unwrap_or_default()
-                }
-                Sink::Dir { writer, dir, .. } => {
-                    writer.close()?;
-                    dir.display().to_string()
-                }
-            };
+            recorder.finish()?;
+            let (written, excluded) = (recorder.written(), recorder.excluded());
 
             if cli.json {
                 println!(
@@ -1247,7 +1212,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         "output": output_label,
                     }))?
                 );
-            } else if exclude.is_empty() {
+            } else if !recorder.excludes_anything() {
                 eprintln!("Captured {} record(s) to {}", written, output_label);
             } else {
                 eprintln!(
