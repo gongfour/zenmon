@@ -261,3 +261,22 @@ fn capture_store_reads_back_offline() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Plain mode logs at INFO by default; those lines belong on stderr; on stdout
+/// they read as records to whatever consumes the stream.
+#[test]
+fn plain_sub_stdout_carries_only_messages() {
+    let hub = Hub::open();
+    let p = prefix("plain");
+    let _traffic = hub.publish_until_dropped(&format!("{p}/state"), |n| format!(r#"{{"n":{n}}}"#));
+
+    let sel = format!("{p}/**");
+    let out = run(hub.zenmon(&["sub", &sel, "--count", "2", "--duration", "20s"]));
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    for line in lines {
+        assert!(line.starts_with(&format!("{p}/state | ")), "{line}");
+    }
+}

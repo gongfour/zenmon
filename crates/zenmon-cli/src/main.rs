@@ -308,12 +308,15 @@ async fn main() {
         let _ = color_eyre::install();
     }
 
+    // stderr: stdout carries results, and a log line there is a fake record
+    // to whatever reads it (`sub | head` used to get two INFO lines).
     tracing_subscriber::fmt()
         .with_env_filter(resolve_log_filter(
             is_tui,
             is_json,
             std::env::var("RUST_LOG").ok().as_deref(),
         ))
+        .with_writer(std::io::stderr)
         .init();
 
     let emit_error = |e: ZenmonError| -> ! {
@@ -439,13 +442,21 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // Load before opening the session so a broken contract fails fast.
             let contract = load_contract_opt(&cli.contract)?;
             let session = zenmon_core::session::open_session(&config).await?;
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let subscription = zenmon_core::subscriber::subscribe(&session, &key_expr, tx).await?;
+            // Lossy, not unbounded or bounded: a reader that stops (a paused
+            // pager) must neither grow this process without limit nor push
+            // back through Zenoh onto the publishers being watched.
+            let (sink, mut rx, dropped) = zenmon_core::subscriber::MessageSink::lossy(SUB_QUEUE);
+            let subscription =
+                zenmon_core::subscriber::subscribe(&session, &key_expr, sink).await?;
 
             if !cli.json {
                 eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
             }
 
+            // Buffered, flushed whenever the queue is drained: one syscall per
+            // burst instead of per message, and no added latency when idle.
+            let mut out = std::io::BufWriter::new(std::io::stdout());
+            let mut rendered = String::new();
             // Duration clock starts now that the subscriber is declared.
             let mut budget = watch::Budget::start(watch::Bounds::new(count, duration));
             loop {
@@ -461,59 +472,18 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                     item = rx.recv() => match item {
                         Some(msg) => {
-                            if cli.json {
-                                // Fast path preserved byte-for-byte when neither
-                                // a payload cap nor a contract is in play.
-                                if max_payload_bytes.is_none() && contract.is_none() {
-                                    println!("{}", serde_json::to_string(&msg)?);
-                                } else {
-                                    let mut v = serde_json::to_value(&msg)?;
-                                    if let Some(max) = max_payload_bytes {
-                                        // Replace payload/attachment with capped
-                                        // previews so a large message can't blow
-                                        // the output budget.
-                                        v["payload"] = msg.payload.to_view_capped(max);
-                                        if let Some(att) = &msg.attachment {
-                                            v["attachment"] = att.to_view_capped(max);
-                                        }
-                                    }
-                                    if let Some(c) = &contract {
-                                        v["contract"] = serde_json::to_value(
-                                            c.enrich(&msg.key_expr, &msg.encoding),
-                                        )?;
-                                    }
-                                    println!("{}", serde_json::to_string(&v)?);
-                                }
-                            } else {
-                                if let Some(c) = &contract {
-                                    println!(
-                                        "{}",
-                                        contract_annotation(
-                                            &c.enrich(&msg.key_expr, &msg.encoding),
-                                            &msg.encoding,
-                                        )
-                                    );
-                                }
-                                let ts = if timestamp {
-                                    msg.timestamp.as_deref().unwrap_or("--")
-                                } else {
-                                    ""
-                                };
-                                let payload_str = if pretty {
-                                    msg.payload.pretty()
-                                } else {
-                                    format!("{}", msg.payload)
-                                };
-
-                                let att_str = msg.attachment.as_ref()
-                                    .map(|a| format!(" [att: {}]", a))
-                                    .unwrap_or_default();
-
-                                if timestamp {
-                                    println!("[{}] {} | {}{}", ts, msg.key_expr, payload_str, att_str);
-                                } else {
-                                    println!("{} | {}{}", msg.key_expr, payload_str, att_str);
-                                }
+                            rendered.clear();
+                            render_sub_message(
+                                &mut rendered,
+                                &msg,
+                                cli.json,
+                                pretty,
+                                timestamp,
+                                max_payload_bytes,
+                                contract.as_ref(),
+                            )?;
+                            if !write_out(&mut out, &rendered, rx.is_empty())? {
+                                break; // reader went away (`| head`)
                             }
                             if budget.record() {
                                 break;
@@ -523,8 +493,16 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                     }
                 }
             }
+            let _ = std::io::Write::flush(&mut out);
             subscription.stop().await;
             session.close().await.map_err(internal_err)?;
+            let dropped = dropped.get();
+            if dropped > 0 {
+                eprintln!(
+                    "warning: dropped {dropped} message(s) — output was read slower than \
+                     they arrived (queue limit {SUB_QUEUE})"
+                );
+            }
         }
 
         Command::Query {
@@ -1672,6 +1650,86 @@ fn namespace_redundant_prefix(key: &str, namespace: Option<&str>) -> Option<Stri
 }
 
 /// Emit the redundant-namespace warning for each key, if any.
+/// Messages `sub` queues for a slow reader before it starts dropping.
+const SUB_QUEUE: usize = 10_000;
+
+/// Render one `sub` message into `buf` (newline-terminated lines).
+fn render_sub_message(
+    buf: &mut String,
+    msg: &zenmon_core::types::ZenohMessage,
+    json: bool,
+    pretty: bool,
+    timestamp: bool,
+    max_payload_bytes: Option<usize>,
+    contract: Option<&Contract>,
+) -> Result<(), ZenmonError> {
+    use std::fmt::Write;
+    if json {
+        // Fast path preserved byte-for-byte when neither a payload cap nor a
+        // contract is in play.
+        if max_payload_bytes.is_none() && contract.is_none() {
+            buf.push_str(&serde_json::to_string(msg)?);
+        } else {
+            let mut v = serde_json::to_value(msg)?;
+            if let Some(max) = max_payload_bytes {
+                // Replace payload/attachment with capped previews so a large
+                // message can't blow the output budget.
+                v["payload"] = msg.payload.to_view_capped(max);
+                if let Some(att) = &msg.attachment {
+                    v["attachment"] = att.to_view_capped(max);
+                }
+            }
+            if let Some(c) = contract {
+                v["contract"] = serde_json::to_value(c.enrich(&msg.key_expr, &msg.encoding))?;
+            }
+            buf.push_str(&serde_json::to_string(&v)?);
+        }
+        buf.push('\n');
+        return Ok(());
+    }
+    if let Some(c) = contract {
+        let _ = writeln!(
+            buf,
+            "{}",
+            contract_annotation(&c.enrich(&msg.key_expr, &msg.encoding), &msg.encoding)
+        );
+    }
+    let payload_str = if pretty {
+        msg.payload.pretty()
+    } else {
+        format!("{}", msg.payload)
+    };
+    let att_str = msg
+        .attachment
+        .as_ref()
+        .map(|a| format!(" [att: {}]", a))
+        .unwrap_or_default();
+    if timestamp {
+        let ts = msg.timestamp.as_deref().unwrap_or("--");
+        let _ = writeln!(
+            buf,
+            "[{}] {} | {}{}",
+            ts, msg.key_expr, payload_str, att_str
+        );
+    } else {
+        let _ = writeln!(buf, "{} | {}{}", msg.key_expr, payload_str, att_str);
+    }
+    Ok(())
+}
+
+/// Write to stdout, flushing when asked. `Ok(false)` means the reader closed
+/// the pipe — an ordinary way for `sub | head` to end, not an error.
+fn write_out(out: &mut impl std::io::Write, text: &str, flush: bool) -> Result<bool, ZenmonError> {
+    let result = out
+        .write_all(text.as_bytes())
+        .and_then(|()| if flush { out.flush() } else { Ok(()) });
+    match result {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(e) => Err(ZenmonError::internal(format!("cannot write output: {e}"))),
+    }
+}
+
 fn warn_redundant_namespace<'a>(keys: impl IntoIterator<Item = &'a str>, namespace: Option<&str>) {
     for k in keys {
         if let Some(w) = namespace_redundant_prefix(k, namespace) {
@@ -2180,6 +2238,24 @@ fn print_scenario_summary(episode: &serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ClosedPipe;
+    impl std::io::Write for ClosedPipe {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_closed_pipe_ends_output_quietly() {
+        assert!(!write_out(&mut ClosedPipe, "x\n", true).unwrap());
+        let mut buf = Vec::new();
+        assert!(write_out(&mut buf, "x\n", false).unwrap());
+        assert_eq!(buf, b"x\n");
+    }
     use tracing::level_filters::LevelFilter;
 
     fn enr(declared: bool, matches: Option<bool>) -> Enrichment {
