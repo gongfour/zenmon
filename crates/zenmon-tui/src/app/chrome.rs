@@ -485,9 +485,13 @@ impl App {
         // Guard 4 of 4: name the target again right before the send key, so
         // committing is never a blind action on whatever was prefilled.
         match &self.publish_result {
-            Some(Ok(key)) => lines.push(Line::from(Span::styled(
-                format!("  sent to {key}"),
+            Some(Ok(sent)) if sent.matched => lines.push(Line::from(Span::styled(
+                format!("  sent to {}", sent.key),
                 Style::default().fg(Color::Green),
+            ))),
+            Some(Ok(sent)) => lines.push(Line::from(Span::styled(
+                format!("  sent to {} — but no subscriber matches it", sent.key),
+                Style::default().fg(Color::Yellow),
             ))),
             Some(Err(reason)) => lines.push(Line::from(Span::styled(
                 format!("  {reason}"),

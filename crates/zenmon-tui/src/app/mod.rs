@@ -439,6 +439,15 @@ pub struct LivelinessEventRecord {
     pub node_name: String,
 }
 
+/// A publish the editor sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sent {
+    pub key: String,
+    /// Whether routing knew of a subscriber for the key. A put to nobody
+    /// succeeds all the same, so this is the only sign it went nowhere.
+    pub matched: bool,
+}
+
 const LIVELINESS_EVENT_CAP: usize = 200;
 
 pub struct App {
@@ -516,7 +525,7 @@ pub struct App {
     /// session. Cleared as soon as it is taken.
     pub pending_publish: Option<(String, String)>,
     /// Result of the last publish, shown in the editor.
-    pub publish_result: Option<Result<String, String>>,
+    pub publish_result: Option<Result<Sent, String>>,
 
     /// Saved views, read once at startup.
     pub profiles: zenmon_core::profile::TuiProfiles,

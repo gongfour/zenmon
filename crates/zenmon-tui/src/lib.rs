@@ -346,11 +346,18 @@ async fn run_loop(
                     let s = s.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        let result =
-                            zenmon_core::publish::put(&s, &key, payload.into_bytes(), None)
-                                .await
-                                .map(|()| key)
-                                .map_err(|e| format!("{e}"));
+                        let result = async {
+                            let matched = zenmon_core::publish::has_subscribers(
+                                &s,
+                                &key,
+                                Duration::from_millis(500),
+                            )
+                            .await?;
+                            zenmon_core::publish::put(&s, &key, payload.into_bytes(), None).await?;
+                            Ok::<_, zenmon_core::error::ZenmonError>(app::Sent { key, matched })
+                        }
+                        .await
+                        .map_err(|e| format!("{e}"));
                         let _ = tx.send(AppEvent::Published(result));
                     });
                 }

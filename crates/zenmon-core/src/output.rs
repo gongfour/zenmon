@@ -80,11 +80,13 @@ pub fn to_query_json<T: Serialize, E: Serialize>(
 ///
 /// `status` is `"accepted"` (not `"published"`): a successful `put` only means
 /// the local Zenoh stack accepted the publication, not that any subscriber
-/// received or processed it.
+/// received or processed it. `matched` says whether routing knew of any
+/// subscriber for the key — `false` means the message went nowhere.
 pub fn publish_accepted_json(
     key_expr: &str,
     bytes: usize,
     attachment_bytes: Option<usize>,
+    matched: bool,
 ) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
     struct PublishResult<'a> {
@@ -94,6 +96,7 @@ pub fn publish_accepted_json(
         bytes: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         attachment_bytes: Option<usize>,
+        matched: bool,
     }
     serde_json::to_string(&PublishResult {
         ok: true,
@@ -101,6 +104,7 @@ pub fn publish_accepted_json(
         key_expr,
         bytes,
         attachment_bytes,
+        matched,
     })
 }
 
@@ -114,6 +118,7 @@ pub fn publish_rate_summary_json(
     key_expr: &str,
     bytes: usize,
     attachment_bytes: Option<usize>,
+    matched: bool,
     published: u64,
     rate_hz: f64,
 ) -> Result<String, serde_json::Error> {
@@ -125,6 +130,7 @@ pub fn publish_rate_summary_json(
         bytes: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         attachment_bytes: Option<usize>,
+        matched: bool,
         published: u64,
         rate_hz: f64,
     }
@@ -134,6 +140,7 @@ pub fn publish_rate_summary_json(
         key_expr,
         bytes,
         attachment_bytes,
+        matched,
         published,
         rate_hz,
     })
@@ -224,37 +231,37 @@ mod tests {
 
     #[test]
     fn publish_without_attachment() {
-        let json = publish_accepted_json("test/hello", 17, None).unwrap();
+        let json = publish_accepted_json("test/hello", 17, None, true).unwrap();
         assert_eq!(
             json,
-            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17}"#
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"matched":true}"#
         );
     }
 
     #[test]
     fn publish_with_attachment() {
-        let json = publish_accepted_json("test/hello", 17, Some(9)).unwrap();
+        let json = publish_accepted_json("test/hello", 17, Some(9), false).unwrap();
         assert_eq!(
             json,
-            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"attachment_bytes":9}"#
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"attachment_bytes":9,"matched":false}"#
         );
     }
 
     #[test]
     fn publish_rate_summary_without_attachment() {
-        let json = publish_rate_summary_json("test/hello", 17, None, 30, 10.0).unwrap();
+        let json = publish_rate_summary_json("test/hello", 17, None, true, 30, 10.0).unwrap();
         assert_eq!(
             json,
-            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"published":30,"rate_hz":10.0}"#
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"matched":true,"published":30,"rate_hz":10.0}"#
         );
     }
 
     #[test]
     fn publish_rate_summary_with_attachment() {
-        let json = publish_rate_summary_json("test/hello", 17, Some(9), 5, 2.5).unwrap();
+        let json = publish_rate_summary_json("test/hello", 17, Some(9), true, 5, 2.5).unwrap();
         assert_eq!(
             json,
-            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"attachment_bytes":9,"published":5,"rate_hz":2.5}"#
+            r#"{"ok":true,"status":"accepted","key_expr":"test/hello","bytes":17,"attachment_bytes":9,"matched":true,"published":5,"rate_hz":2.5}"#
         );
     }
 }

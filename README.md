@@ -394,8 +394,11 @@ affected; this flag only applies to `query`.
   ANSI) in `--json` mode. With `sub --detect-misses`, a lost-sample report is
   a line of its own, `{"miss":{"source_zid":…,"source_eid":…,"missed":N}}`,
   placed where the gap was seen; `--count` counts messages only.
-- **`pub`** emits `{"ok":true,"status":"accepted","key_expr":...,"bytes":N}`;
+- **`pub`** emits `{"ok":true,"status":"accepted","key_expr":...,"bytes":N,"matched":B}`;
   `--rate` adds a `{...,"published":N,"rate_hz":R}` summary after the run.
+  `matched` is whether routing knew of any subscriber for the key (checked once,
+  waiting up to 500 ms); `false` means the publish reached nobody. Plain mode
+  prints a note in that case.
 - **`query`** reply errors returned by a queryable are surfaced under an
   `"errors":[...]` array (present only when non-empty), not silently dropped —
   so an endpoint that exists but rejects a request is distinguishable from one
@@ -834,7 +837,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 ### Phase 3 — Liveliness & Events
 7. [x] Liveliness subscription — live join/leave in the TUI Network space, dead tokens first
 8. [ ] Transport events — connect/disconnect notifications in TUI
-9. [ ] Pub matching — show whether subscribers exist when publishing
+9. [x] Pub matching — `pub` (and the TUI editor) say when no subscriber matches the key
 
 ### Phase 4 — Debugging Utilities
 10. [x] `zenmon keyexpr <A> <B>` — test intersection/inclusion between key expressions

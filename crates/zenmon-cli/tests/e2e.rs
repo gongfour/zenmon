@@ -381,3 +381,25 @@ fn sub_shows_deletes_and_filters_by_kind() {
         "{stdout}"
     );
 }
+
+/// `pub` says whether anyone was listening: a put to nobody still succeeds,
+/// and only `matched` tells the two apart.
+#[test]
+fn pub_reports_whether_a_subscriber_matched() {
+    let hub = Hub::open();
+    let p = prefix("matched");
+    let key = format!("{p}/cmd");
+
+    let out = run(hub.zenmon(&["--json", "pub", &key, "1"]));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["matched"], false, "{v}");
+
+    let _sub = hub.session.declare_subscriber(&key).wait().unwrap();
+    let out = run(hub.zenmon(&["--json", "pub", &key, "1"]));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["matched"], true, "{v}");
+
+    let out = run(hub.zenmon(&["pub", &format!("{p}/nobody"), "1"]));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no subscriber matches"), "{stderr}");
+}
