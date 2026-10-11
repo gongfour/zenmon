@@ -604,6 +604,10 @@ pub struct App {
     pub self_zid: Option<String>,
 
     pub liveliness_tokens: Vec<LivelinessToken>,
+    /// Key expression → position in `liveliness_tokens`. The connect-time
+    /// history replay delivers every token at once, and a linear search per
+    /// event made that burst quadratic on a large fleet.
+    liveliness_index: HashMap<String, usize>,
     pub liveliness_selected: usize,
     pub liveliness_events: VecDeque<LivelinessEventRecord>,
     pub liveliness_log_scroll: u16,
@@ -717,6 +721,7 @@ impl App {
             toast_is_error: false,
             self_zid: None,
             liveliness_tokens: Vec::new(),
+            liveliness_index: HashMap::new(),
             liveliness_selected: 0,
             liveliness_events: VecDeque::with_capacity(LIVELINESS_EVENT_CAP),
             liveliness_log_scroll: 0,
@@ -739,6 +744,47 @@ impl App {
     pub fn set_toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), std::time::Instant::now()));
         self.toast_is_error = false;
+    }
+
+    /// Forget every liveliness token and event (a new session replays them).
+    pub fn clear_liveliness(&mut self) {
+        self.liveliness_tokens.clear();
+        self.liveliness_index.clear();
+        self.liveliness_events.clear();
+        self.liveliness_selected = 0;
+        self.liveliness_log_scroll = 0;
+    }
+
+    /// The token with this key, through the index. Falls back to rebuilding
+    /// the index when it has drifted from the list (tokens pushed directly).
+    pub(crate) fn liveliness_token_mut(&mut self, key: &str) -> Option<&mut LivelinessToken> {
+        let hit = |app: &Self| {
+            app.liveliness_index.get(key).copied().filter(|&i| {
+                app.liveliness_tokens
+                    .get(i)
+                    .is_some_and(|t| t.key_expr == key)
+            })
+        };
+        let i = match hit(self) {
+            Some(i) => Some(i),
+            None if self.liveliness_index.len() != self.liveliness_tokens.len() => {
+                self.liveliness_index = self
+                    .liveliness_tokens
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| (t.key_expr.clone(), i))
+                    .collect();
+                hit(self)
+            }
+            None => None,
+        };
+        i.map(|i| &mut self.liveliness_tokens[i])
+    }
+
+    pub(crate) fn push_liveliness_token(&mut self, token: LivelinessToken) {
+        self.liveliness_index
+            .insert(token.key_expr.clone(), self.liveliness_tokens.len());
+        self.liveliness_tokens.push(token);
     }
 
     pub fn set_error_toast(&mut self, msg: impl Into<String>) {
