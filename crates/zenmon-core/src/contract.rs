@@ -255,6 +255,12 @@ pub struct Contract {
     pub services: Vec<String>,
     #[serde(default)]
     pub topics: Vec<TopicContract>,
+    /// Named observe-sets for `zenmon scenario --preset NAME`. Keys are
+    /// relative to `--prefix`, so one preset serves any fleet namespace. They
+    /// live here rather than in zenmon because which topics matter for a
+    /// diagnosis is a fact about the project, not about the tool.
+    #[serde(default)]
+    pub presets: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Messaging patterns a topic may declare.
@@ -370,6 +376,18 @@ impl Contract {
                 }
             }
             self.lint_endpoints(t, &mut warnings);
+        }
+        for (name, keys) in &self.presets {
+            if keys.is_empty() {
+                warnings.push(format!("empty preset '{}'", name));
+            }
+            for k in keys {
+                // Checked as the default `**` prefix would expand it.
+                let expanded = format!("**/{}", normalize_key(k));
+                if keyexpr::new(expanded.as_str()).is_err() {
+                    warnings.push(format!("invalid key '{}' in preset '{}'", k, name));
+                }
+            }
         }
         LintReport {
             topics: self.topics.len(),
@@ -1090,5 +1108,34 @@ topics:
         let c = Contract::from_yaml_str(V2).unwrap();
         assert_eq!(c.lint().endpoints, 10);
         assert_eq!(Contract::from_yaml_str(SAMPLE).unwrap().lint().endpoints, 0);
+    }
+
+    #[test]
+    fn presets_parse_and_default_to_empty() {
+        let yaml = r#"
+presets:
+  stall: [topic/state, "task/**/response"]
+"#;
+        let c = Contract::from_yaml_str(yaml).unwrap();
+        assert_eq!(c.presets["stall"], ["topic/state", "task/**/response"]);
+        assert!(Contract::from_yaml_str(SAMPLE).unwrap().presets.is_empty());
+    }
+
+    #[test]
+    fn lint_warns_on_empty_or_invalid_preset() {
+        let yaml = r#"
+presets:
+  none: []
+  bad: ["topic/a**b"]
+  good: ["topic/{robot}/state"]
+"#;
+        let w = Contract::from_yaml_str(yaml).unwrap().lint().warnings;
+        assert!(w.iter().any(|x| x == "empty preset 'none'"), "{w:?}");
+        assert!(
+            w.iter()
+                .any(|x| x.contains("invalid key 'topic/a**b' in preset 'bad'")),
+            "{w:?}"
+        );
+        assert!(!w.iter().any(|x| x.contains("'good'")), "{w:?}");
     }
 }

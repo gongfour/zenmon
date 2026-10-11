@@ -354,33 +354,14 @@ fn build_one_track(ordered: &[&ScenarioEvent], key: &str, field: &str) -> Value 
     entry
 }
 
-/// The mission-stall diagnosis topic set (relative suffixes, prefix applied by
-/// [`expand_preset`]).
-const STALL_TOPICS: &[&str] = &[
-    "topic/safety/safety_state",
-    "topic/safety/policy/**",
-    "topic/sensor/obstacles",
-    "topic/mission/state_snapshot",
-    "topic/navigation/robot_pose",
-    "topic/forklift/snapshot",
-    "topic/actionflow/**",
-    "task/**/feedback",
-    "task/**/response",
-];
-
-/// Expand a named preset into concrete key expressions, each prefixed with
-/// `<prefix>/`. Unknown presets yield an empty vec (the CLI treats an empty
-/// resolved observe-set as a usage error). The default prefix `**` makes the
-/// set prefix-agnostic (`**/topic/safety/safety_state`, …).
-pub fn expand_preset(name: &str, prefix: &str) -> Vec<String> {
+/// Expand a preset's relative keys (from the contract's `presets`) into
+/// concrete key expressions, each prefixed with `<prefix>/`. The default
+/// prefix `**` makes the set prefix-agnostic (`**/topic/a`, …).
+pub fn expand_preset(keys: &[String], prefix: &str) -> Vec<String> {
     let prefix = prefix.trim_end_matches('/');
-    match name {
-        "stall" => STALL_TOPICS
-            .iter()
-            .map(|suffix| format!("{}/{}", prefix, suffix))
-            .collect(),
-        _ => Vec::new(),
-    }
+    keys.iter()
+        .map(|suffix| format!("{}/{}", prefix, suffix.trim_start_matches('/')))
+        .collect()
 }
 
 #[cfg(test)]
@@ -720,30 +701,25 @@ mod tests {
         assert_eq!(ep["meta"]["trigger"]["bytes"], 7);
     }
 
+    fn preset(keys: &[&str]) -> Vec<String> {
+        keys.iter().map(|k| k.to_string()).collect()
+    }
+
     #[test]
-    fn expand_preset_stall_applies_prefix() {
-        let keys = expand_preset("stall", "myfleet");
-        assert_eq!(keys.len(), STALL_TOPICS.len());
-        assert!(keys.contains(&"myfleet/topic/safety/safety_state".to_string()));
-        assert!(keys.contains(&"myfleet/topic/safety/policy/**".to_string()));
-        assert!(keys.contains(&"myfleet/task/**/response".to_string()));
+    fn expand_preset_applies_prefix() {
+        let keys = expand_preset(&preset(&["topic/state", "task/**/response"]), "myfleet");
+        assert_eq!(keys, ["myfleet/topic/state", "myfleet/task/**/response"]);
     }
 
     #[test]
     fn expand_preset_default_prefix_is_prefix_agnostic() {
-        let keys = expand_preset("stall", "**");
-        assert!(keys.contains(&"**/topic/safety/safety_state".to_string()));
-        assert!(keys.contains(&"**/task/**/feedback".to_string()));
+        let keys = expand_preset(&preset(&["topic/state"]), "**");
+        assert_eq!(keys, ["**/topic/state"]);
     }
 
     #[test]
-    fn expand_preset_trims_trailing_slash_on_prefix() {
-        let keys = expand_preset("stall", "myfleet/");
-        assert!(keys.contains(&"myfleet/topic/sensor/obstacles".to_string()));
-    }
-
-    #[test]
-    fn expand_preset_unknown_is_empty() {
-        assert!(expand_preset("nope", "**").is_empty());
+    fn expand_preset_does_not_double_slashes() {
+        let keys = expand_preset(&preset(&["/topic/state"]), "myfleet/");
+        assert_eq!(keys, ["myfleet/topic/state"]);
     }
 }
