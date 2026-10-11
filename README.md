@@ -55,23 +55,27 @@ put `zenmon.exe` in a folder on your `PATH` (for example
 ### Linux (x86_64)
 
 ```bash
-# replace 0.3.0 with the latest release version
-curl -LO https://github.com/gongfour/zenmon/releases/download/v0.3.0/zenmon-0.3.0-x86_64-unknown-linux-gnu.tar.gz
-tar xzf zenmon-0.3.0-x86_64-unknown-linux-gnu.tar.gz -C ~/.local/bin zenmon
+VER=$(curl -fsSL https://api.github.com/repos/gongfour/zenmon/releases/latest \
+  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')   # latest version, e.g. 0.5.0
+curl -LO https://github.com/gongfour/zenmon/releases/download/v$VER/zenmon-$VER-x86_64-unknown-linux-gnu.tar.gz
+tar xzf zenmon-$VER-x86_64-unknown-linux-gnu.tar.gz -C ~/.local/bin zenmon
 zenmon --version
 ```
 
 ### macOS (Apple Silicon)
 
 ```bash
-# CLI — replace 0.3.0 with the latest release version
-curl -LO https://github.com/gongfour/zenmon/releases/download/v0.3.0/zenmon-0.3.0-aarch64-apple-darwin.tar.gz
-tar xzf zenmon-0.3.0-aarch64-apple-darwin.tar.gz -C ~/.local/bin zenmon
+VER=$(curl -fsSL https://api.github.com/repos/gongfour/zenmon/releases/latest \
+  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')   # latest version, e.g. 0.5.0
+
+# CLI
+curl -LO https://github.com/gongfour/zenmon/releases/download/v$VER/zenmon-$VER-aarch64-apple-darwin.tar.gz
+tar xzf zenmon-$VER-aarch64-apple-darwin.tar.gz -C ~/.local/bin zenmon
 
 # tray (optional) — download with curl/gh, not a browser: the bundle is
 # ad-hoc signed, not notarized, and a browser download gets quarantined
-curl -LO https://github.com/gongfour/zenmon/releases/download/v0.3.0/zenmon-tray-0.3.0-aarch64-apple-darwin.app.tar.gz
-tar xzf zenmon-tray-0.3.0-aarch64-apple-darwin.app.tar.gz -C /Applications
+curl -LO https://github.com/gongfour/zenmon/releases/download/v$VER/zenmon-tray-$VER-aarch64-apple-darwin.app.tar.gz
+tar xzf zenmon-tray-$VER-aarch64-apple-darwin.app.tar.gz -C /Applications
 ```
 
 If a browser did fetch the tray:
@@ -85,7 +89,7 @@ Other platforms — including Termux/Android — build from source; see
 Every release's `zenmon.json` lists the SHA-256 of each asset:
 
 ```bash
-sha256sum zenmon-0.3.0-x86_64-unknown-linux-gnu.tar.gz   # macOS: shasum -a 256
+sha256sum zenmon-$VER-x86_64-unknown-linux-gnu.tar.gz   # macOS: shasum -a 256
 ```
 
 ### Keeping it updated
