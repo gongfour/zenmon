@@ -220,6 +220,7 @@ zenmon query "call/system/params/get" --consolidation none
 # Bounded stream/watch (safe for agent tool calls)
 zenmon --json sub "sensor/**" --count 10        # stop after 10 messages
 zenmon --json sub "sensor/**" --duration 5s     # stop after 5s
+zenmon sub "sensor/**" --detect-misses          # also report samples lost in transit
 zenmon --json nodes --watch --count 1           # one snapshot then exit
 
 # Test how two key expressions relate (pure, no network)
@@ -389,7 +390,9 @@ affected; this flag only applies to `query`.
   `info`) emit `{"count":N,"items":[...]}` in `--json` mode. A successful empty
   result is exactly `{"count":0,"items":[]}` and exits `0`.
 - **Streaming/watch** (`sub`, `--watch`) emit NDJSON (one object per line, no
-  ANSI) in `--json` mode.
+  ANSI) in `--json` mode. With `sub --detect-misses`, a lost-sample report is
+  a line of its own, `{"miss":{"source_zid":…,"source_eid":…,"missed":N}}`,
+  placed where the gap was seen; `--count` counts messages only.
 - **`pub`** emits `{"ok":true,"status":"accepted","key_expr":...,"bytes":N}`;
   `--rate` adds a `{...,"published":N,"rate_hz":R}` summary after the run.
 - **`query`** reply errors returned by a queryable are surfaced under an
@@ -842,7 +845,8 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 14. [ ] Admin space explorer — browse `@/**` for router/plugin/storage state
 15. [ ] Storage/history query — fetch historical data from zenoh storage backends
 16. [ ] Downsampling display — show rate-limiting configuration from router
-17. [ ] Advanced pub/sub miss detection — detect dropped messages via `zenoh-ext`
+17. [x] Pub/sub miss detection — `sub --detect-misses` reports sequence gaps via `zenoh-ext`
+    (publishers must be `AdvancedPublisher`s with `sample_miss_detection`)
 
 ### Phase 6 — AI-assisted diagnosis
 18. [x] MessagePack payload auto-decode — read cross-language binary payloads as JSON

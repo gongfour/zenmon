@@ -45,6 +45,9 @@ license = "MIT"
 zenmon-core = { path = "crates/zenmon-core" }
 zenmon-tui = { path = "crates/zenmon-tui", default-features = false }
 zenoh = { version = "1.7", features = ["unstable"] }
+# zenoh-ext pins zenoh exactly (it depends on `zenoh = "=x.y.z"`), so bump the
+# two together.
+zenoh-ext = { version = "=1.9.0", features = ["unstable"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

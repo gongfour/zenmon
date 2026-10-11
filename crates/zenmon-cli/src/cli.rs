@@ -194,6 +194,14 @@ pub struct SubArgs {
     /// Cap payload/attachment preview to N bytes in --json output
     #[arg(long, value_parser = crate::duration::parse_count_arg)]
     pub max_payload_bytes: Option<u64>,
+
+    /// Report samples lost in transit, inline in the stream. Only publishers
+    /// that number their samples (zenoh-ext AdvancedPublisher with
+    /// sample_miss_detection) can be checked; plain puts still stream but
+    /// their losses are invisible. Out-of-order samples from a numbered or
+    /// timestamped source are dropped while this is on.
+    #[arg(long)]
+    pub detect_misses: bool,
 }
 
 #[derive(clap::Args, Debug)]
