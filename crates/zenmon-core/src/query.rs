@@ -75,6 +75,7 @@ pub async fn get(
                     kind,
                     attachment,
                     attachment_bytes,
+                    qos: None,
                 });
 
                 if let Some(l) = limit {

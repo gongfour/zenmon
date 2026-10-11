@@ -336,6 +336,7 @@ mod tests {
             timestamp: Some("ts".to_string()),
             kind: "PUT".to_string(),
             attachment,
+            qos: None,
         }
     }
 

@@ -222,6 +222,7 @@ zenmon --json sub "sensor/**" --count 10        # stop after 10 messages
 zenmon --json sub "sensor/**" --duration 5s     # stop after 5s
 zenmon sub "sensor/**" --detect-misses          # also report samples lost in transit
 zenmon sub "sensor/**" --kind delete            # only DELETEs (shown as `key | DELETE`)
+zenmon sub "sensor/**" --qos                    # priority, congestion control, reliability, express
 zenmon --json nodes --watch --count 1           # one snapshot then exit
 
 # Test how two key expressions relate (pure, no network)
@@ -831,7 +832,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 
 ### Phase 2 — Message Metadata
 4. [x] Encoding display — show payload encoding (`application/json`, `text/plain`, etc.) in sub/TUI
-5. [ ] QoS display — show Priority, Reliability, Congestion control per message (`--qos` flag)
+5. [x] QoS display — `sub --qos`, and the TUI detail header
 6. [x] HLC timestamp parsing — `sub --timestamp` and the TUI show UTC time + the stamping node
 
 ### Phase 3 — Liveliness & Events

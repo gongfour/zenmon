@@ -151,6 +151,7 @@ mod tests {
                 kind: "put".into(),
                 attachment: None,
                 attachment_bytes: None,
+                qos: None,
             });
         }
         h

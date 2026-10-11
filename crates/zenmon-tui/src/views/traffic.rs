@@ -307,6 +307,12 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     {
         header.push_str(&format!(" · {}", enc));
     }
+    // QoS is the publisher's choice and rarely changes, but a key sent
+    // best-effort or at background priority explains drops and lag nothing
+    // else on screen would.
+    if let Some(q) = app.topic_latest.get(&key).and_then(|(m, _)| m.qos.as_ref()) {
+        header.push_str(&format!(" · {q}"));
+    }
     header.push_str(&format!(
         " · {} held",
         app.history.get(&key).map_or(0, |h| h.len())

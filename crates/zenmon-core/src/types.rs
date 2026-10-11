@@ -23,6 +23,36 @@ pub struct ZenohMessage {
     pub attachment: Option<MessagePayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment_bytes: Option<usize>,
+    /// How the sample was sent. Not serialized by default — it would add four
+    /// fields to every line of `sub --json`; `sub --qos` adds it on request.
+    #[serde(skip)]
+    pub qos: Option<Qos>,
+}
+
+/// A sample's quality-of-service settings, as the publisher chose them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Qos {
+    /// `RealTime` … `Background`.
+    pub priority: String,
+    /// `Drop` or `Block`: what the publisher does when the network is full.
+    pub congestion_control: String,
+    /// `Reliable` or `BestEffort`.
+    pub reliability: String,
+    /// Sent without batching.
+    pub express: bool,
+}
+
+impl std::fmt::Display for Qos {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} {}{}",
+            self.priority,
+            self.congestion_control,
+            self.reliability,
+            if self.express { " express" } else { "" }
+        )
+    }
 }
 
 /// `kind` of a DELETE sample (Zenoh's `SampleKind` Display).
