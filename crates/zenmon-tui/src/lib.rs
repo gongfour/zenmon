@@ -230,11 +230,14 @@ fn spawn_liveliness_subscriber(session: &Session, tx: mpsc::UnboundedSender<AppE
         mpsc::unbounded_channel::<zenmon_core::types::LivelinessEvent>();
 
     let session = session.clone();
+    let error_tx = tx.clone();
     tokio::spawn(async move {
         if let Err(e) =
             zenmon_core::discover::subscribe_liveliness(&session, "**", liveliness_tx).await
         {
-            tracing::warn!("liveliness subscribe failed: {}", e);
+            let _ = error_tx.send(AppEvent::Error(format!(
+                "Liveliness subscription failed: {e}"
+            )));
         }
     });
 
@@ -335,15 +338,24 @@ async fn run_loop(
 
         // A publish armed in the editor. The session lives out here, so the
         // editor can only ever hand over an intent — it cannot write by itself.
+        // Sent from a task like queries are: a put that blocks on congestion
+        // must not freeze the dashboard. The outcome comes back as an event.
         if let Some((key, payload)) = app.pending_publish.take() {
-            let result = match session.lock().await.as_ref() {
-                Some(s) => zenmon_core::publish::put(s, &key, payload.into_bytes(), None)
-                    .await
-                    .map(|()| key.clone())
-                    .map_err(|e| format!("{e}")),
-                None => Err("not connected".to_string()),
-            };
-            app.publish_result = Some(result);
+            match session.lock().await.as_ref() {
+                Some(s) => {
+                    let s = s.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result =
+                            zenmon_core::publish::put(&s, &key, payload.into_bytes(), None)
+                                .await
+                                .map(|()| key)
+                                .map_err(|e| format!("{e}"));
+                        let _ = tx.send(AppEvent::Published(result));
+                    });
+                }
+                None => app.publish_result = Some(Err("not connected".to_string())),
+            }
             needs_redraw = true;
         }
 
@@ -418,10 +430,13 @@ async fn run_loop(
                         if let Some(previous) = stream_subscription.take() {
                             previous.stop().await;
                         }
-                        stream_subscription =
-                            zenmon_core::subscriber::subscribe(&s, "**", zenoh_tx.clone())
-                                .await
-                                .ok();
+                        // A failed subscribe leaves the header saying
+                        // "connected" over a traffic view that never fills, so
+                        // it must be said out loud.
+                        match zenmon_core::subscriber::subscribe(&s, "**", zenoh_tx.clone()).await {
+                            Ok(sub) => stream_subscription = Some(sub),
+                            Err(e) => app.set_error_toast(format!("Traffic subscription failed: {e}")),
+                        }
                         spawn_liveliness_subscriber(&s, tx.clone());
                         // Run diagnostics on every (re)connect so the header
                         // health dot reflects a fresh doctor report.
