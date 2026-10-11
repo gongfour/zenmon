@@ -37,9 +37,19 @@ fn build_tick_interval(period: std::time::Duration) -> tokio::time::Interval {
     tokio::time::interval(period)
 }
 
+/// Merges the dashboard's event sources into one stream with a fixed
+/// priority: terminal input (and ticks) first, then background-task results,
+/// then Zenoh traffic.
+///
+/// Three queues rather than one so a traffic burst cannot bury a keypress:
+/// with a single FIFO, a key pressed during a flood waited behind every
+/// message already queued, and the dashboard stopped answering exactly when
+/// someone was trying to use it.
 pub struct EventHandler {
     tx: mpsc::UnboundedSender<AppEvent>,
     rx: mpsc::UnboundedReceiver<AppEvent>,
+    input_rx: mpsc::UnboundedReceiver<AppEvent>,
+    zenoh_rx: mpsc::UnboundedReceiver<ZenohMessage>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -49,18 +59,8 @@ impl EventHandler {
         zenoh_rx: mpsc::UnboundedReceiver<ZenohMessage>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
+        let (key_tx, input_rx) = mpsc::unbounded_channel();
 
-        let zenoh_tx = tx.clone();
-        tokio::spawn(async move {
-            let mut zenoh_rx = zenoh_rx;
-            while let Some(msg) = zenoh_rx.recv().await {
-                if zenoh_tx.send(AppEvent::Zenoh(msg)).is_err() {
-                    break;
-                }
-            }
-        });
-
-        let key_tx = tx.clone();
         let task = tokio::spawn(async move {
             let mut reader = EventStream::new();
             let mut tick_interval = build_tick_interval(tick_delay);
@@ -104,26 +104,39 @@ impl EventHandler {
         Self {
             tx,
             rx,
+            input_rx,
+            zenoh_rx,
             _task: task,
         }
     }
 
+    /// Sender for background tasks' results (scout, doctor, publish, …).
     pub fn sender(&self) -> mpsc::UnboundedSender<AppEvent> {
         self.tx.clone()
     }
 
     pub async fn next(&mut self) -> Result<AppEvent> {
-        self.rx
-            .recv()
-            .await
-            .ok_or_else(|| color_eyre::eyre::eyre!("Event channel closed"))
+        tokio::select! {
+            biased;
+            Some(event) = self.input_rx.recv() => Ok(event),
+            Some(event) = self.rx.recv() => Ok(event),
+            Some(msg) = self.zenoh_rx.recv() => Ok(AppEvent::Zenoh(msg)),
+            else => Err(color_eyre::eyre::eyre!("Event channel closed")),
+        }
     }
 
+    /// The next already-queued event, in the same priority order as
+    /// [`EventHandler::next`], or `None` when every queue is empty.
     pub fn try_next(&mut self) -> Result<Option<AppEvent>> {
-        match self.rx.try_recv() {
-            Ok(event) => Ok(Some(event)),
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(color_eyre::eyre::eyre!("Event channel closed")),
+        if let Ok(event) = self.input_rx.try_recv() {
+            return Ok(Some(event));
+        }
+        if let Ok(event) = self.rx.try_recv() {
+            return Ok(Some(event));
+        }
+        match self.zenoh_rx.try_recv() {
+            Ok(msg) => Ok(Some(AppEvent::Zenoh(msg))),
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => Ok(None),
         }
     }
 }
@@ -155,5 +168,49 @@ mod tests {
         // ~1 year: within `Instant` range, far beyond any refresh a user sets.
         let mut interval = build_tick_interval(Duration::from_secs(365 * 24 * 3600));
         interval.tick().await;
+    }
+
+    fn message(key: &str) -> ZenohMessage {
+        ZenohMessage {
+            key_expr: key.to_string(),
+            payload: zenmon_core::types::MessagePayload::from_bytes(b"x".to_vec()),
+            encoding: String::new(),
+            payload_bytes: 1,
+            timestamp: None,
+            kind: "PUT".to_string(),
+            attachment: None,
+            attachment_bytes: None,
+        }
+    }
+
+    /// A keypress queued behind a traffic backlog is handed out first.
+    #[tokio::test]
+    async fn input_jumps_ahead_of_queued_traffic() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (key_tx, input_rx) = mpsc::unbounded_channel();
+        let (zenoh_tx, zenoh_rx) = mpsc::unbounded_channel();
+        let mut events = EventHandler {
+            tx,
+            rx,
+            input_rx,
+            zenoh_rx,
+            _task: tokio::spawn(async {}),
+        };
+
+        for i in 0..1000 {
+            zenoh_tx.send(message(&format!("k/{i}"))).unwrap();
+        }
+        events.sender().send(AppEvent::ScoutStarted).unwrap();
+        key_tx.send(AppEvent::Tick).unwrap();
+
+        assert!(matches!(events.next().await.unwrap(), AppEvent::Tick));
+        assert!(matches!(
+            events.try_next().unwrap(),
+            Some(AppEvent::ScoutStarted)
+        ));
+        match events.next().await.unwrap() {
+            AppEvent::Zenoh(m) => assert_eq!(m.key_expr, "k/0"),
+            other => panic!("expected traffic, got {other:?}"),
+        }
     }
 }
