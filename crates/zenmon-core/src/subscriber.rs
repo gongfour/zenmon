@@ -15,10 +15,13 @@
 //!   the death on its existing refresh tick without awaiting anything.
 //! - **Backpressure is available.** A `tokio::sync::mpsc::Sender` sink makes the
 //!   pump wait for capacity, which pushes back into Zenoh's own receive queue; an
-//!   `UnboundedSender` keeps the previous unbounded behaviour.
+//!   `UnboundedSender` keeps the previous unbounded behaviour; a
+//!   [`MessageSink::lossy`] sink drops (and counts) what does not fit.
 
 use crate::error::ZenmonError;
 use crate::types::{MessagePayload, ZenohMessage};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use zenoh::Session;
@@ -44,6 +47,45 @@ pub enum MessageSink {
     Bounded(mpsc::Sender<ZenohMessage>),
     /// Never blocks; the queue can grow without limit.
     Unbounded(mpsc::UnboundedSender<ZenohMessage>),
+    /// Never blocks and never grows past its capacity: a message that does
+    /// not fit is dropped and counted. Built with [`MessageSink::lossy`].
+    Lossy {
+        tx: mpsc::Sender<ZenohMessage>,
+        dropped: DropCounter,
+    },
+}
+
+/// How many messages a [`MessageSink::Lossy`] sink has dropped.
+#[derive(Debug, Clone, Default)]
+pub struct DropCounter(Arc<AtomicU64>);
+
+impl DropCounter {
+    pub fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl MessageSink {
+    /// A sink for an observer that must neither stall the network nor grow
+    /// without bound: once `capacity` messages are queued, newer ones are
+    /// dropped and counted, so the loss can be reported instead of hidden.
+    ///
+    /// Use it where the reader can fall behind indefinitely (`sub` piped into
+    /// a paused pager). A bounded sink would instead push back through Zenoh —
+    /// with `CongestionControl::Block` publishers, onto the very system being
+    /// watched.
+    pub fn lossy(capacity: usize) -> (Self, mpsc::Receiver<ZenohMessage>, DropCounter) {
+        let (tx, rx) = mpsc::channel(capacity);
+        let dropped = DropCounter::default();
+        (
+            MessageSink::Lossy {
+                tx,
+                dropped: dropped.clone(),
+            },
+            rx,
+            dropped,
+        )
+    }
 }
 
 impl From<mpsc::Sender<ZenohMessage>> for MessageSink {
@@ -69,6 +111,14 @@ impl MessageSink {
         match self {
             MessageSink::Bounded(tx) => tx.send(msg).await.map_err(|_| SinkClosed),
             MessageSink::Unbounded(tx) => tx.send(msg).map_err(|_| SinkClosed),
+            MessageSink::Lossy { tx, dropped } => match tx.try_send(msg) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    dropped.0.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => Err(SinkClosed),
+            },
         }
     }
 }
@@ -455,5 +505,27 @@ mod tests {
             .expect("stop wedged behind a full sink");
         assert!(matches!(end, SubscriptionEnd::Stopped), "{end:?}");
         session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn lossy_sink_drops_and_counts_what_does_not_fit() {
+        let (sink, mut rx, dropped) = MessageSink::lossy(2);
+        for k in ["a", "b", "c", "d"] {
+            assert!(
+                sink.send(message(k)).await.is_ok(),
+                "a full sink never blocks"
+            );
+        }
+        assert_eq!(dropped.get(), 2);
+        // The oldest are kept: the reader sees an intact prefix, then a gap.
+        assert_eq!(rx.recv().await.unwrap().key_expr, "a");
+        assert_eq!(rx.recv().await.unwrap().key_expr, "b");
+
+        drop(rx);
+        assert!(
+            sink.send(message("e")).await.is_err(),
+            "closed is not a drop"
+        );
+        assert_eq!(dropped.get(), 2);
     }
 }
