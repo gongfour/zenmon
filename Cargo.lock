@@ -7652,6 +7652,7 @@ dependencies = [
  "directories",
  "humantime",
  "rmpv",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

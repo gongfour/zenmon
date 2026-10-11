@@ -18,6 +18,7 @@ use std::process::Command;
 
 use semver::Version;
 use zenmon_core::error::{Result, ZenmonError};
+use zenmon_core::install::{cargo_bin_dir, parse_version_output, same_dir};
 
 /// Highest `.old-N` suffix tried before giving up. Reaching this means a
 /// thousand old binaries are pinned by running processes, which is a different
@@ -82,14 +83,6 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
     }
 }
 
-fn cargo_bin_dir() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("CARGO_HOME") {
-        return Some(PathBuf::from(home).join("bin"));
-    }
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".cargo").join("bin"))
-}
-
 /// Refuses to fight cargo over the same file.
 ///
 /// Overwriting `~/.cargo/bin/zenmon` would leave `.crates2.json` claiming a
@@ -109,23 +102,6 @@ pub fn refuse_cargo_managed(exe_dir: &Path, cargo_bin: Option<PathBuf>) -> Resul
          or install a release binary somewhere else on your PATH and update that one.",
         cargo_bin.display()
     )))
-}
-
-/// Compares two directories, canonicalizing when both exist so that
-/// `~/.cargo/bin` and a symlinked or `..`-containing spelling of it still
-/// match. Falls back to a plain comparison (case-insensitive on Windows) when
-/// canonicalization is not possible.
-fn same_dir(left: &Path, right: &Path) -> bool {
-    if let (Ok(left), Ok(right)) = (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
-        return left == right;
-    }
-    if cfg!(windows) {
-        left.as_os_str()
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
-    } else {
-        left == right
-    }
 }
 
 /// Pulls the executable out of a release archive.
@@ -370,13 +346,6 @@ fn verify_staged(staged: &Path, expected: &Version) -> Result<()> {
     Ok(())
 }
 
-/// Pulls the semver out of a `--version` line, tolerating anything around it.
-fn parse_version_output(output: &str) -> Option<Version> {
-    output
-        .split_whitespace()
-        .find_map(|token| Version::parse(token.trim_start_matches('v')).ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,32 +477,6 @@ mod tests {
         assert!(dir.join("other.txt").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// An exact-string self-check fails when the real output carries extra
-    /// text, so the path never passes.
-    #[test]
-    fn reads_a_version_from_output_with_extra_text_around_it() {
-        assert_eq!(
-            parse_version_output("zenmon 0.1.0"),
-            Some(Version::new(0, 1, 0))
-        );
-        assert_eq!(
-            parse_version_output("zenmon 0.2.1 (built 2026-08-05T10:00:00Z)"),
-            Some(Version::new(0, 2, 1))
-        );
-        assert_eq!(
-            parse_version_output("zenmon v1.4.0\n"),
-            Some(Version::new(1, 4, 0))
-        );
-        assert_eq!(
-            parse_version_output("zenmon 0.3.0-rc.1")
-                .unwrap()
-                .to_string(),
-            "0.3.0-rc.1"
-        );
-        assert_eq!(parse_version_output("no version here"), None);
-        assert_eq!(parse_version_output(""), None);
     }
 
     #[test]

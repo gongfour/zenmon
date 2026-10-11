@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
+use zenmon_core::install::{cargo_bin_dir, parse_version_output, same_dir};
 
 /// Windows: don't let a console window flash for every spawned `zenmon`.
 #[cfg(windows)]
@@ -81,24 +82,6 @@ fn resolve_on_path() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-fn cargo_bin_dir() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("CARGO_HOME") {
-        return Some(PathBuf::from(home).join("bin"));
-    }
-    directories::BaseDirs::new().map(|d| d.home_dir().join(".cargo").join("bin"))
-}
-
-/// Case-insensitive, trailing-separator-insensitive directory comparison —
-/// how Windows PATH entries actually behave.
-fn same_dir(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| {
-        p.to_string_lossy()
-            .trim_end_matches(['\\', '/'])
-            .to_lowercase()
-    };
-    norm(a) == norm(b)
-}
-
 fn classify(path: &Path) -> &'static str {
     let dir = path.parent().unwrap_or(path);
     if tray_dir().is_some_and(|tray| same_dir(&tray, dir)) {
@@ -110,13 +93,11 @@ fn classify(path: &Path) -> &'static str {
     "external"
 }
 
-/// Run `<exe> --version` and pull the first token that parses as a semver —
-/// the same tolerance the CLI's own staged-update self-check applies.
+/// Run `<exe> --version` and read it the way the CLI's own staged-update
+/// self-check does (one shared parser in zenmon-core).
 async fn version_of(exe: &Path) -> Result<semver::Version, String> {
     let output = run(exe, &["--version"], VERSION_TIMEOUT).await?;
-    output
-        .split_whitespace()
-        .find_map(|token| semver::Version::parse(token).ok())
+    parse_version_output(&output)
         .ok_or_else(|| format!("no version in `zenmon --version` output: {output:?}"))
 }
 
