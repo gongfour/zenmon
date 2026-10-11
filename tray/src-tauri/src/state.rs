@@ -3,7 +3,7 @@
 //! two entry points can't drift — clicking "Capture" in the tray and toggling
 //! it in the settings window run exactly the same code.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use tauri::menu::CheckMenuItem;
 use tauri::{AppHandle, Emitter, Manager, Wry};
@@ -50,12 +50,22 @@ impl AppState {
             }),
         }
     }
+
+    /// The shared state, even after a panic poisoned the lock. Every field is
+    /// valid on its own, so a handler that panicked mid-update cannot leave
+    /// anything worse than a stale value — while refusing the lock forever
+    /// would make every later click panic too and take the tray down.
+    pub fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 /// Current status, whether or not a capture task exists.
 pub fn status(app: &AppHandle) -> CaptureStatus {
     let state = app.state::<AppState>();
-    let inner = state.inner.lock().expect("state poisoned");
+    let inner = state.lock();
     match &inner.capture {
         Some(handle) => handle.status(),
         None => CaptureStatus::idle(&inner.config.app.selected_profile),
@@ -78,7 +88,7 @@ pub fn capture_active(inner: &Inner) -> bool {
 /// a failed capture's handle.
 pub fn start_capture(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let mut inner = state.inner.lock().expect("state poisoned");
+    let mut inner = state.lock();
     if capture_active(&inner) {
         return Ok(());
     }
@@ -104,7 +114,7 @@ pub fn start_capture(app: &AppHandle) -> Result<(), String> {
 /// the signal is already buffered in the watch channel.
 pub fn stop_capture(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let mut inner = state.inner.lock().expect("state poisoned");
+    let mut inner = state.lock();
     if let Some(handle) = inner.capture.take() {
         handle.stop();
     }
@@ -120,7 +130,7 @@ pub fn stop_capture(app: &AppHandle) {
 pub fn toggle_capture(app: &AppHandle) -> Result<(), String> {
     let running = {
         let state = app.state::<AppState>();
-        let inner = state.inner.lock().expect("state poisoned");
+        let inner = state.lock();
         capture_active(&inner)
     };
     if running {
@@ -134,7 +144,7 @@ pub fn toggle_capture(app: &AppHandle) -> Result<(), String> {
 pub fn select_profile(app: &AppHandle, name: &str) -> Result<(), String> {
     let was_running = {
         let state = app.state::<AppState>();
-        let mut inner = state.inner.lock().expect("state poisoned");
+        let mut inner = state.lock();
         if inner.config.app.selected_profile == name {
             return Ok(());
         }
@@ -163,7 +173,7 @@ pub fn select_profile(app: &AppHandle, name: &str) -> Result<(), String> {
 pub fn replace_config(app: &AppHandle, mut new_config: AppConfig) -> Result<(), String> {
     let was_running = {
         let state = app.state::<AppState>();
-        let mut inner = state.inner.lock().expect("state poisoned");
+        let mut inner = state.lock();
         let was_running = inner.capture.is_some();
 
         // The selected profile may have been renamed or deleted.
@@ -193,7 +203,7 @@ pub fn replace_config(app: &AppHandle, mut new_config: AppConfig) -> Result<(), 
 
 pub fn open_store_folder(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let inner = state.inner.lock().expect("state poisoned");
+    let inner = state.lock();
     let profile = inner
         .config
         .selected_profile()
@@ -243,7 +253,7 @@ fn spawn_status_watcher(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut rx = {
             let state = app.state::<AppState>();
-            let inner = state.inner.lock().expect("state poisoned");
+            let inner = state.lock();
             match &inner.capture {
                 Some(handle) => handle.status_rx.clone(),
                 None => return,

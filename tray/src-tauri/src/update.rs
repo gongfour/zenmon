@@ -10,7 +10,7 @@
 //! so a single updater check answers for the tray *and* the bundled CLI:
 //! the NSIS installer this downloads carries the matching `zenmon.exe`.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -62,7 +62,7 @@ pub struct UpdateState {
 
 pub fn current_status(app: &AppHandle) -> UpdateStatus {
     let state = app.state::<UpdateState>();
-    let last = state.last.lock().expect("update state poisoned");
+    let last = state.last.lock().unwrap_or_else(PoisonError::into_inner);
     if last.phase.is_empty() {
         UpdateStatus::new("idle")
     } else {
@@ -73,7 +73,7 @@ pub fn current_status(app: &AppHandle) -> UpdateStatus {
 fn push(app: &AppHandle, status: UpdateStatus) {
     {
         let state = app.state::<UpdateState>();
-        *state.last.lock().expect("update state poisoned") = status.clone();
+        *state.last.lock().unwrap_or_else(PoisonError::into_inner) = status.clone();
     }
     let _ = app.emit(UPDATE_STATUS_EVENT, &status);
 }
@@ -126,7 +126,7 @@ pub async fn check(app: &AppHandle) -> Result<UpdateStatus, String> {
             status.available_version = Some(update.version.clone());
             {
                 let state = app.state::<UpdateState>();
-                *state.pending.lock().expect("update state poisoned") = Some(update);
+                *state.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(update);
             }
             push(app, status.clone());
             Ok(status)
@@ -159,7 +159,11 @@ pub async fn apply(app: &AppHandle, confirmed: bool) -> Result<(), String> {
 
     let update = {
         let state = app.state::<UpdateState>();
-        let taken = state.pending.lock().expect("update state poisoned").take();
+        let taken = state
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         taken
     };
     // No stored check (or it was already consumed): do a fresh one rather
@@ -169,7 +173,11 @@ pub async fn apply(app: &AppHandle, confirmed: bool) -> Result<(), String> {
         None => {
             check(app).await?;
             let state = app.state::<UpdateState>();
-            let taken = state.pending.lock().expect("update state poisoned").take();
+            let taken = state
+                .pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
             match taken {
                 Some(update) => update,
                 None => return Err("already up to date".to_string()),
@@ -179,7 +187,7 @@ pub async fn apply(app: &AppHandle, confirmed: bool) -> Result<(), String> {
 
     let capturing = {
         let state = app.state::<AppState>();
-        let inner = state.inner.lock().expect("state poisoned");
+        let inner = state.lock();
         crate::state::capture_active(&inner)
     };
     if capturing && !confirmed {
@@ -249,7 +257,7 @@ pub async fn apply(app: &AppHandle, confirmed: bool) -> Result<(), String> {
 async fn stop_capture_for_restart(app: &AppHandle) {
     let handle = {
         let state = app.state::<AppState>();
-        let mut inner = state.inner.lock().expect("state poisoned");
+        let mut inner = state.lock();
         inner.config.app.last_capture_running = inner.capture.is_some();
         if let Err(err) = config::save(&state.paths, &inner.config) {
             tracing::error!(error = %err, "failed to save config before update");

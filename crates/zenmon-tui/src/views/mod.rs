@@ -12,7 +12,6 @@ use ratatui::Frame;
 
 /// Render a contextual empty state (why it's empty + the next action) in `area`,
 /// instead of leaving an ambiguous blank panel.
-#[allow(dead_code)]
 pub(crate) fn render_empty_state(frame: &mut Frame, area: Rect, reason: EmptyReason) {
     let (why, action) = empty_state_text(reason);
     let lines = vec![

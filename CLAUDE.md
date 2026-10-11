@@ -53,7 +53,10 @@ tray/             # Tauri app: system-tray capture toggle
 
 - `zenmon-core` is the shared library — CLI, TUI and the tray app all depend on it
 - `zenmon-tui` is a library crate called by `zenmon-cli` via `zenmon tui` subcommand
-- Single CLI binary: `zenmon` (defined in zenmon-cli/Cargo.toml)
+- Single CLI binary: `zenmon` (defined in zenmon-cli/Cargo.toml). `main.rs` only
+  parses, resolves the config and dispatches; each command lives in
+  `zenmon-cli/src/cmd/<command>.rs` and takes its clap `…Args` struct plus a
+  `Ctx` of global flags. Helpers shared across commands are in `common.rs`.
 - `tray/src-tauri` is the workspace member; `crates/` stays pure-Rust crates
 
 ## zenmon-tray (Tauri app)

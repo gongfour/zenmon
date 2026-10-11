@@ -106,7 +106,7 @@ pub fn rebuild_menu(app: &AppHandle) -> Result<(), String> {
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let (profiles, selected, capturing) = {
         let state = app.state::<AppState>();
-        let inner = state.inner.lock().expect("state poisoned");
+        let inner = state.lock();
         (
             inner
                 .config
@@ -166,11 +166,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &quit,
     ];
     let menu = Menu::with_items(app, &items)?;
-    app.state::<AppState>()
-        .inner
-        .lock()
-        .expect("state poisoned")
-        .capture_menu_item = Some(capture);
+    app.state::<AppState>().lock().capture_menu_item = Some(capture);
     Ok(menu)
 }
 
@@ -186,7 +182,7 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
 
     let icon_changed = {
         let state = app.state::<AppState>();
-        let mut inner = state.inner.lock().expect("state poisoned");
+        let mut inner = state.lock();
         if inner.tray_icon_state == Some(status.visual()) {
             false
         } else {
@@ -200,7 +196,7 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
     // leaves the state unchanged — this is what puts the checkmark back.
     let capture_item = {
         let state = app.state::<AppState>();
-        let inner = state.inner.lock().expect("state poisoned");
+        let inner = state.lock();
         inner.capture_menu_item.clone()
     };
     if let Some(item) = capture_item {
