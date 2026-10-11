@@ -10,7 +10,7 @@ use crate::state::AppState;
 #[tauri::command]
 pub fn get_config(app: AppHandle) -> AppConfig {
     let state = app.state::<AppState>();
-    let inner = state.inner.lock().expect("state poisoned");
+    let inner = state.lock();
     inner.config.clone()
 }
 

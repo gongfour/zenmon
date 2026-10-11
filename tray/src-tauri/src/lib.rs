@@ -15,7 +15,7 @@ use crate::state::AppState;
 pub fn quit(app: &AppHandle) {
     let handle = {
         let state = app.state::<AppState>();
-        let mut inner = state.inner.lock().expect("state poisoned");
+        let mut inner = state.lock();
         inner.config.app.last_capture_running = inner.capture.is_some();
         if let Err(err) = config::save(&state.paths, &inner.config) {
             tracing::error!(error = %err, "failed to save config on quit");
