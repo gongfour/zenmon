@@ -376,6 +376,17 @@ pub struct LivelinessToken {
     pub alive: bool,
 }
 
+/// This session opened or lost a transport to another node — for a client,
+/// its router; for a peer, every node it talks to directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportChange {
+    pub zid: String,
+    /// `router`, `peer` or `client`.
+    pub whatami: String,
+    /// `true` when opened, `false` when closed.
+    pub opened: bool,
+}
+
 /// Event from a liveliness subscriber.
 #[derive(Debug, Clone)]
 pub enum LivelinessEvent {

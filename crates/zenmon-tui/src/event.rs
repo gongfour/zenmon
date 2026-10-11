@@ -3,7 +3,9 @@ use crossterm::event::{EventStream, KeyEvent, KeyEventKind, MouseEvent};
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
-use zenmon_core::types::{LivelinessEvent, NodeInfo, PortScoutResult, ZenohMessage};
+use zenmon_core::types::{
+    LivelinessEvent, NodeInfo, PortScoutResult, TransportChange, ZenohMessage,
+};
 
 #[derive(Clone, Debug)]
 pub enum AppEvent {
@@ -22,6 +24,8 @@ pub enum AppEvent {
     /// A background task failed in a way the user must see (the TUI has no
     /// log output — tracing is off so it cannot corrupt the screen).
     Error(String),
+    /// This session opened or lost a transport.
+    Transport(TransportChange),
     /// Outcome of a publish armed in the editor, or why it failed.
     Published(Result<crate::app::Sent, String>),
 }

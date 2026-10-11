@@ -2937,3 +2937,49 @@ fn a_deleted_key_says_so_instead_of_showing_an_empty_value() {
         "latest says it"
     );
 }
+
+fn transport(zid: &str, opened: bool) -> AppEvent {
+    AppEvent::Transport(zenmon_core::types::TransportChange {
+        zid: zid.into(),
+        whatami: "router".into(),
+        opened,
+    })
+}
+
+#[test]
+fn losing_and_regaining_a_transport_is_announced_but_the_first_connect_is_not() {
+    let mut app = App::new("test".into());
+    app.handle_event(transport("a3f19c0011223344", true));
+    assert!(app.toast.is_none(), "the initial connect is not news");
+
+    app.handle_event(transport("a3f19c0011223344", false));
+    let (msg, _) = app.toast.clone().unwrap();
+    assert!(
+        msg.contains("Lost connection to router a3f19c0011223344"),
+        "{msg}"
+    );
+    assert!(app.toast_is_error);
+
+    app.handle_event(transport("a3f19c0011223344", true));
+    let (msg, _) = app.toast.clone().unwrap();
+    assert!(msg.contains("Reconnected"), "{msg}");
+    assert_eq!(app.transport_events.len(), 3);
+    assert!(app.transport_events[0].change.opened, "newest first");
+}
+
+#[test]
+fn a_sessions_detail_lists_its_connection_history() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::new("test".into());
+    app.space = Space::Network;
+    app.nodes.push(make_node("a3f19c0011223344", "router"));
+    app.handle_event(transport("a3f19c0011223344", true));
+    app.handle_event(transport("a3f19c0011223344", false));
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("connection history"), "section shown");
+    assert!(text.contains("CLOSE") && text.contains("OPEN"));
+}

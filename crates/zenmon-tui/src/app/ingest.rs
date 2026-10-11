@@ -77,6 +77,7 @@ impl App {
                 self.doctor_running = false;
             }
             AppEvent::Error(msg) => self.set_error_toast(msg),
+            AppEvent::Transport(change) => self.handle_transport(change),
             AppEvent::Published(result) => self.publish_result = Some(result),
         }
     }

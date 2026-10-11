@@ -369,10 +369,47 @@ fn render_session_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) {
         }
     }
 
+    // Only this session's own transports have events, so most sessions show
+    // nothing here — and an empty section for them would be noise.
+    let now = Instant::now();
+    let transport: Vec<_> = app
+        .transport_events
+        .iter()
+        .filter(|e| e.change.zid == node.zid)
+        .collect();
+    if !transport.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section("─ connection history (this session) ─"));
+        for evt in transport {
+            let (text, color) = if evt.change.opened {
+                ("OPEN ", Color::Green)
+            } else {
+                ("CLOSE", Color::Red)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {} ", ago_label(now, evt.timestamp)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(text, Style::default().fg(color)),
+            ]));
+        }
+    }
+
     let para = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((app.node_detail_scroll, 0));
     frame.render_widget(para, inner);
+}
+
+/// `  5s ago` / ` 3m 07s`, right-aligned for a column of them.
+fn ago_label(now: Instant, then: Instant) -> String {
+    let ago = now.duration_since(then).as_secs();
+    if ago < 60 {
+        format!("{:>3}s ago", ago)
+    } else {
+        format!("{:>2}m {:02}s", ago / 60, ago % 60)
+    }
 }
 
 fn render_liveliness_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) {
@@ -419,12 +456,7 @@ fn render_liveliness_detail(app: &App, frame: &mut Frame, area: Rect, i: usize) 
         )));
     } else {
         for evt in events {
-            let ago = now.duration_since(evt.timestamp);
-            let time_str = if ago.as_secs() < 60 {
-                format!("{:>3}s ago", ago.as_secs())
-            } else {
-                format!("{:>2}m {:02}s", ago.as_secs() / 60, ago.as_secs() % 60)
-            };
+            let time_str = ago_label(now, evt.timestamp);
             let (kind_text, kind_color) = if evt.is_join {
                 ("JOIN ", Color::Green)
             } else {
