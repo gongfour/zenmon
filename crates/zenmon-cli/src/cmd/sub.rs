@@ -23,11 +23,17 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
         detect_misses,
         kind,
         qos,
+        validate,
     } = args;
     warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
     let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
     // Load before opening the session so a broken contract fails fast.
     let contract = load_contract_opt(&ctx.contract)?;
+    if validate && contract.is_none() {
+        return Err(ZenmonError::invalid_input(
+            "--validate checks payloads against a contract: pass --contract or set ZENMON_CONTRACT",
+        ));
+    }
     let session = zenmon_core::session::open_session(&config).await?;
     // Lossy, not unbounded or bounded: a reader that stops (a paused
     // pager) must neither grow this process without limit nor push
@@ -54,6 +60,7 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
         pretty,
         timestamp,
         qos,
+        validate,
         max_payload_bytes,
         contract: contract.as_ref(),
     };
@@ -169,6 +176,7 @@ struct Render<'a> {
     pretty: bool,
     timestamp: bool,
     qos: bool,
+    validate: bool,
     max_payload_bytes: Option<usize>,
     contract: Option<&'a Contract>,
 }
@@ -183,14 +191,19 @@ fn render_sub_message(
         pretty,
         timestamp,
         qos,
+        validate,
         max_payload_bytes,
         contract,
     } = *r;
+    // Checked against the full payload, before any preview cap.
+    let check = contract
+        .filter(|_| validate)
+        .map(|c| c.check_payload(&msg.key_expr, &msg.payload.to_view()));
     use std::fmt::Write;
     if json {
         // Fast path preserved byte-for-byte when neither a payload cap nor a
         // contract is in play.
-        if max_payload_bytes.is_none() && contract.is_none() && !qos {
+        if max_payload_bytes.is_none() && contract.is_none() && !qos && check.is_none() {
             buf.push_str(&serde_json::to_string(msg)?);
         } else {
             let mut v = serde_json::to_value(msg)?;
@@ -208,6 +221,9 @@ fn render_sub_message(
             if qos {
                 v["qos"] = serde_json::to_value(&msg.qos)?;
             }
+            if let Some(check) = &check {
+                v["payload_check"] = serde_json::to_value(check)?;
+            }
             buf.push_str(&serde_json::to_string(&v)?);
         }
         buf.push('\n');
@@ -219,6 +235,11 @@ fn render_sub_message(
             "{}",
             contract_annotation(&c.enrich(&msg.key_expr, &msg.encoding), &msg.encoding)
         );
+    }
+    if let Some(zenmon_core::contract::PayloadCheck::Checked(violations)) = &check {
+        for v in violations {
+            let _ = writeln!(buf, "# ✗ {v}");
+        }
     }
     let payload_str = if msg.is_delete() {
         "DELETE".to_string()

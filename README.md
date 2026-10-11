@@ -498,6 +498,21 @@ zenmon -n myfleet --contract mynet.contract.yaml --json sub "topic/**"
 > Contract keys are relative to the fleet namespace, so pass `-n <fleet>` — the
 > observed keys are then relative and match the contract's keys.
 
+`sub --validate` goes further and checks every payload against its topic's
+`payload` schema: missing and unknown fields (`?` marks optional), scalar types
+with integer ranges (`u8`, `i32`, `f64`, `str`, `bool`, …), enums (`A|B|C`),
+arrays (`[T]` or a one-item list), nested objects and `$ref`s. Violations come
+inline — `# ✗ 'battery' = 300 is out of range for u8`, or
+`"payload_check":{"status":"checked","violations":[…]}` in `--json`. A type name
+zenmon does not know is accepted, not flagged. A topic marked `enveloped: true`
+(payload wrapped in a project-specific envelope) is reported as `enveloped` and
+not checked, since zenmon cannot know the wrapper's shape; envelopes are off
+unless the contract says otherwise.
+
+```bash
+zenmon --contract mynet.contract.yaml sub "topic/**" --validate
+```
+
 ### Endpoints (contract v0.2)
 
 `producers: [a]` / `consumers: [b]` name who is on a topic, but they cannot say
@@ -861,7 +876,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 19. [x] Contract consumption — enrich `sub`/`discover`; `contract` inspect subcommand
 20. [x] `zenmon scenario` — correlated diagnostic sessions (trigger, observe, track → episode JSON)
 21. [ ] Automatic `events` in the episode beyond `--track` transitions
-22. [ ] Strict contract payload validation (field/type checks against the schema)
+22. [x] Strict contract payload validation — `sub --validate`
 23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
 24. [x] `zenmon-tray` — always-on capture from the system tray, no terminal required
 
