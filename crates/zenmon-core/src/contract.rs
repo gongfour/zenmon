@@ -37,8 +37,12 @@ pub struct EncodingDefaults {
     /// MIME type used when a topic does not set its own `encoding`.
     #[serde(default = "default_encoding")]
     pub default: String,
-    /// Whether JSON payloads are MessageEnvelope-wrapped unless a topic overrides.
-    #[serde(default = "default_true")]
+    /// Whether payloads are wrapped in a project-specific envelope unless a
+    /// topic overrides. zenmon does not know an envelope's shape, so an
+    /// enveloped topic's payload schema describes the inner value and is not
+    /// checked against what arrives on the wire. Defaults to `false`: a bare
+    /// payload is the plain Zenoh case.
+    #[serde(default)]
     pub default_enveloped: bool,
 }
 
@@ -46,17 +50,13 @@ impl Default for EncodingDefaults {
     fn default() -> Self {
         Self {
             default: default_encoding(),
-            default_enveloped: true,
+            default_enveloped: false,
         }
     }
 }
 
 fn default_encoding() -> String {
     "application/json".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// One participant on a topic (contract v0.2).
@@ -588,6 +588,208 @@ pub fn validate_against_schema(schema: &Value, provided: &Value) -> Vec<String> 
         }
     }
     warnings
+}
+
+/// What [`Contract::check_payload`] could say about one message.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", content = "violations", rename_all = "snake_case")]
+pub enum PayloadCheck {
+    /// Checked against the topic's payload schema; empty means it conforms.
+    Checked(Vec<String>),
+    /// The key is not in the contract, or its entry has no payload schema.
+    NoSchema,
+    /// The topic is enveloped: the schema describes a wrapped value whose
+    /// envelope zenmon does not know, so the wire payload cannot be checked.
+    Enveloped,
+}
+
+/// Cap on violations reported per message, so one wrong array of a thousand
+/// items does not become a thousand lines.
+const MAX_VIOLATIONS: usize = 20;
+
+impl Contract {
+    /// Check a decoded payload against the payload schema declared for the
+    /// key: field presence (`?` marks optional), unknown fields, scalar types
+    /// (`f64`, `i32`, `u8`, `str`, `bool`, …, integer ranges included), enums
+    /// (`A|B|C`), arrays (`[T]` or a one-item list) and nested objects, with
+    /// `$ref`s expanded. A spec zenmon does not recognise is accepted rather
+    /// than flagged.
+    pub fn check_payload(&self, observed_key: &str, payload: &Value) -> PayloadCheck {
+        let Some(topic) = self.lookup(observed_key) else {
+            return PayloadCheck::NoSchema;
+        };
+        let Some(schema) = &topic.payload else {
+            return PayloadCheck::NoSchema;
+        };
+        if self.effective_enveloped(topic) {
+            return PayloadCheck::Enveloped;
+        }
+        let schema = self.resolve_refs(schema);
+        let mut out = Vec::new();
+        check_value(&schema, payload, "", &mut out);
+        out.truncate(MAX_VIOLATIONS);
+        PayloadCheck::Checked(out)
+    }
+}
+
+fn check_value(schema: &Value, value: &Value, path: &str, out: &mut Vec<String>) {
+    if out.len() >= MAX_VIOLATIONS {
+        return;
+    }
+    let at = |p: &str| {
+        if p.is_empty() {
+            "payload".to_string()
+        } else {
+            format!("'{p}'")
+        }
+    };
+    match schema {
+        Value::Object(fields) => {
+            if fields.contains_key("$unresolved") {
+                return;
+            }
+            let Some(obj) = value.as_object() else {
+                out.push(format!(
+                    "{} must be an object, got {}",
+                    at(path),
+                    kind_of(value)
+                ));
+                return;
+            };
+            for key in obj.keys() {
+                if !fields.contains_key(key) {
+                    out.push(format!("unknown field '{}'", join(path, key)));
+                }
+            }
+            for (key, spec) in fields {
+                let optional = spec.as_str().is_some_and(|s| s.trim_end().ends_with('?'));
+                match obj.get(key) {
+                    None | Some(Value::Null) if optional => {}
+                    None => out.push(format!("missing field '{}'", join(path, key))),
+                    Some(v) => check_value(spec, v, &join(path, key), out),
+                }
+            }
+        }
+        Value::Array(items) => {
+            let Some(arr) = value.as_array() else {
+                out.push(format!(
+                    "{} must be an array, got {}",
+                    at(path),
+                    kind_of(value)
+                ));
+                return;
+            };
+            if let Some(item) = items.first() {
+                for (i, v) in arr.iter().enumerate() {
+                    check_value(item, v, &format!("{path}[{i}]"), out);
+                }
+            }
+        }
+        Value::String(spec) => check_scalar(spec, value, path, out),
+        _ => {}
+    }
+}
+
+fn check_scalar(spec: &str, value: &Value, path: &str, out: &mut Vec<String>) {
+    let spec = spec.trim();
+    let spec = spec.strip_suffix('?').unwrap_or(spec).trim();
+    let shown = |p: &str| {
+        if p.is_empty() {
+            "payload".to_string()
+        } else {
+            format!("'{p}'")
+        }
+    };
+    if let Some(opts) = enum_options(spec) {
+        let got = value
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string());
+        if !opts.contains(&got.as_str()) {
+            out.push(format!(
+                "{} must be one of [{}], got '{}'",
+                shown(path),
+                opts.join(", "),
+                got
+            ));
+        }
+        return;
+    }
+    if let Some(inner) = spec.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let Some(arr) = value.as_array() else {
+            out.push(format!(
+                "{} must be an array, got {}",
+                shown(path),
+                kind_of(value)
+            ));
+            return;
+        };
+        for (i, v) in arr.iter().enumerate() {
+            check_scalar(inner, v, &format!("{path}[{i}]"), out);
+        }
+        return;
+    }
+    let ok = match spec {
+        "f32" | "f64" | "float" | "double" | "number" => value.is_number(),
+        "str" | "string" => value.is_string(),
+        "bool" | "boolean" => value.is_boolean(),
+        int if integer_bounds(int).is_some() => {
+            let (lo, hi) = integer_bounds(int).unwrap();
+            match value
+                .as_i64()
+                .map(i128::from)
+                .or(value.as_u64().map(i128::from))
+            {
+                Some(n) if n >= lo && n <= hi => true,
+                Some(n) => {
+                    out.push(format!("{} = {n} is out of range for {int}", shown(path)));
+                    return;
+                }
+                None => false,
+            }
+        }
+        // Unknown spec (a project type name, `any`, `json`): not ours to judge.
+        _ => true,
+    };
+    if !ok {
+        out.push(format!(
+            "{} must be {spec}, got {}",
+            shown(path),
+            kind_of(value)
+        ));
+    }
+}
+
+fn integer_bounds(spec: &str) -> Option<(i128, i128)> {
+    let bits: u32 = spec.get(1..)?.parse().ok()?;
+    if ![8, 16, 32, 64].contains(&bits) {
+        return None;
+    }
+    match spec.as_bytes()[0] {
+        b'i' => Some((-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)),
+        b'u' => Some((0, (1i128 << bits) - 1)),
+        _ => None,
+    }
+}
+
+fn join(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{path}.{key}")
+    }
+}
+
+fn kind_of(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(n) if n.is_f64() => "float",
+        Value::Number(_) => "integer",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 /// Parse pipe-delimited enum notation from a schema string value
@@ -1137,5 +1339,89 @@ presets:
             "{w:?}"
         );
         assert!(!w.iter().any(|x| x.contains("'good'")), "{w:?}");
+    }
+
+    const STRICT: &str = r#"
+types:
+  Pose2D:
+    x: f64
+    y: f64
+topics:
+  - key: robot/state
+    payload:
+      pose: { $ref: Pose2D }
+      mode: idle|run|fault
+      battery: u8
+      tags: "[str]?"
+      waypoints:
+        - { id: u32, label: str? }
+  - key: robot/wrapped
+    enveloped: true
+    payload: { v: f64 }
+"#;
+
+    fn check(payload: Value) -> PayloadCheck {
+        Contract::from_yaml_str(STRICT)
+            .unwrap()
+            .check_payload("robot/state", &payload)
+    }
+
+    #[test]
+    fn a_conforming_payload_has_no_violations() {
+        let ok = json!({
+            "pose": {"x": 1.0, "y": 2},
+            "mode": "run",
+            "battery": 87,
+            "waypoints": [{"id": 1}, {"id": 2, "label": "dock"}]
+        });
+        assert_eq!(check(ok), PayloadCheck::Checked(vec![]));
+    }
+
+    #[test]
+    fn violations_name_the_field_and_the_problem() {
+        let bad = json!({
+            "pose": {"x": "1.0"},
+            "mode": "flying",
+            "battery": 300,
+            "tags": [1],
+            "waypoints": [{"id": -1}],
+            "extra": true
+        });
+        let PayloadCheck::Checked(v) = check(bad) else {
+            panic!()
+        };
+        for expected in [
+            "unknown field 'extra'",
+            "'pose.x' must be f64, got string",
+            "missing field 'pose.y'",
+            "'mode' must be one of [idle, run, fault], got 'flying'",
+            "'battery' = 300 is out of range for u8",
+            "'tags[0]' must be str, got integer",
+            "'waypoints[0].id' = -1 is out of range for u32",
+        ] {
+            assert!(
+                v.iter().any(|x| x == expected),
+                "missing {expected:?} in {v:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn enveloped_and_undeclared_topics_are_not_checked() {
+        let c = Contract::from_yaml_str(STRICT).unwrap();
+        assert_eq!(
+            c.check_payload("robot/wrapped", &json!({})),
+            PayloadCheck::Enveloped
+        );
+        assert_eq!(
+            c.check_payload("robot/other", &json!({})),
+            PayloadCheck::NoSchema
+        );
+    }
+
+    #[test]
+    fn envelopes_are_off_unless_declared() {
+        let c = Contract::from_yaml_str("topics: [{key: a}]").unwrap();
+        assert!(!c.effective_enveloped(&c.topics[0]));
     }
 }

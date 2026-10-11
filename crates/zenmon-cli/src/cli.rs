@@ -211,6 +211,11 @@ pub struct SubArgs {
     /// express (`"qos":{...}` in --json)
     #[arg(long)]
     pub qos: bool,
+
+    /// Check each payload against the contract's schema for its key (needs
+    /// --contract or ZENMON_CONTRACT) and report violations inline
+    #[arg(long)]
+    pub validate: bool,
 }
 
 /// A sample's kind, for filtering.

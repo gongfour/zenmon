@@ -522,3 +522,66 @@ fn pub_sends_with_the_requested_qos() {
     assert_eq!(sample.priority(), Priority::RealTime);
     assert!(sample.express());
 }
+
+/// `--validate` checks each payload against the contract and says what is
+/// wrong, per message.
+#[test]
+fn sub_validate_reports_contract_violations() {
+    let hub = Hub::open();
+    let p = prefix("validate");
+    let dir = temp_dir("validate");
+    let contract = dir.join("c.contract.yaml");
+    std::fs::write(
+        &contract,
+        format!("topics:\n  - key: {p}/state\n    payload: {{ mode: idle|run, battery: u8 }}\n"),
+    )
+    .unwrap();
+
+    let session = hub.session.clone();
+    let k = format!("{p}/state");
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let feeder = thread::spawn(move || {
+        while !flag.load(Ordering::Relaxed) {
+            session
+                .put(&k, r#"{"mode":"flying","battery":300}"#)
+                .wait()
+                .unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    let sel = format!("{p}/**");
+    let out = run(hub.zenmon(&[
+        "--json",
+        "--contract",
+        contract.to_str().unwrap(),
+        "sub",
+        &sel,
+        "--validate",
+        "--count",
+        "1",
+        "--duration",
+        "20s",
+    ]));
+    stop.store(true, Ordering::Relaxed);
+    feeder.join().unwrap();
+
+    let line = &ndjson(&out)[0];
+    assert_eq!(line["payload_check"]["status"], "checked", "{line}");
+    let v: Vec<&str> = line["payload_check"]["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
+    assert!(
+        v.contains(&"'mode' must be one of [idle, run], got 'flying'"),
+        "{v:?}"
+    );
+    assert!(
+        v.contains(&"'battery' = 300 is out of range for u8"),
+        "{v:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
