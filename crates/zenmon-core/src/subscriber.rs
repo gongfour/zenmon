@@ -408,6 +408,12 @@ fn decode_sample(sample: &zenoh::sample::Sample) -> ZenohMessage {
 
     let payload_bytes = payload.len();
     let attachment_bytes = attachment.as_ref().map(|a| a.len());
+    let qos = Some(crate::types::Qos {
+        priority: format!("{:?}", sample.priority()),
+        congestion_control: format!("{:?}", sample.congestion_control()),
+        reliability: format!("{:?}", sample.reliability()),
+        express: sample.express(),
+    });
     ZenohMessage {
         key_expr,
         payload,
@@ -417,6 +423,7 @@ fn decode_sample(sample: &zenoh::sample::Sample) -> ZenohMessage {
         kind,
         attachment,
         attachment_bytes,
+        qos,
     }
 }
 
@@ -439,6 +446,7 @@ mod tests {
             kind: "PUT".to_string(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         }
     }
 

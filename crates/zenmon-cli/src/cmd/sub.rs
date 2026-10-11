@@ -22,6 +22,7 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
         max_payload_bytes,
         detect_misses,
         kind,
+        qos,
     } = args;
     warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
     let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
@@ -48,6 +49,14 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
         eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
     }
 
+    let render = Render {
+        json: ctx.json,
+        pretty,
+        timestamp,
+        qos,
+        max_payload_bytes,
+        contract: contract.as_ref(),
+    };
     // Buffered, flushed whenever the queue is drained: one syscall per
     // burst instead of per message, and no added latency when idle.
     let mut out = std::io::BufWriter::new(std::io::stdout());
@@ -78,15 +87,7 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
                 Some(msg) if kind.is_some_and(|k| !k.matches(&msg)) => {}
                 Some(msg) => {
                     rendered.clear();
-                    render_sub_message(
-                        &mut rendered,
-                        &msg,
-                        ctx.json,
-                        pretty,
-                        timestamp,
-                        max_payload_bytes,
-                        contract.as_ref(),
-                    )?;
+                    render_sub_message(&mut rendered, &msg, &render)?;
                     if !write_out(&mut out, &rendered, rx.is_empty())? {
                         break; // reader went away (`| head`)
                     }
@@ -162,20 +163,34 @@ fn render_miss(buf: &mut String, miss: &MissReport, json: bool) -> Result<(), Ze
 const SUB_QUEUE: usize = 10_000;
 
 /// Render one `sub` message into `buf` (newline-terminated lines).
-fn render_sub_message(
-    buf: &mut String,
-    msg: &zenmon_core::types::ZenohMessage,
+/// How `sub` renders each message.
+struct Render<'a> {
     json: bool,
     pretty: bool,
     timestamp: bool,
+    qos: bool,
     max_payload_bytes: Option<usize>,
-    contract: Option<&Contract>,
+    contract: Option<&'a Contract>,
+}
+
+fn render_sub_message(
+    buf: &mut String,
+    msg: &zenmon_core::types::ZenohMessage,
+    r: &Render,
 ) -> Result<(), ZenmonError> {
+    let Render {
+        json,
+        pretty,
+        timestamp,
+        qos,
+        max_payload_bytes,
+        contract,
+    } = *r;
     use std::fmt::Write;
     if json {
         // Fast path preserved byte-for-byte when neither a payload cap nor a
         // contract is in play.
-        if max_payload_bytes.is_none() && contract.is_none() {
+        if max_payload_bytes.is_none() && contract.is_none() && !qos {
             buf.push_str(&serde_json::to_string(msg)?);
         } else {
             let mut v = serde_json::to_value(msg)?;
@@ -189,6 +204,9 @@ fn render_sub_message(
             }
             if let Some(c) = contract {
                 v["contract"] = serde_json::to_value(c.enrich(&msg.key_expr, &msg.encoding))?;
+            }
+            if qos {
+                v["qos"] = serde_json::to_value(&msg.qos)?;
             }
             buf.push_str(&serde_json::to_string(&v)?);
         }
@@ -209,11 +227,14 @@ fn render_sub_message(
     } else {
         format!("{}", msg.payload)
     };
-    let att_str = msg
+    let mut att_str = msg
         .attachment
         .as_ref()
         .map(|a| format!(" [att: {}]", a))
         .unwrap_or_default();
+    if let (true, Some(q)) = (qos, &msg.qos) {
+        att_str.push_str(&format!(" [qos: {q}]"));
+    }
     if timestamp {
         // Wall-clock time and the stamping node (first 16 hex digits, as the
         // TUI shortens IDs), not the raw `<NTP64>/<id>`.

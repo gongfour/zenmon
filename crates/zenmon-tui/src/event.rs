@@ -180,6 +180,7 @@ mod tests {
             kind: "PUT".to_string(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         }
     }
 

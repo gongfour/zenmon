@@ -1282,6 +1282,7 @@ mod tests {
             kind: "PUT".to_string(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         };
         serde_json::to_string(&CaptureRecord::from_message(
             &m,

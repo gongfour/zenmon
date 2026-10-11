@@ -280,6 +280,7 @@ fn clear_network_state_clears_topics_messages_and_nodes() {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     };
     app.handle_zenoh_message(make("a"));
     app.handle_zenoh_message(make("b"));
@@ -344,6 +345,7 @@ fn clear_network_state_preserves_query_history_and_filters() {
         kind: "get".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     });
     app.topic_filter = "abc".into();
     app.history_paused = true;
@@ -646,6 +648,7 @@ fn a_new_key_never_reopens_what_the_user_closed() {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     });
     app.refresh_tree_rows();
     assert_eq!(app.tree_rows().len(), 1, "the tree stayed closed");
@@ -698,6 +701,7 @@ fn seen_ago(app: &mut App, key: &str, secs: u64) {
                 kind: "put".into(),
                 attachment: None,
                 attachment_bytes: None,
+                qos: None,
             },
             at,
         ),
@@ -795,6 +799,7 @@ fn render_traffic_with_data_wide_and_narrow_shows_key() {
             kind: "put".into(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         };
         app.topic_latest
             .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
@@ -842,6 +847,7 @@ fn render_traffic_narrow_detail_pane_does_not_panic() {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     };
     app.topic_latest
         .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
@@ -944,6 +950,7 @@ fn seed_state_change(app: &mut App) {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     };
     app.handle_zenoh_message(state("moving", 1.2, serde_json::json!(null)));
     app.handle_zenoh_message(state("stalled", 0.0, serde_json::json!("obstacle")));
@@ -1010,6 +1017,7 @@ fn a_key_seen_once_says_there_is_no_baseline_rather_than_marking_everything() {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     });
     app.auto_expand();
     app.refresh_tree_rows();
@@ -1048,6 +1056,7 @@ fn seed_one(app: &mut App, key: &str, encoding: &str) {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     });
     app.auto_expand();
     app.refresh_tree_rows();
@@ -1128,6 +1137,7 @@ fn seed_draining_battery(app: &mut App, n: i64) {
             kind: "put".into(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         });
     }
     app.auto_expand();
@@ -1194,6 +1204,7 @@ fn a_wide_value_pushes_the_range_onto_its_own_line_instead_of_wrapping() {
             kind: "put".into(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         });
     }
     app.auto_expand();
@@ -1257,6 +1268,7 @@ fn p_on_a_key_with_nothing_numeric_says_so_instead_of_opening_an_empty_list() {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     });
     app.auto_expand();
     app.refresh_tree_rows();
@@ -1613,6 +1625,7 @@ fn numbered(key: &str, n: i64) -> ZenohMessage {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     }
 }
 
@@ -1941,6 +1954,7 @@ fn a_quiet_keys_history_survives_a_noisy_neighbour() {
         kind: "put".into(),
         attachment: None,
         attachment_bytes: None,
+        qos: None,
     };
     app.handle_zenoh_message(msg("agv/quiet/pose", 1));
     app.handle_zenoh_message(msg("agv/quiet/pose", 2));
@@ -1991,6 +2005,7 @@ fn dump_frames() {
             kind: "put".into(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         };
         app.topic_latest
             .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
@@ -2074,6 +2089,7 @@ fn dump_frames() {
             kind: "put".into(),
             attachment: None,
             attachment_bytes: None,
+            qos: None,
         };
         app.handle_zenoh_message(state("moving", 1.2, serde_json::json!(null)));
         app.handle_zenoh_message(state("stalled", 0.0, serde_json::json!("obstacle")));
@@ -2109,6 +2125,7 @@ fn dump_frames() {
                 kind: "put".into(),
                 attachment: None,
                 attachment_bytes: None,
+                qos: None,
             });
         }
         app.auto_expand();

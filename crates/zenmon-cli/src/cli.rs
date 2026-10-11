@@ -206,6 +206,11 @@ pub struct SubArgs {
     /// Only show samples of this kind (default: both)
     #[arg(long, value_enum)]
     pub kind: Option<KindArg>,
+
+    /// Show each sample's QoS: priority, congestion control, reliability,
+    /// express (`"qos":{...}` in --json)
+    #[arg(long)]
+    pub qos: bool,
 }
 
 /// A sample's kind, for filtering.

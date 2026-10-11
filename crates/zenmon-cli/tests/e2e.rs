@@ -448,3 +448,48 @@ fn sub_timestamp_is_readable() {
     );
     assert!(line.trim_end().ends_with(&format!("{key} | 1")), "{line}");
 }
+
+/// `--qos` carries the publisher's QoS choices through to the output.
+#[test]
+fn sub_qos_shows_the_publishers_settings() {
+    use zenoh::qos::{CongestionControl, Priority};
+
+    let hub = Hub::open();
+    let p = prefix("qos");
+    let session = hub.session.clone();
+    let k = format!("{p}/a");
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let feeder = thread::spawn(move || {
+        while !flag.load(Ordering::Relaxed) {
+            session
+                .put(&k, "1")
+                .priority(Priority::RealTime)
+                .congestion_control(CongestionControl::Block)
+                .express(true)
+                .wait()
+                .unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    let sel = format!("{p}/**");
+    let out = run(hub.zenmon(&[
+        "--json",
+        "sub",
+        &sel,
+        "--qos",
+        "--count",
+        "1",
+        "--duration",
+        "20s",
+    ]));
+    stop.store(true, Ordering::Relaxed);
+    feeder.join().unwrap();
+
+    let line = &ndjson(&out)[0];
+    assert_eq!(line["qos"]["priority"], "RealTime", "{line}");
+    assert_eq!(line["qos"]["congestion_control"], "Block", "{line}");
+    assert_eq!(line["qos"]["express"], true, "{line}");
+    assert!(line["qos"]["reliability"].is_string(), "{line}");
+}
