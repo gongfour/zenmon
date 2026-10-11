@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 zenoh.workspace = true
+# `subscriber` only: sample-miss detection against zenoh-ext AdvancedPublishers.
+zenoh-ext.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

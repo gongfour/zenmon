@@ -100,6 +100,7 @@ pub(crate) fn namespace_redundant_prefix(key: &str, namespace: Option<&str>) -> 
     })
 }
 
+/// Emit the redundant-namespace warning for each key, if any.
 pub(crate) fn warn_redundant_namespace<'a>(
     keys: impl IntoIterator<Item = &'a str>,
     namespace: Option<&str>,

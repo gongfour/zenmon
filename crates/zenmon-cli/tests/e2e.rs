@@ -280,3 +280,63 @@ fn plain_sub_stdout_carries_only_messages() {
         assert!(line.starts_with(&format!("{p}/state | ")), "{line}");
     }
 }
+
+/// A gap in a numbered publisher's sequence shows up inline as a `miss` line,
+/// between the messages either side of it.
+#[test]
+fn detect_misses_reports_a_sequence_gap_inline() {
+    use zenoh::sample::SourceInfo;
+
+    let hub = Hub::open();
+    let p = prefix("misses");
+    let key = format!("{p}/a");
+    let publisher = hub.session.declare_publisher(key.clone()).wait().unwrap();
+    let id = publisher.id();
+
+    // Keep re-sending the same gapped sequence (fresh numbers each round) until
+    // zenmon has seen enough, since its subscription lands at an unknown time.
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let feeder = thread::spawn(move || {
+        let mut base = 0u32;
+        while !flag.load(Ordering::Relaxed) {
+            for sn in [base + 1, base + 2, base + 6] {
+                publisher
+                    .put(sn.to_string())
+                    .source_info(SourceInfo::new(id, sn))
+                    .wait()
+                    .unwrap();
+            }
+            base += 10;
+            thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    let sel = format!("{p}/**");
+    let out = run(hub.zenmon(&[
+        "--json",
+        "sub",
+        &sel,
+        "--detect-misses",
+        "--count",
+        "6",
+        "--duration",
+        "20s",
+    ]));
+    stop.store(true, Ordering::Relaxed);
+    feeder.join().unwrap();
+
+    let lines = ndjson(&out);
+    let misses: Vec<&Value> = lines.iter().filter(|l| l.get("miss").is_some()).collect();
+    assert!(!misses.is_empty(), "{lines:?}");
+    // Within a round the gap is 3 (2 → 6); between rounds it is 4 (6 → 11).
+    for m in &misses {
+        let n = m["miss"]["missed"].as_u64().unwrap();
+        assert!(n == 3 || n == 4, "{m}");
+        assert_eq!(m["miss"]["source_eid"], id.eid(), "{m}");
+    }
+    let messages = lines.iter().filter(|l| l.get("key_expr").is_some()).count();
+    assert_eq!(messages, 6, "--count counts messages, not misses");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("missed "), "{stderr}");
+}

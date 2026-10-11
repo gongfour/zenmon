@@ -222,6 +222,18 @@ impl Drop for Subscription {
     }
 }
 
+/// Samples a subscription saw go missing: a gap in one publisher's sequence
+/// numbers, as reported by zenoh-ext.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MissReport {
+    /// Session of the publisher that lost samples.
+    pub source_zid: String,
+    /// The publisher entity within that session.
+    pub source_eid: u32,
+    /// How many samples were skipped.
+    pub missed: u32,
+}
+
 /// Subscribe to a key expression, pumping decoded messages into `sink`.
 ///
 /// `sink` accepts either `mpsc::Sender<ZenohMessage>` (backpressure) or
@@ -235,8 +247,100 @@ pub async fn subscribe(
     key_expr: &str,
     sink: impl Into<MessageSink>,
 ) -> Result<Subscription, ZenmonError> {
-    let sink = sink.into();
-    let subscriber = session.declare_subscriber(key_expr).await?;
+    subscribe_with(session, key_expr, sink.into(), None).await
+}
+
+/// [`subscribe`], also reporting samples that went missing to `misses`.
+///
+/// Misses are only visible from publishers that number their samples: a
+/// zenoh-ext `AdvancedPublisher` with `sample_miss_detection` enabled. A plain
+/// `put` carries no sequence number, so its losses cannot be seen by anyone;
+/// its messages still arrive here as usual.
+///
+/// This declares a zenoh-ext `AdvancedSubscriber`, which also drops samples
+/// that arrive out of order from a numbered or timestamped source (an older
+/// sequence number or timestamp than one already delivered). That is the
+/// trade for gap detection, and why this is opt-in.
+pub async fn subscribe_detecting_misses(
+    session: &Session,
+    key_expr: &str,
+    sink: impl Into<MessageSink>,
+    misses: mpsc::UnboundedSender<MissReport>,
+) -> Result<Subscription, ZenmonError> {
+    subscribe_with(session, key_expr, sink.into(), Some(misses)).await
+}
+
+type SampleFifo = zenoh::handlers::FifoChannelHandler<zenoh::sample::Sample>;
+
+/// The declared subscriber behind a [`Subscription`].
+enum Declared {
+    Plain(zenoh::pubsub::Subscriber<SampleFifo>),
+    Advanced {
+        subscriber: zenoh_ext::AdvancedSubscriber<SampleFifo>,
+        misses: zenoh_ext::SampleMissListener<zenoh::handlers::FifoChannelHandler<zenoh_ext::Miss>>,
+        report: mpsc::UnboundedSender<MissReport>,
+    },
+}
+
+impl Declared {
+    fn samples(&self) -> &SampleFifo {
+        match self {
+            Declared::Plain(s) => s.handler(),
+            Declared::Advanced { subscriber, .. } => subscriber.handler(),
+        }
+    }
+
+    /// The next miss, or never for a plain subscriber.
+    async fn next_miss(&self) -> Option<zenoh_ext::Miss> {
+        match self {
+            Declared::Plain(_) => std::future::pending().await,
+            Declared::Advanced { misses, .. } => misses.recv_async().await.ok(),
+        }
+    }
+
+    fn report(&self, miss: zenoh_ext::Miss) {
+        if let Declared::Advanced { report, .. } = self {
+            let source = miss.source();
+            let _ = report.send(MissReport {
+                source_zid: source.zid().to_string(),
+                source_eid: source.eid(),
+                missed: miss.nb(),
+            });
+        }
+    }
+
+    async fn undeclare(self) -> Result<(), zenoh::Error> {
+        match self {
+            Declared::Plain(s) => s.undeclare().await,
+            Declared::Advanced {
+                subscriber, misses, ..
+            } => {
+                misses.undeclare().await?;
+                subscriber.undeclare().await
+            }
+        }
+    }
+}
+
+async fn subscribe_with(
+    session: &Session,
+    key_expr: &str,
+    sink: MessageSink,
+    misses: Option<mpsc::UnboundedSender<MissReport>>,
+) -> Result<Subscription, ZenmonError> {
+    let declared = match misses {
+        None => Declared::Plain(session.declare_subscriber(key_expr).await?),
+        Some(report) => {
+            use zenoh_ext::AdvancedSubscriberBuilderExt;
+            let subscriber = session.declare_subscriber(key_expr).advanced().await?;
+            let misses = subscriber.sample_miss_listener().await?;
+            Declared::Advanced {
+                subscriber,
+                misses,
+                report,
+            }
+        }
+    };
     tracing::info!(key_expr = %key_expr, "Subscribed");
 
     let (stop_tx, mut stop_rx) = oneshot::channel();
@@ -249,7 +353,8 @@ pub async fn subscribe(
                 // Stop first: a firehose on the key must not starve the signal.
                 biased;
                 _ = &mut stop_rx => break SubscriptionEnd::Stopped,
-                received = subscriber.recv_async() => {
+                Some(miss) = declared.next_miss() => declared.report(miss),
+                received = declared.samples().recv_async() => {
                     // The only error flume reports here is "disconnected",
                     // i.e. the subscriber went away with its session.
                     let Ok(sample) = received else {
@@ -273,7 +378,7 @@ pub async fn subscribe(
 
         // Undeclare explicitly rather than leaving it to the drop glue, so the
         // subscriber is gone by the time `stop()` returns.
-        match subscriber.undeclare().await {
+        match declared.undeclare().await {
             Ok(()) => {
                 tracing::debug!(key_expr = %task_key, ?end, "Subscription ended");
                 end
@@ -527,5 +632,64 @@ mod tests {
             "closed is not a drop"
         );
         assert_eq!(dropped.get(), 2);
+    }
+
+    /// A gap in one publisher's sequence numbers is reported with its size,
+    /// and the samples on either side of it are still delivered.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sequence_gap_is_reported_as_a_miss() {
+        use zenoh::sample::SourceInfo;
+
+        let session = local_session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (miss_tx, mut miss_rx) = mpsc::unbounded_channel();
+        let sub = subscribe_detecting_misses(&session, "test/miss/**", tx, miss_tx)
+            .await
+            .unwrap();
+
+        let publisher = session.declare_publisher("test/miss/a").await.unwrap();
+        let id = publisher.id();
+        for sn in [1, 2, 6] {
+            publisher
+                .put(sn.to_string())
+                .source_info(SourceInfo::new(id, sn))
+                .await
+                .unwrap();
+        }
+
+        for _ in 0..3 {
+            recv_one(&mut rx).await;
+        }
+        let miss = tokio::time::timeout(Duration::from_secs(5), miss_rx.recv())
+            .await
+            .expect("timed out waiting for the miss")
+            .expect("miss channel closed");
+        assert_eq!(miss.missed, 3);
+        assert_eq!(miss.source_zid, id.zid().to_string());
+        assert_eq!(miss.source_eid, id.eid());
+        assert!(miss_rx.try_recv().is_err(), "one gap, one report");
+
+        assert!(!sub.stop().await.is_error());
+    }
+
+    /// Unnumbered publications pass straight through a miss-detecting
+    /// subscription and never count as misses.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_puts_flow_through_miss_detection() {
+        let session = local_session().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (miss_tx, mut miss_rx) = mpsc::unbounded_channel();
+        let sub = subscribe_detecting_misses(&session, "test/plain/**", tx, miss_tx)
+            .await
+            .unwrap();
+
+        for i in 0..3 {
+            session.put("test/plain/a", i.to_string()).await.unwrap();
+        }
+        for _ in 0..3 {
+            recv_one(&mut rx).await;
+        }
+        assert!(miss_rx.try_recv().is_err());
+        assert!(!sub.stop().await.is_error());
     }
 }

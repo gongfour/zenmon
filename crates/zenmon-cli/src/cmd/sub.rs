@@ -3,6 +3,7 @@
 use zenmon_core::config::ZenmonConfig;
 use zenmon_core::contract::Contract;
 use zenmon_core::error::ZenmonError;
+use zenmon_core::subscriber::MissReport;
 
 use super::Ctx;
 use crate::cli::SubArgs;
@@ -19,6 +20,7 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
         count,
         duration,
         max_payload_bytes,
+        detect_misses,
     } = args;
     warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
     let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
@@ -29,7 +31,17 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
     // pager) must neither grow this process without limit nor push
     // back through Zenoh onto the publishers being watched.
     let (sink, mut rx, dropped) = zenmon_core::subscriber::MessageSink::lossy(SUB_QUEUE);
-    let subscription = zenmon_core::subscriber::subscribe(&session, &key_expr, sink).await?;
+    // Misses are rare and tiny; without --detect-misses the channel simply
+    // never yields.
+    let (miss_tx, mut miss_rx) = tokio::sync::mpsc::unbounded_channel();
+    let subscription = if detect_misses {
+        zenmon_core::subscriber::subscribe_detecting_misses(&session, &key_expr, sink, miss_tx)
+            .await?
+    } else {
+        drop(miss_tx);
+        zenmon_core::subscriber::subscribe(&session, &key_expr, sink).await?
+    };
+    let mut missed: MissTally = MissTally::default();
 
     if !ctx.json {
         eprintln!("Subscribing to '{}' ... (Ctrl+C to stop)", key_expr);
@@ -51,6 +63,14 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
                     eprintln!("\nStopped.");
                 }
                 break;
+            }
+            Some(miss) = miss_rx.recv() => {
+                missed.add(&miss);
+                rendered.clear();
+                render_miss(&mut rendered, &miss, ctx.json)?;
+                if !write_out(&mut out, &rendered, rx.is_empty())? {
+                    break;
+                }
             }
             item = rx.recv() => match item {
                 Some(msg) => {
@@ -78,6 +98,9 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
     let _ = std::io::Write::flush(&mut out);
     subscription.stop().await;
     session.close().await.map_err(internal_err)?;
+    if detect_misses {
+        eprintln!("{}", missed.summary());
+    }
     let dropped = dropped.get();
     if dropped > 0 {
         eprintln!(
@@ -88,7 +111,50 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
     Ok(())
 }
 
-/// Emit the redundant-namespace warning for each key, if any.
+/// Running totals for `--detect-misses`, for the summary on exit.
+#[derive(Default)]
+struct MissTally {
+    samples: u64,
+    sources: std::collections::HashSet<(String, u32)>,
+}
+
+impl MissTally {
+    fn add(&mut self, miss: &MissReport) {
+        self.samples += u64::from(miss.missed);
+        self.sources
+            .insert((miss.source_zid.clone(), miss.source_eid));
+    }
+
+    fn summary(&self) -> String {
+        if self.samples == 0 {
+            "no samples missed from sequence-numbered publishers".to_string()
+        } else {
+            format!(
+                "missed {} sample(s) from {} publisher(s)",
+                self.samples,
+                self.sources.len()
+            )
+        }
+    }
+}
+
+/// A miss, as a stream line: `{"miss":{...}}` in --json (told apart from
+/// messages by its single `miss` key), a marked line otherwise.
+fn render_miss(buf: &mut String, miss: &MissReport, json: bool) -> Result<(), ZenmonError> {
+    if json {
+        buf.push_str(&serde_json::to_string(
+            &serde_json::json!({ "miss": miss }),
+        )?);
+        buf.push('\n');
+    } else {
+        buf.push_str(&format!(
+            "!! missed {} sample(s) from {}:{}\n",
+            miss.missed, miss.source_zid, miss.source_eid
+        ));
+    }
+    Ok(())
+}
+
 /// Messages `sub` queues for a slow reader before it starts dropping.
 const SUB_QUEUE: usize = 10_000;
 
