@@ -863,7 +863,7 @@ mod tests {
         );
     }
 
-    /// Multiple queryables on a shared key (e.g. dotori `call/*` services) are
+    /// Multiple queryables on a shared key (e.g. replicated `call/*` services) are
     /// invisible under default consolidation — only the fastest reply survives.
     /// `--consolidation none` must parse so every reply can be observed.
     #[test]

@@ -19,7 +19,7 @@ const ID_CHECK_UPDATES: &str = "check_updates";
 const ID_QUIT: &str = "quit";
 const PROFILE_PREFIX: &str = "profile:";
 
-// Status colors from dotori's launcher palette (`gui/src/styles/app.css`):
+// Status colors from the app palette (`tray/src/styles/app.css`):
 // --go / --warn / --stop / --faint. Accent blue is deliberately absent —
 // in that design accent means "interactive", never "status".
 const COLOR_ONLINE: [u8; 4] = [0x15, 0x80, 0x3D, 0xFF];

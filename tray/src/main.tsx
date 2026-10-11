@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 // Self-hosted fonts (bundled by Vite → no external requests, CSP-safe).
-// One UI face + one mono face, same as dotori's launcher.
+// One UI face + one mono face.
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";

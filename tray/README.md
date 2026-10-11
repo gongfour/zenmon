@@ -237,10 +237,10 @@ cannot be disabled. Therefore:
   menu and the settings window like every other operation, and the frontend
   only listens for `update-status` events (covered by `core:default`). Add
   `updater:default` only if some JS ever calls the plugin directly.
-- **Styling is ported from dotori's launcher** (`dotori_rcs/gui/src/styles/app.css`,
-  spec `docs/gui_design.md`) so the two apps read as one toolchain: flat
-  surfaces separated by lines, accent blue means *interactive* and never status,
-  status uses go/warn/stop, shadows only on things that dismiss.
+- **Styling is specified in `src/styles/app.css`** (the tokens and their
+  rules live there, nowhere else): flat surfaces separated by lines, accent
+  blue means *interactive* and never status, status uses go/warn/stop, shadows
+  only on things that dismiss.
 - **The settings window's CSS viewport can be narrow** (~450 px on a 200 % DPI
   display), so the form has a stacking breakpoint at 620 px. Check both widths
   when adding rows.

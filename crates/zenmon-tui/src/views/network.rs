@@ -449,8 +449,8 @@ mod tests {
 
     #[test]
     fn a_ros_style_instance_suffix_is_split_off_for_dimming() {
-        let (stem, hash) = split_instance_hash("dotori/ph_eb/node/mission_manager_a6f69029");
-        assert_eq!(stem, "dotori/ph_eb/node/mission_manager");
+        let (stem, hash) = split_instance_hash("demo/robot1/node/mission_manager_a6f69029");
+        assert_eq!(stem, "demo/robot1/node/mission_manager");
         assert_eq!(hash, "_a6f69029");
     }
 
@@ -458,9 +458,9 @@ mod tests {
     fn a_key_without_the_convention_is_passed_through_whole() {
         // zenoh attaches no meaning to the suffix, so a key that does not use
         // it must not be silently truncated — which is exactly how the old
-        // group heuristic went wrong on `stack/kang/ph_eb`.
+        // group heuristic went wrong on `stack/alice/robot_1`.
         for key in [
-            "dotori/ph_eb/stack/kang/ph_eb",
+            "demo/robot_1/stack/alice/robot_1",
             "fleet/robot1",
             "a_b",
             "plain",
