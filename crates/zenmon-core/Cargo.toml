@@ -20,3 +20,5 @@ zstd.workspace = true
 # platform config directory. Not used by any Zenoh primitive in this crate.
 toml.workspace = true
 directories.workspace = true
+# `install` only: parsing the version a zenmon binary reports.
+semver = "1"

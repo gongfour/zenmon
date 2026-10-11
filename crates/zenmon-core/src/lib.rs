@@ -141,6 +141,7 @@ pub mod trace;
 // ---------------------------------------------------------------------------
 
 pub mod contract;
+pub mod install;
 pub mod output;
 /// Named release-remote registry backing `zenmon update`.
 pub mod remotes;
