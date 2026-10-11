@@ -235,6 +235,9 @@ zenmon --json sub "sensor/**"
 # Publish repeatedly at a fixed rate (bounded — safe for agent tool calls)
 zenmon pub cmd/drive '{"v":0.3}' --rate 10 --duration 5s
 
+# Publish the way a real producer does (QoS changes behaviour under load)
+zenmon pub cmd/estop '{"stop":true}' --congestion block --priority real-time --express
+
 # Record a correlated diagnostic session → one episode JSON to reason over
 zenmon --json scenario --pub cmd/drive '{"v":0.3}' --pub-rate 10 --pub-for 5s \
   --observe state/pose --track state/pose:x --for 6s
@@ -843,7 +846,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 ### Phase 4 — Debugging Utilities
 10. [x] `zenmon keyexpr <A> <B>` — test intersection/inclusion between key expressions
 11. [x] `zenmon pub --rate <HZ>` — repeated publish at fixed frequency for testing
-12. [ ] `zenmon pub --congestion block|drop` — congestion control mode selection
+12. [x] `zenmon pub --congestion block|drop` (plus `--priority`, `--express`) — send like the real publisher
 13. [x] DELETE message display — struck-through key and a DELETE line in the TUI, `sub --kind`
 
 ### Phase 5 — Advanced Inspection

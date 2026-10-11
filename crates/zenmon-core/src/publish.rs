@@ -10,6 +10,16 @@ use zenoh::Session;
 
 use crate::error::{Result, ZenmonError};
 
+/// How a put is sent. `Default` is Zenoh's own defaults (data priority,
+/// drop when congested, batched), so a caller that sets nothing changes
+/// nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PutQos {
+    pub priority: Option<zenoh::qos::Priority>,
+    pub congestion_control: Option<zenoh::qos::CongestionControl>,
+    pub express: bool,
+}
+
 /// Put `value` on `key_expr`, optionally with an attachment.
 ///
 /// One shot. Repeating at a rate is the caller's business: the CLI spends a
@@ -20,7 +30,25 @@ pub async fn put(
     value: Vec<u8>,
     attachment: Option<&[u8]>,
 ) -> Result<()> {
-    let mut builder = session.put(key_expr, value);
+    put_with(session, key_expr, value, attachment, PutQos::default()).await
+}
+
+/// [`put`] with explicit QoS — to reproduce how a real publisher sends, since
+/// a `Block` publisher and a `Drop` one behave differently under load.
+pub async fn put_with(
+    session: &Session,
+    key_expr: &str,
+    value: Vec<u8>,
+    attachment: Option<&[u8]>,
+    qos: PutQos,
+) -> Result<()> {
+    let mut builder = session.put(key_expr, value).express(qos.express);
+    if let Some(p) = qos.priority {
+        builder = builder.priority(p);
+    }
+    if let Some(cc) = qos.congestion_control {
+        builder = builder.congestion_control(cc);
+    }
     if let Some(bytes) = attachment {
         builder = builder.attachment(bytes.to_vec());
     }

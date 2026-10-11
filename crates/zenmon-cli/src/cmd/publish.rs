@@ -22,7 +22,15 @@ pub async fn publish(ctx: &Ctx, config: ZenmonConfig, args: PubArgs) -> Result<(
         rate,
         count,
         duration,
+        congestion,
+        priority,
+        express,
     } = args;
+    let qos = zenmon_core::publish::PutQos {
+        priority: priority.map(Into::into),
+        congestion_control: congestion.map(Into::into),
+        express,
+    };
     warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
     let value = resolve_payload_arg(&value)?;
     let session = zenmon_core::session::open_session(&config).await?;
@@ -42,13 +50,14 @@ pub async fn publish(ctx: &Ctx, config: ZenmonConfig, args: PubArgs) -> Result<(
     // publish path so the two cannot drift on attachments or error
     // mapping.
     let publish_once = || async {
-        zenmon_core::publish::put(
+        zenmon_core::publish::put_with(
             &session,
             &key_expr,
             // Same wire bytes either way: zenoh encodes a String as
             // its UTF-8, which is what `resolve_payload_arg` validated.
             value.clone().into_bytes(),
             att.as_ref().map(|a| a.as_bytes()),
+            qos,
         )
         .await
     };
