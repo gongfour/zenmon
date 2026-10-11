@@ -64,3 +64,52 @@ jobs:
         run: cargo check --locked -p zenmon-cli --no-default-features --features tui
       - name: clippy TUI without clipboard
         run: cargo clippy --locked -p zenmon-cli --no-default-features --features tui --all-targets
+
+  # The release ships Windows and macOS binaries too, and until this job those
+  # platforms were first compiled when a tag was cut — a platform-specific
+  # break (paths, file locking, rename semantics in `update`) surfaced as a
+  # failed release instead of a red PR. Tests only: lints stay gated on ubuntu
+  # above, for the same reason release.yml drops `-D warnings` off-Linux.
+  test-native:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test
+        run: cargo test --locked --workspace --exclude zenmon-tray
+
+  # The tray is excluded from the jobs above (GTK on Linux, see there), which
+  # left it compiled only by release.yml. Lint it on Windows, its primary
+  # platform. `npm run build` first: tauri's build script needs the frontend
+  # dist to exist. Linting needs no Tauri CLI — the dev-vs-release split only
+  # matters for a binary someone runs, and nothing here is run.
+  tray:
+    name: tray (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: tray/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: install frontend deps
+        working-directory: tray
+        run: npm ci
+      - name: typecheck + build frontend
+        working-directory: tray
+        run: npm run build
+      - name: clippy
+        run: cargo clippy --locked -p zenmon-tray --all-targets
