@@ -769,6 +769,7 @@ than looking broken.
 | `/` | filter (searches inside collapsed groups) |
 | `L` / `Q` | Live mode / compose a query |
 | `D` | toggle change highlighting |
+| `b` | pin this message as the diff baseline — later ones are compared to it (again to unpin) |
 | `p` / `P` | plot a numeric field / clear it |
 | `space` | freeze the payload and history being read |
 | `y` / `Y` | copy payload / key |
@@ -913,17 +914,17 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 22. [x] Strict contract payload validation — `sub --validate`
 23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
 24. [x] `zenmon mcp` — the read-only commands as MCP tools
-24. [x] `zenmon-tray` — always-on capture from the system tray, no terminal required
+25. [x] `zenmon-tray` — always-on capture from the system tray, no terminal required
 
 ### Phase 7 — Reading a fleet
-25. [x] Hierarchical key tree — collapse a namespace to a handful of rows, fold high-cardinality branches, filter inside them
-26. [x] Per-key history + payload diff — mark what changed since the previous message on a key
-27. [x] Field sparklines — plot any numeric field of a payload over its history
-28. [x] Publish from the TUI, behind an opt-in flag and a confirmation
-29. [x] Saved views — restore a filter, expansion and plots by name
-30. [x] Aggregate rows for a folded branch — branch rows carry their summed rate, and a branch's detail
+26. [x] Hierarchical key tree — collapse a namespace to a handful of rows, fold high-cardinality branches, filter inside them
+27. [x] Per-key history + payload diff — mark what changed since the previous message on a key
+28. [x] Field sparklines — plot any numeric field of a payload over its history
+29. [x] Publish from the TUI, behind an opt-in flag and a confirmation
+30. [x] Saved views — restore a filter, expansion and plots by name
+31. [x] Aggregate rows for a folded branch — branch rows carry their summed rate, and a branch's detail
     groups it by kind of key (`*/pose  200 keys  2000 Hz`)
-31. [ ] Pinned diff baseline — compare against a message you chose, not just the previous one
+32. [x] Pinned diff baseline — `b` pins a message; later ones are diffed against it
 
 ## License
 

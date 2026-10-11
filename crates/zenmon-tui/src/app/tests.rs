@@ -3045,3 +3045,41 @@ fn a_fleet_branch_shows_its_total_rate_and_per_kind_lines() {
         "detail groups the fleet by kind of key"
     );
 }
+
+#[test]
+fn a_pinned_message_becomes_the_diff_baseline_for_its_key() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.handle_zenoh_message(numbered("demo/a", 1));
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+
+    app.handle_key(key(KeyCode::Char('b')));
+    for n in 2..=4 {
+        app.handle_zenoh_message(numbered("demo/a", n));
+    }
+    let history = app.history.get("demo/a");
+    let (base, pinned) = app.diff_baseline("demo/a", history).unwrap();
+    assert!(pinned);
+    assert_eq!(
+        base,
+        &serde_json::json!({ "n": 1 }),
+        "not the previous (n=3)"
+    );
+    assert!(
+        app.diff_baseline("demo/b", None).is_none(),
+        "only for its own key"
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("changes vs PINNED message"));
+
+    app.handle_key(key(KeyCode::Char('b')));
+    let (_, pinned) = app
+        .diff_baseline("demo/a", app.history.get("demo/a"))
+        .unwrap();
+    assert!(!pinned, "b again unpins");
+}
