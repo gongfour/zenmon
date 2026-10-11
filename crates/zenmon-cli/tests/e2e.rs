@@ -750,3 +750,44 @@ fn query_since_asks_for_history_and_keeps_every_sample() {
         "history shows times: {text}"
     );
 }
+
+/// A scenario notices on its own when a steady key stops, without --track.
+#[test]
+fn scenario_reports_a_key_that_stops() {
+    let hub = Hub::open();
+    let p = prefix("stops");
+    let session = hub.session.clone();
+    let k = format!("{p}/pose");
+    // 20 Hz for ~1.2 s once zenmon is subscribed, then nothing.
+    let feeder = thread::spawn(move || {
+        let publisher = session.declare_publisher(k).wait().unwrap();
+        while !publisher.matching_status().wait().unwrap().matching() {
+            thread::sleep(Duration::from_millis(20));
+        }
+        for i in 0..25 {
+            publisher.put(i.to_string()).wait().unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    let sel = format!("{p}/**");
+    let out = run(hub.zenmon(&[
+        "--json",
+        "scenario",
+        "--observe",
+        &sel,
+        "--for",
+        "4s",
+        "--no-timeline",
+    ]));
+    feeder.join().unwrap();
+
+    let episode: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let events = episode["events"].as_array().expect("events present");
+    let stopped = events
+        .iter()
+        .find(|e| e["kind"] == "stopped")
+        .expect("a stopped event");
+    assert_eq!(stopped["key"], format!("{p}/pose"));
+    assert!(stopped["typical_ms"].as_u64().unwrap() >= 40, "{stopped}");
+}
