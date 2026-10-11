@@ -187,10 +187,10 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
     let icon_changed = {
         let state = app.state::<AppState>();
         let mut inner = state.inner.lock().expect("state poisoned");
-        if inner.tray_icon_state == Some(status.state) {
+        if inner.tray_icon_state == Some(status.visual()) {
             false
         } else {
-            inner.tray_icon_state = Some(status.state);
+            inner.tray_icon_state = Some(status.visual());
             true
         }
     };
@@ -209,6 +209,7 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
 
     if icon_changed {
         let color = match status.state {
+            CaptureState::Running if status.is_degraded() => COLOR_WARNING,
             CaptureState::Running => COLOR_ONLINE,
             CaptureState::Starting => COLOR_WARNING,
             CaptureState::Failed => COLOR_ERROR,

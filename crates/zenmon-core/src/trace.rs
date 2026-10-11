@@ -304,6 +304,7 @@ pub struct SegmentWriter {
     writer: Option<CaptureFileWriter>,
     seg_first: SystemTime,
     next_seq: u32,
+    segments_opened: u64,
 }
 
 impl SegmentWriter {
@@ -342,6 +343,7 @@ impl SegmentWriter {
             writer: None,
             seg_first: SystemTime::UNIX_EPOCH,
             next_seq,
+            segments_opened: 0,
         })
     }
 
@@ -366,7 +368,14 @@ impl SegmentWriter {
         let path = self.dir.join(name);
         self.writer = Some(CaptureFileWriter::create(&path, self.compression)?);
         self.seg_first = now;
+        self.segments_opened += 1;
         Ok(())
+    }
+
+    /// Segments this writer has started. A change means a rotation just
+    /// closed one — the only moment the store's closed-segment set grows.
+    pub fn segments_opened(&self) -> u64 {
+        self.segments_opened
     }
 
     /// Append one line (a newline is added). Rotates first if the current

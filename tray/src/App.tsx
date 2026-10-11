@@ -36,7 +36,10 @@ const MB = 1024 * 1024;
 function pillFor(status: CaptureStatus | null): { cls: string; text: string } {
   switch (status?.state) {
     case "running":
-      return { cls: "run", text: "capturing" };
+      // Up, but the latest write failed: nothing is landing on disk.
+      return status.last_error
+        ? { cls: "warn", text: "write failing" }
+        : { cls: "run", text: "capturing" };
     case "starting":
       return { cls: "warn", text: "connecting" };
     case "failed":

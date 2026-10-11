@@ -225,9 +225,10 @@ cannot be disabled. Therefore:
   message rate makes the icon visibly strobe. `state.rs` coalesces counter
   updates to 1 Hz and `tray.rs` skips no-op icon writes; state transitions still
   go through immediately.
-- **`enforce_retention` is throttled to once a minute**, unlike the CLI's
-  per-message call — a `read_dir` per message is fine for a short interactive
-  run, not for days unattended.
+- **What lands on disk is zenmon-core's `Recorder`**, the same pipeline
+  `zenmon capture --dir` runs. Retention runs on segment rotation and at most
+  once a minute otherwise. A failed write keeps the capture running but shows
+  as amber / "write failing" until a write succeeds again.
 - **Tauri v2 grants no plugin permissions without
   `src-tauri/capabilities/default.json`.** Without it `emit`/`listen` fail
   silently and capture status never reaches the settings window.

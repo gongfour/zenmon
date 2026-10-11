@@ -30,7 +30,7 @@ pub struct Inner {
     /// `Shell_NotifyIcon` call repaints the icon, so re-sending the same one at
     /// message rate makes it visibly flicker — this lets the tray skip
     /// no-op icon updates.
-    pub tray_icon_state: Option<CaptureState>,
+    pub tray_icon_state: Option<(CaptureState, bool)>,
     /// The tray menu's "Capture" check item, replaced on every menu rebuild.
     /// Kept so status pushes can set its checkmark: the menu is not rebuilt on
     /// start/stop, and the platform flips a check item on every click by
@@ -251,16 +251,16 @@ fn spawn_status_watcher(app: AppHandle) {
         };
 
         push_status(&app);
-        let mut last_state = Some(rx.borrow().state);
+        let mut last_visual = Some(rx.borrow().visual());
         let mut last_push = Instant::now();
 
         while rx.changed().await.is_ok() {
             let status = rx.borrow().clone();
-            let state_changed = last_state != Some(status.state);
-            if state_changed || last_push.elapsed() >= VISUAL_REFRESH_INTERVAL {
+            let visual_changed = last_visual != Some(status.visual());
+            if visual_changed || last_push.elapsed() >= VISUAL_REFRESH_INTERVAL {
                 crate::tray::refresh_visuals(&app, &status);
                 let _ = app.emit(CAPTURE_STATUS_EVENT, &status);
-                last_state = Some(status.state);
+                last_visual = Some(status.visual());
                 last_push = Instant::now();
             }
         }

@@ -62,11 +62,14 @@ Toggles `zenmon capture --dir`-equivalent recording from the tray, so traffic
 can be captured for post-incident debugging without keeping a terminal open.
 Full notes in `tray/README.md`; the load-bearing ones:
 
-- **Capture loop** (`tray/src-tauri/src/capture.rs`) is ported from `zenmon-cli`'s
-  `Command::Capture` dir-mode arm, with two deliberate differences: the stop
-  condition is a `watch<bool>` driven by the tray toggle instead of `ctrl_c()`,
-  and `enforce_retention` is throttled to once a minute instead of once per
-  message (the CLI's per-write `read_dir` is fine for a short run, not for days).
+- **Capture pipeline** is one `Recorder` in `zenmon-core/src/capture.rs`,
+  shared by `zenmon capture` and the tray (`tray/src-tauri/src/capture.rs`):
+  exclude → record → write → retention. Retention runs on segment rotation and
+  at most once a minute otherwise, never per message (each run lists the dir).
+  Only the session and stop condition differ per app: Ctrl+C/`--count` for the
+  CLI, a `watch<bool>` toggle for the tray. A failed tray write keeps the
+  capture running but sets `last_error` (amber icon, "write failing") until the
+  next successful write clears it.
 - **Shared operations** live in `state.rs`, so the tray menu and the settings
   webview can't drift — both call the same start/stop/select code.
 - **`ZenmonConfig` cannot be built as a struct literal** outside zenmon-core
