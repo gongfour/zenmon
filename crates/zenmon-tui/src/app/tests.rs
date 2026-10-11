@@ -2841,8 +2841,12 @@ fn a_background_error_event_becomes_an_error_toast() {
 #[test]
 fn a_publish_outcome_arrives_as_an_event() {
     let mut app = App::new("test".into());
-    app.handle_event(AppEvent::Published(Ok("demo/cmd".into())));
-    assert_eq!(app.publish_result, Some(Ok("demo/cmd".into())));
+    let sent = Sent {
+        key: "demo/cmd".into(),
+        matched: false,
+    };
+    app.handle_event(AppEvent::Published(Ok(sent.clone())));
+    assert_eq!(app.publish_result, Some(Ok(sent)));
     app.handle_event(AppEvent::Published(Err("congested".into())));
     assert_eq!(app.publish_result, Some(Err("congested".into())));
 }

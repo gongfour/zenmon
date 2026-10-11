@@ -10,6 +10,10 @@ use crate::common::{
 };
 use crate::watch;
 
+/// How long `pub` waits for routing to report a matching subscriber before
+/// concluding there is none. A match already known answers at once.
+const MATCH_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
 pub async fn publish(ctx: &Ctx, config: ZenmonConfig, args: PubArgs) -> Result<(), ZenmonError> {
     let PubArgs {
         key_expr,
@@ -23,6 +27,16 @@ pub async fn publish(ctx: &Ctx, config: ZenmonConfig, args: PubArgs) -> Result<(
     let value = resolve_payload_arg(&value)?;
     let session = zenmon_core::session::open_session(&config).await?;
     let attachment_bytes = att.as_ref().map(|a| a.len());
+
+    // Checked once, up front: a put nobody hears still succeeds, and that
+    // silence is what this tells apart from a working publish.
+    let matched = zenmon_core::publish::has_subscribers(&session, &key_expr, MATCH_SETTLE).await?;
+    if !matched && !ctx.json {
+        eprintln!(
+            "note: no subscriber matches '{key_expr}' — this publishes to nobody \
+             (check the key, or whether the consumer is running)"
+        );
+    }
 
     // Publish the same value/attachment once. Shared with the TUI's
     // publish path so the two cannot drift on attachments or error
@@ -84,6 +98,7 @@ pub async fn publish(ctx: &Ctx, config: ZenmonConfig, args: PubArgs) -> Result<(
                         &key_expr,
                         value.len(),
                         attachment_bytes,
+                        matched,
                         published,
                         hz,
                     )?
@@ -103,6 +118,7 @@ pub async fn publish(ctx: &Ctx, config: ZenmonConfig, args: PubArgs) -> Result<(
                         &key_expr,
                         value.len(),
                         attachment_bytes,
+                        matched,
                     )?
                 );
             } else if let Some(ref att_json) = att {

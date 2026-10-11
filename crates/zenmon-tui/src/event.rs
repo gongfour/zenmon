@@ -22,8 +22,8 @@ pub enum AppEvent {
     /// A background task failed in a way the user must see (the TUI has no
     /// log output — tracing is off so it cannot corrupt the screen).
     Error(String),
-    /// Outcome of a publish armed in the editor: the key, or why it failed.
-    Published(Result<String, String>),
+    /// Outcome of a publish armed in the editor, or why it failed.
+    Published(Result<crate::app::Sent, String>),
 }
 
 /// Build the event-loop tick interval from the user's refresh `Duration`.
