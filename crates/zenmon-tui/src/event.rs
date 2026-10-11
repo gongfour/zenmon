@@ -19,6 +19,11 @@ pub enum AppEvent {
     Liveliness(LivelinessEvent),
     DoctorStarted,
     DoctorReport(zenmon_core::doctor::DoctorReport),
+    /// A background task failed in a way the user must see (the TUI has no
+    /// log output — tracing is off so it cannot corrupt the screen).
+    Error(String),
+    /// Outcome of a publish armed in the editor: the key, or why it failed.
+    Published(Result<String, String>),
 }
 
 /// Build the event-loop tick interval from the user's refresh `Duration`.

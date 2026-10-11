@@ -2828,3 +2828,21 @@ fn wheel_ignored_while_overlay_open() {
     app.handle_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
     assert_eq!(app.tree_selected, 0);
 }
+
+#[test]
+fn a_background_error_event_becomes_an_error_toast() {
+    let mut app = App::new("test".into());
+    app.handle_event(AppEvent::Error("Liveliness subscription failed: x".into()));
+    let (msg, _) = app.toast.as_ref().expect("toast shown");
+    assert!(msg.contains("Liveliness"));
+    assert!(app.toast_is_error);
+}
+
+#[test]
+fn a_publish_outcome_arrives_as_an_event() {
+    let mut app = App::new("test".into());
+    app.handle_event(AppEvent::Published(Ok("demo/cmd".into())));
+    assert_eq!(app.publish_result, Some(Ok("demo/cmd".into())));
+    app.handle_event(AppEvent::Published(Err("congested".into())));
+    assert_eq!(app.publish_result, Some(Err("congested".into())));
+}
