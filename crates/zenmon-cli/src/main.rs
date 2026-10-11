@@ -148,6 +148,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
 
         Command::Info => cmd::network::info(&ctx, config).await?,
 
+        Command::Mcp => cmd::mcp::run().await?,
+
         Command::Doctor(args) => cmd::network::doctor(&ctx, config, args).await?,
 
         Command::Keyexpr(cli::KeyexprArgs { a, b }) => {

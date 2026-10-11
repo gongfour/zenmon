@@ -585,3 +585,67 @@ fn sub_validate_reports_contract_violations() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `zenmon mcp` speaks MCP over stdio and its tools reach the network the
+/// server was pointed at.
+#[test]
+fn mcp_server_lists_and_runs_tools() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+
+    let hub = Hub::open();
+    let p = prefix("mcp");
+    let _traffic = hub.publish_until_dropped(&format!("{p}/state"), |n| format!(r#"{{"n":{n}}}"#));
+
+    let mut child = hub
+        .zenmon(&["mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut ask = |msg: Value| -> Value {
+        writeln!(stdin, "{msg}").unwrap();
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+
+    let init = ask(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": { "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    assert_eq!(init["result"]["serverInfo"]["name"], "zenmon", "{init}");
+
+    let list = ask(serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"subscribe") && !names.contains(&"publish"),
+        "{names:?}"
+    );
+
+    let call = ask(serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": { "name": "subscribe",
+                    "arguments": { "key_expr": format!("{p}/**"), "count": 2, "duration": "20s" } }
+    }));
+    assert_eq!(call["result"]["isError"], false, "{call}");
+    let text = call["result"]["content"][0]["text"].as_str().unwrap();
+    let lines: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert_eq!(lines[0]["key_expr"], format!("{p}/state"));
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}

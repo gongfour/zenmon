@@ -4,6 +4,7 @@
 pub mod capture;
 pub mod config;
 pub mod contract;
+pub mod mcp;
 pub mod network;
 pub mod publish;
 pub mod query;
