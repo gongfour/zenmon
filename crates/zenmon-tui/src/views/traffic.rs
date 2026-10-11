@@ -135,6 +135,11 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
         .unwrap_or(0)
         .min(area.width.saturating_sub(20) as usize);
 
+    let branch_hz = app.branch_rates();
+    let rate_suffix = |path: &str| match branch_hz.get(path) {
+        Some(hz) if *hz > 0.0 => format!(" · {hz:.1} Hz"),
+        _ => String::new(),
+    };
     let items: Vec<ListItem> = app
         .tree_rows()
         .iter()
@@ -147,7 +152,10 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                 RowKind::FoldSummary { hidden } => ListItem::new(Line::from(vec![
                     Span::raw(prefix),
                     Span::styled(
-                        format!("… {hidden} more — l to list, / to search"),
+                        format!(
+                            "… {hidden} more{} — l to list, / to search",
+                            rate_suffix(&row.path)
+                        ),
                         Style::default()
                             .fg(Color::DarkGray)
                             .add_modifier(Modifier::ITALIC),
@@ -167,11 +175,10 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(" ".repeat(pad + 1)),
-                        // Rate for a branch would mean summing every descendant
-                        // on every frame; the count is the cheap, honest summary
-                        // here, and the detail pane aggregates the selected one.
+                        // The summed rate comes from one pass over all rates per
+                        // frame (`branch_rates`), not a walk per branch.
                         Span::styled(
-                            plural_keys(row.key_count),
+                            format!("{}{}", plural_keys(row.key_count), rate_suffix(&row.path)),
                             Style::default().fg(Color::DarkGray),
                         ),
                     ]))
@@ -473,6 +480,23 @@ fn render_subtree_summary(app: &App, frame: &mut Frame, area: Rect, row: &TreeRo
         ]),
         Line::from(""),
     ];
+
+    // A fleet reads as one line per kind of key: `*/pose  200 keys  2000 Hz`.
+    let groups = app.suffix_groups(&row.path);
+    if !groups.is_empty() {
+        lines.push(Line::from(Span::styled("by key, across the branch", dim)));
+        for (suffix, n, hz) in groups.iter().take(8) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {hz:>7.1} Hz  "),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(format!("{suffix:<24}"), value),
+                Span::styled(format!(" {}", plural_keys(*n)), dim),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
 
     // The busiest descendants, so a hot key inside a large collapsed subtree is
     // findable without expanding the whole thing.

@@ -2983,3 +2983,65 @@ fn a_sessions_detail_lists_its_connection_history() {
     assert!(text.contains("connection history"), "section shown");
     assert!(text.contains("CLOSE") && text.contains("OPEN"));
 }
+
+fn fleet(app: &mut App, vehicles: usize) {
+    for i in 0..vehicles {
+        for (leaf, hz) in [("pose", 10.0), ("battery", 1.0)] {
+            let key = format!("agv/f{i:03}/{leaf}");
+            app.handle_zenoh_message(numbered(&key, 0));
+            app.topic_hz.insert(key, hz);
+        }
+    }
+}
+
+#[test]
+fn a_branch_sums_the_rates_below_it() {
+    let mut app = App::new("test".into());
+    fleet(&mut app, 3);
+    let rates = app.branch_rates();
+    assert_eq!(rates["agv"], 33.0);
+    assert_eq!(rates["agv/f001"], 11.0);
+    assert!(
+        !rates.contains_key("agv/f001/pose"),
+        "leaves are not branches"
+    );
+}
+
+#[test]
+fn a_fleet_reads_as_one_line_per_kind_of_key() {
+    let mut app = App::new("test".into());
+    fleet(&mut app, 200);
+    let groups = app.suffix_groups("agv");
+    assert_eq!(
+        groups,
+        vec![
+            ("*/pose".to_string(), 200, 2000.0),
+            ("*/battery".to_string(), 200, 200.0)
+        ]
+    );
+    // Under one vehicle nothing repeats, so grouping would only restate it.
+    assert!(app.suffix_groups("agv/f001").is_empty());
+}
+
+#[test]
+fn a_fleet_branch_shows_its_total_rate_and_per_kind_lines() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    fleet(&mut app, 200);
+    app.refresh_tree_rows();
+    app.tree_selected = 0; // the agv/ branch
+
+    let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(
+        text.contains("2200.0 Hz"),
+        "branch row carries the summed rate"
+    );
+    assert!(
+        text.contains("*/pose"),
+        "detail groups the fleet by kind of key"
+    );
+}
