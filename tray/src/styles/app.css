@@ -1,10 +1,7 @@
-/* Design tokens lifted verbatim from dotori's launcher
-   (dotori_rcs/gui/src/styles/app.css; canonical spec docs/gui_design.md
-   §3 color · §4 type · §7 depth) so this tray app reads as part of the same
-   toolchain. Only the component classes this app actually uses are kept —
-   the launcher's rail/compose/deploy view styles are not copied.
+/* Design tokens for the tray app. This file is the canonical spec:
+   color, type and depth are defined here and nowhere else.
 
-   Principles carried over:
+   Principles:
    - surfaces are a single flat color; separation is done by lines, not fills
    - --accent means "interactive", never "status" (status = go/warn/stop)
    - shadows mean "dismissible", not "elevated" — only on things that close */

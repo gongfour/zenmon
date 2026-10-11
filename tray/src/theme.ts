@@ -1,4 +1,4 @@
-// Theme resolution, same approach as dotori's launcher: the CSS knows only
+// Theme resolution: the CSS knows only
 // one `:root[data-theme="dark"]` block, and this module resolves
 // "system|light|dark" into an actual light/dark value stamped onto
 // documentElement — no duplicated @media definitions, and OS changes are

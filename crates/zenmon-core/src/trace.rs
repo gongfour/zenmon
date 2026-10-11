@@ -20,7 +20,7 @@ const SEG_PREFIX: &str = "zenmon-trace-";
 const SEG_EXT: &str = ".ndjson";
 const SEG_EXT_ZSTD: &str = ".ndjson.zst";
 
-/// zstd level for captures. Measured on a dotori robot's full `**` traffic:
+/// zstd level for captures. Measured on a mobile robot's full `**` traffic:
 /// level 3 gives 3.4x overall (17x without point clouds) at ~400 MB/s on one
 /// core — orders of magnitude above a capture's ~1 MB/s. Higher levels bought
 /// 10–20% more at a quarter of the speed or less.

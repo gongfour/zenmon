@@ -4,10 +4,10 @@
 //! Windows refuses to *delete* a running executable but happily *renames* it,
 //! so moving the old binary aside and moving the new one in works while zenmon
 //! is running — including from the very process doing the update. The
-//! alternative, a detached helper that waits for this process to exit, is what
-//! dotori shipped first: when something else held the binary the helper's final
-//! delete was denied, the next run then failed a non-forcing move, and the CLI
-//! printed success while the installed binary was still the old one.
+//! alternative, a detached helper that waits for this process to exit, fails
+//! quietly: when something else holds the binary the helper's final delete is
+//! denied, the next run then fails a non-forcing move, and the CLI prints
+//! success while the installed binary is still the old one.
 //!
 //! Nothing here is deferred: when the command returns, the new binary is in
 //! place.
@@ -40,9 +40,9 @@ pub struct SwapOutcome {
 
 /// Identifies what `update apply` would replace.
 ///
-/// There is no marker file. dotori needs one because it has two install shapes
-/// (a bootstrap exe and an NSIS installation) whose apply paths differ; the
-/// zenmon CLI is a single binary, so "the file this process is running from" is
+/// There is no marker file. A tool with several install shapes (say, a
+/// bootstrap exe and an NSIS installation) needs one because their apply paths
+/// differ; the zenmon CLI is a single binary, so "the file this process is running from" is
 /// the whole answer, and a downloaded binary dropped anywhere on PATH is
 /// already a managed install with no bootstrap step.
 pub fn current_installation() -> Result<Installation> {
@@ -331,10 +331,10 @@ fn make_executable(_path: &Path) -> Result<()> {
 /// Runs the staged binary and checks it reports the version the manifest
 /// promised.
 ///
-/// Comparison is on the parsed semver, not on the whole string. dotori required
-/// an exact match against `format!("dotori {version}")` while its actual output
-/// carried a build timestamp, so the check never passed and its bootstrap
-/// update path had never once worked end to end.
+/// Comparison is on the parsed semver, not on the whole string. An exact match
+/// against `format!("zenmon {version}")` breaks as soon as the output carries
+/// anything extra, such as a build timestamp, and then the check never passes
+/// and the update path never works end to end.
 fn verify_staged(staged: &Path, expected: &Version) -> Result<()> {
     let output = Command::new(staged)
         .arg("--version")
@@ -510,8 +510,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// dotori's latent bug: its self-check demanded an exact string while the
-    /// real output carried extra text, so the path never passed.
+    /// An exact-string self-check fails when the real output carries extra
+    /// text, so the path never passes.
     #[test]
     fn reads_a_version_from_output_with_extra_text_around_it() {
         assert_eq!(

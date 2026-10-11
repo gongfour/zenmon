@@ -151,9 +151,9 @@ mod tests {
     #[test]
     fn exclude_matches_by_intersection() {
         let ex = CaptureExclude::parse(&["**/topic/sensor/pcd/**", "a/b"]).unwrap();
-        assert!(ex.excludes("dotori/ph-ecs/topic/sensor/pcd/rear"));
+        assert!(ex.excludes("demo/robot1/topic/sensor/pcd/rear"));
         assert!(ex.excludes("a/b"));
-        assert!(!ex.excludes("dotori/ph-ecs/topic/sensor/og3d/fused"));
+        assert!(!ex.excludes("demo/robot1/topic/sensor/og3d/fused"));
         assert!(!ex.excludes("a/b/c"));
     }
 

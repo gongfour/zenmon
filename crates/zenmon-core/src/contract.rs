@@ -75,7 +75,7 @@ pub struct Endpoint {
     /// One of [`ENDPOINT_ROLES`].
     #[serde(default)]
     pub role: String,
-    /// Payload/message type as the service declares it (e.g. `dotori::SafetyState`).
+    /// Payload/message type as the service declares it (e.g. `fleet::SafetyState`).
     #[serde(default, rename = "type")]
     pub message_type: Option<String>,
     /// QoS as declared by this endpoint. Shape is project-defined.
