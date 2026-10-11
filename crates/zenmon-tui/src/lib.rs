@@ -421,10 +421,7 @@ async fn run_loop(
                         app.connection_state = ConnectionState::Connected(zid.clone());
                         app.self_zid = Some(zid);
                         // Clear stale liveliness state before re-subscribing
-                        app.liveliness_tokens.clear();
-                        app.liveliness_events.clear();
-                        app.liveliness_selected = 0;
-                        app.liveliness_log_scroll = 0;
+                        app.clear_liveliness();
                         // Tear the previous stream subscription down explicitly;
                         // holding it keeps the pump alive across loop turns.
                         if let Some(previous) = stream_subscription.take() {

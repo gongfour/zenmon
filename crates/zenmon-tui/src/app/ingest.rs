@@ -102,21 +102,13 @@ impl App {
 
         // Update token state
         if is_join {
-            if let Some(existing) = self
-                .liveliness_tokens
-                .iter_mut()
-                .find(|t| t.key_expr == token.key_expr)
-            {
+            if let Some(existing) = self.liveliness_token_mut(&token.key_expr) {
                 existing.alive = true;
                 existing.source_zid = token.source_zid.or(existing.source_zid.clone());
             } else {
-                self.liveliness_tokens.push(token);
+                self.push_liveliness_token(token);
             }
-        } else if let Some(existing) = self
-            .liveliness_tokens
-            .iter_mut()
-            .find(|t| t.key_expr == token.key_expr)
-        {
+        } else if let Some(existing) = self.liveliness_token_mut(&token.key_expr) {
             existing.alive = false;
         }
     }

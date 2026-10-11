@@ -2846,3 +2846,49 @@ fn a_publish_outcome_arrives_as_an_event() {
     app.handle_event(AppEvent::Published(Err("congested".into())));
     assert_eq!(app.publish_result, Some(Err("congested".into())));
 }
+
+fn live(key: &str, join: bool) -> AppEvent {
+    use zenmon_core::types::LivelinessEvent;
+    let token = make_token(key, join);
+    AppEvent::Liveliness(if join {
+        LivelinessEvent::Join(token)
+    } else {
+        LivelinessEvent::Leave(token)
+    })
+}
+
+#[test]
+fn liveliness_join_leave_rejoin_keeps_one_row_per_key() {
+    let mut app = App::new("test".into());
+    for i in 0..500 {
+        app.handle_event(live(&format!("fleet/r{i}/alive"), true));
+    }
+    app.handle_event(live("fleet/r7/alive", false));
+    app.handle_event(live("fleet/r7/alive", true));
+    app.handle_event(live("fleet/r9/alive", false));
+
+    assert_eq!(app.liveliness_tokens.len(), 500);
+    let alive = |k: &str| {
+        app.liveliness_tokens
+            .iter()
+            .find(|t| t.key_expr == k)
+            .unwrap()
+            .alive
+    };
+    assert!(alive("fleet/r7/alive"));
+    assert!(!alive("fleet/r9/alive"));
+}
+
+#[test]
+fn liveliness_index_recovers_from_tokens_pushed_directly() {
+    let mut app = App::new("test".into());
+    app.liveliness_tokens.push(make_token("a/alive", true));
+    app.handle_event(live("a/alive", false));
+    assert_eq!(app.liveliness_tokens.len(), 1);
+    assert!(!app.liveliness_tokens[0].alive);
+
+    app.clear_liveliness();
+    assert!(app.liveliness_tokens.is_empty());
+    app.handle_event(live("a/alive", true));
+    assert_eq!(app.liveliness_tokens.len(), 1);
+}

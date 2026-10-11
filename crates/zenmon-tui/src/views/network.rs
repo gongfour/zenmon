@@ -25,19 +25,23 @@ use zenmon_core::types::{LivelinessToken, NodeInfo};
 const STALE_THRESHOLD: Duration = Duration::from_secs(30);
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
+    // Built once per frame: filtering and sorting thousands of tokens is the
+    // expensive part, and the master list, its header counts and the detail
+    // pane all read the same rows.
+    let rows = app.network_rows();
     match app.body_layout(area) {
         BodyLayout::Split { master, detail } => {
-            render_master(app, frame, master);
-            render_detail(app, frame, detail);
+            render_master(app, frame, master, &rows);
+            render_detail(app, frame, detail, &rows);
         }
         BodyLayout::Single {
             pane,
             focus: PaneFocus::Master,
-        } => render_master(app, frame, pane),
+        } => render_master(app, frame, pane, &rows),
         BodyLayout::Single {
             pane,
             focus: PaneFocus::Detail,
-        } => render_detail(app, frame, pane),
+        } => render_detail(app, frame, pane, &rows),
     }
 }
 
@@ -63,7 +67,7 @@ fn header_item(label: String) -> ListItem<'static> {
     )))
 }
 
-fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
+fn render_master(app: &mut App, frame: &mut Frame, area: Rect, rows: &[NetworkRow]) {
     // The title carries the filter and the dead-only state, because a list
     // that is hiding rows must say so — an empty Network pane that looks like
     // "nothing is running" would be the worst possible lie from this space.
@@ -83,7 +87,7 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(title);
 
     // Both sections empty → a single contextual empty state, no list chrome.
-    if app.network_rows().is_empty() {
+    if rows.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         super::render_empty_state(frame, inner, app.nodes_empty_reason());
@@ -94,8 +98,7 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let selected_row = app.selected_network_row();
-    let rows = app.network_rows();
+    let selected_row = rows.get(app.network_selected).copied();
     let now = SystemTime::now();
     let self_zid = app.self_zid.clone();
 
@@ -257,8 +260,8 @@ fn split_instance_hash(key: &str) -> (String, String) {
     (key.to_string(), String::new())
 }
 
-fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
-    match app.selected_network_row() {
+fn render_detail(app: &App, frame: &mut Frame, area: Rect, rows: &[NetworkRow]) {
+    match rows.get(app.network_selected).copied() {
         Some(NetworkRow::Session(i)) => render_session_detail(app, frame, area, i),
         Some(NetworkRow::Liveliness(i)) => render_liveliness_detail(app, frame, area, i),
         None => {
