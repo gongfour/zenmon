@@ -638,8 +638,11 @@ zenmon --contract mynet.contract.yaml scenario --preset stall --prefix myfleet -
   decoded payload). Each `timeline` event carries its decoded payload and, when
   the message had one, its decoded `attachment` — zenmon reads no particular
   attachment field, so group by whatever id your project puts there. With
-  `--track`, `tracks` holds the series and `events` lists every transition in
-  time order. Always bounded by `--for`/`--settle`, so it terminates (agent-safe).
+  `--track`, `tracks` holds the series. `events` is one time-ordered list:
+  `change` (a tracked field's value changed), and — found from timing alone,
+  without being asked — `silence` (a steady key went quiet for over 4× its
+  usual interval, then resumed), `stopped` (…and stayed quiet until the end)
+  and `deleted` (a DELETE). Keys need 5+ messages to have a rhythm. Always bounded by `--for`/`--settle`, so it terminates (agent-safe).
 - **Size / preview** — `--no-timeline` drops the per-event timeline (keeps the
   summaries; much smaller for long/high-rate sessions); `--explain` prints the
   resolved plan and exits without touching the network.
@@ -896,7 +899,9 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 ### Phase 5 — Advanced Inspection
 14. [x] Admin space explorer — `admin decls` (who declared what) and `admin get` (raw entries)
 15. [x] Storage/history query — `query --since/--until` (storages list via `admin get`)
-16. [ ] Downsampling display — show rate-limiting configuration from router
+16. [ ] ~~Downsampling display~~ — not possible remotely: Zenoh 1.9's admin space accepts
+    config writes under `@/<zid>/router/config/**` but answers no reads, so a router's
+    downsampling rules cannot be fetched
 17. [x] Pub/sub miss detection — `sub --detect-misses` reports sequence gaps via `zenoh-ext`
     (publishers must be `AdvancedPublisher`s with `sample_miss_detection`)
 
@@ -904,7 +909,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 18. [x] MessagePack payload auto-decode — read cross-language binary payloads as JSON
 19. [x] Contract consumption — enrich `sub`/`discover`; `contract` inspect subcommand
 20. [x] `zenmon scenario` — correlated diagnostic sessions (trigger, observe, track → episode JSON)
-21. [ ] Automatic `events` in the episode beyond `--track` transitions
+21. [x] Automatic `events` in the episode — `silence`, `stopped`, `deleted` alongside `--track` changes
 22. [x] Strict contract payload validation — `sub --validate`
 23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
 24. [x] `zenmon mcp` — the read-only commands as MCP tools
