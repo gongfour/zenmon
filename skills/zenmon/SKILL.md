@@ -44,6 +44,10 @@ problem is explained:
 | Who is on the network? | `zenmon nodes`, then `zenmon liveliness` for liveliness tokens |
 | What topics are flowing? | `zenmon discover`, then `zenmon sub "<key-expr>"` on keys of interest |
 | Messages aren't arriving | `zenmon discover` (is anyone publishing?) → `zenmon sub "<ke>"` (do you actually receive?) → `zenmon keyexpr "<pub-ke>" "<sub-ke>"` (do the two key expressions intersect?) |
+| Are messages being lost? | `zenmon sub "<ke>" --detect-misses --duration 10s` — reports sequence gaps, but only from publishers that number samples (zenoh-ext AdvancedPublisher); plain puts show no misses either way, so "no misses" proves nothing for them |
+| Does the payload match the contract? | `zenmon --contract <file> sub "<ke>" --validate --count 20` — violations are listed per message |
+| Is anyone listening to this key? | `zenmon pub` reports `matched` — but `pub` writes, so propose it (§4); for a read-only check use `zenmon discover`/`liveliness` |
+| Was the key deleted, or is its value empty? | `zenmon sub "<ke>" --kind delete` — DELETEs print as `key \| DELETE` |
 | Why did it reach this state? (cause & effect) | `zenmon scenario --observe "<key-expr>" --for <e.g. 8s>` to collect an episode JSON, then reason over it. Observe-only; its `--pub`/`--task` actuation forms mutate the network — see §4. |
 
 ## 3. Long-running commands
@@ -57,6 +61,10 @@ problem is explained:
 
 ## 4. Gotchas
 
+- `sub --qos` shows each sample's priority / congestion control / reliability:
+  best-effort or `Drop` under load explains loss nothing else shows.
+- With `--detect-misses`, a `{"miss":{...}}` line sits in the NDJSON stream
+  where the gap was seen; `--count` counts messages only.
 - Trust zenmon's own rendering of payloads (it decodes strings, JSON, and
   conservatively MessagePack). Do not re-parse raw bytes yourself.
 - Topics are discovered from **received messages**, not the admin space — a
