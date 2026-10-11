@@ -367,7 +367,7 @@ pub enum Command {
         #[arg(long)]
         observe: Vec<String>,
 
-        /// Expand a built-in diagnosis topic set (currently: stall)
+        /// Expand a named topic set from the contract's `presets` (needs --contract)
         #[arg(long)]
         preset: Option<String>,
 

@@ -1874,14 +1874,24 @@ async fn run_scenario(
         push_unique(&mut observed, k);
     }
     if let Some(name) = &preset {
-        let expanded = expand_preset(name, &prefix);
-        if expanded.is_empty() {
+        let Some(c) = &contract else {
+            return Err(ZenmonError::invalid_input(
+                "--preset reads named topic sets from a contract: pass --contract or set ZENMON_CONTRACT",
+            ));
+        };
+        let Some(keys) = c.presets.get(name).filter(|k| !k.is_empty()) else {
+            let known: Vec<&str> = c.presets.keys().map(String::as_str).collect();
             return Err(ZenmonError::invalid_input(format!(
-                "unknown --preset '{}' (known: stall)",
-                name
+                "unknown --preset '{}' (contract declares: {})",
+                name,
+                if known.is_empty() {
+                    "none".to_string()
+                } else {
+                    known.join(", ")
+                }
             )));
-        }
-        for k in expanded {
+        };
+        for k in expand_preset(keys, &prefix) {
             push_unique(&mut observed, k);
         }
     }

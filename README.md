@@ -545,7 +545,7 @@ zenmon -n myfleet --contract mynet.contract.yaml --json scenario \
   --for 15s --settle 1s --no-timeline
 
 # Preview the resolved plan without running (dry run)
-zenmon scenario --preset stall --prefix myfleet --for 15s --explain
+zenmon --contract mynet.contract.yaml scenario --preset stall --prefix myfleet --for 15s --explain
 ```
 
 - **Trigger** — `--pub KEY VALUE` (one-shot, or sustained with `--pub-rate` +
@@ -554,9 +554,22 @@ zenmon scenario --preset stall --prefix myfleet --for 15s --explain
   the response). A large `VALUE`/`REQUEST_JSON` may be `@<file>` or `-` (stdin).
   With a contract, `--task` prints and validates the request schema (missing/
   unknown fields, and `A|B|C` enum values).
-- **Observe** — `--observe KEY` (repeatable), or `--preset stall` (a built-in
-  mission-diagnosis set: safety state/policies, obstacles, mission state, pose,
-  robot state, behavior tree, task feedback/response).
+- **Observe** — `--observe KEY` (repeatable), or `--preset NAME` to expand a
+  named topic set from the contract's `presets` (keys relative to `--prefix`,
+  default `**`). zenmon ships no built-in presets — which topics matter for a
+  diagnosis is the project's call, so it lives in the project's contract:
+
+  ```yaml
+  presets:
+    stall:
+      - topic/safety/**
+      - topic/navigation/pose
+      - task/**/feedback
+      - task/**/response
+  ```
+
+  `contract lint` flags an empty preset or a key that is not a valid key
+  expression.
 - **Track** — `--track KEY:FIELD` extracts a payload field over time: `series`,
   `delta` (numeric), and `transitions` (for discrete fields). A wildcard `KEY`
   (e.g. `topic/safety/policy/*:level`) expands to one track per matching concrete
