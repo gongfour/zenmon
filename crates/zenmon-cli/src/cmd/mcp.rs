@@ -143,6 +143,14 @@ static TOOLS: &[Tool] = &[
             param("timeout", "string", false, "Reply deadline, e.g. 5s (default 5s)", Arg::Flag("--timeout")),
             param("limit", "integer", false, "Return at most this many replies", Arg::Flag("--limit")),
             param(
+                "since",
+                "string",
+                false,
+                "History from storages: relative age (10m) or RFC3339 start",
+                Arg::Flag("--since"),
+            ),
+            param("until", "string", false, "End of the history window", Arg::Flag("--until")),
+            param(
                 "consolidation",
                 "string",
                 false,

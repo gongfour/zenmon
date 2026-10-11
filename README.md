@@ -233,6 +233,10 @@ zenmon nodes
 # Query (Zenoh GET — requires queryable responder)
 zenmon query "@/*/router"
 
+# History from storages (Zenoh `_time` selector): every value in the window
+zenmon query "sensor/temp" --since 1h
+zenmon query "sensor/**" --since 2026-10-11T09:00:00Z --until 10m
+
 # See every reply when multiple queryables share a key
 # (default consolidation keeps only one reply per key)
 zenmon query "call/system/params/get" --consolidation none
@@ -891,7 +895,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 
 ### Phase 5 — Advanced Inspection
 14. [x] Admin space explorer — `admin decls` (who declared what) and `admin get` (raw entries)
-15. [ ] Storage/history query — fetch historical data from zenoh storage backends
+15. [x] Storage/history query — `query --since/--until` (storages list via `admin get`)
 16. [ ] Downsampling display — show rate-limiting configuration from router
 17. [x] Pub/sub miss detection — `sub --detect-misses` reports sequence gaps via `zenoh-ext`
     (publishers must be `AdvancedPublisher`s with `sample_miss_detection`)
