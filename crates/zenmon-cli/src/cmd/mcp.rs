@@ -176,6 +176,41 @@ static TOOLS: &[Tool] = &[
         params: &[param("timeout", "string", false, "Overall deadline, e.g. 5s", Arg::Flag("--timeout"))],
     },
     Tool {
+        name: "declarations",
+        description: "Which subscribers, publishers, queryables and liveliness tokens routers know of on \
+                      keys intersecting a key expression, and which sessions declared them. Answers \
+                      'is anything subscribed to this?'. Needs a router.",
+        command: &["admin", "decls"],
+        params: &[
+            param(
+                "key_expr",
+                "string",
+                false,
+                "Only declarations intersecting this (default **)",
+                Arg::Positional,
+            ),
+            param(
+                "kind",
+                "string",
+                false,
+                "Only one kind: subscriber, publisher, queryable or token",
+                Arg::Flag("--kind"),
+            ),
+        ],
+    },
+    Tool {
+        name: "admin_get",
+        description: "Raw Zenoh admin-space entries under a selector (starting with @/), payloads decoded.",
+        command: &["admin", "get"],
+        params: &[param(
+            "selector",
+            "string",
+            false,
+            "Admin-space selector (default @/*/router)",
+            Arg::Positional,
+        )],
+    },
+    Tool {
         name: "keyexpr_compare",
         description: "How two key expressions relate: intersect, include, equal. Pure, no network.",
         command: &["keyexpr"],
