@@ -150,6 +150,11 @@ pub enum Command {
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
 
+    /// Serve the read-only commands as MCP tools on stdio, for AI agents.
+    /// Global flags given before `mcp` (endpoint, namespace, contract, …)
+    /// apply to every tool call.
+    Mcp,
+
     /// Inspect a zenmon contract file (offline; no network).
     Contract {
         #[command(subcommand)]

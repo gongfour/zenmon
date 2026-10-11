@@ -139,6 +139,25 @@ cp skills/zenmon/SKILL.md ~/.claude/skills/zenmon/
 The skill triggers on Zenoh debugging requests and is read-only by default
 (`pub`/`replay`/`queryable` require explicit confirmation).
 
+### MCP server (optional)
+
+For agents that speak the Model Context Protocol instead of running shell
+commands, `zenmon mcp` serves the read-only commands as MCP tools over stdio:
+`nodes`, `discover`, `subscribe` (always bounded: 20 messages / 5 s unless
+asked otherwise), `query`, `liveliness`, `info`, `doctor`, `keyexpr_compare`,
+`trace_read`, `trace_stats` and `contract_show`. Nothing that publishes is
+exposed. Global flags before `mcp` apply to every call:
+
+```bash
+# Claude Code
+claude mcp add zenmon -- zenmon -e tcp/192.168.1.10:7447 mcp
+# with a contract, so `subscribe` can validate and `contract_show` answers
+claude mcp add zenmon -- zenmon -e tcp/192.168.1.10:7447 --contract /path/net.contract.yaml mcp
+```
+
+Each tool call runs `zenmon --json <command>`, so tools return exactly what the
+CLI prints and cannot drift from it.
+
 ### Build features
 
 The TUI's copy-to-clipboard action uses [`arboard`], whose Linux backend needs
@@ -878,6 +897,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 21. [ ] Automatic `events` in the episode beyond `--track` transitions
 22. [x] Strict contract payload validation — `sub --validate`
 23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
+24. [x] `zenmon mcp` — the read-only commands as MCP tools
 24. [x] `zenmon-tray` — always-on capture from the system tray, no terminal required
 
 ### Phase 7 — Reading a fleet
