@@ -91,238 +91,48 @@ pub enum Command {
     },
 
     /// Discover active keys/topics
-    Discover {
-        /// Key expression to filter (default: "**")
-        #[arg(default_value = "**")]
-        key_expr: String,
-    },
+    Discover(DiscoverArgs),
 
     /// Subscribe to a topic and stream messages
-    Sub {
-        /// Key expression to subscribe
-        key_expr: String,
-
-        /// Pretty-print JSON output
-        #[arg(long)]
-        pretty: bool,
-
-        /// Show timestamps
-        #[arg(long)]
-        timestamp: bool,
-
-        /// Stop after N received messages
-        #[arg(long, value_parser = crate::duration::parse_count_arg)]
-        count: Option<u64>,
-
-        /// Stop after this much time (e.g. 5s, 500ms)
-        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
-        duration: Option<Duration>,
-
-        /// Cap payload/attachment preview to N bytes in --json output
-        #[arg(long, value_parser = crate::duration::parse_count_arg)]
-        max_payload_bytes: Option<u64>,
-    },
+    Sub(SubArgs),
 
     /// Send a Zenoh GET query
-    Query {
-        /// Key expression to query
-        key_expr: String,
-
-        /// JSON payload to include in query
-        #[arg(long)]
-        payload: Option<String>,
-
-        /// Query timeout (e.g. 5s, 500ms)
-        #[arg(long, default_value = "5s", value_parser = crate::duration::parse_duration_arg)]
-        timeout: Duration,
-
-        /// Return at most N replies (output budget; more may exist)
-        #[arg(long, value_parser = crate::duration::parse_count_arg)]
-        limit: Option<u64>,
-
-        /// Reply consolidation. Default `auto` keeps one reply per key, so
-        /// when several queryables serve the same key only the fastest reply
-        /// is visible; use `none` to receive every reply.
-        #[arg(long, value_enum, default_value_t = ConsolidationArg::Auto)]
-        consolidation: ConsolidationArg,
-    },
+    Query(QueryArgs),
 
     /// List discovered Zenoh nodes
-    Nodes {
-        /// Watch for changes (live update)
-        #[arg(long)]
-        watch: bool,
-
-        /// With --watch, stop after N snapshots (or change events with --changes-only)
-        #[arg(long, requires = "watch", value_parser = crate::duration::parse_count_arg)]
-        count: Option<u64>,
-
-        /// With --watch, stop after this much time (e.g. 5s)
-        #[arg(long, requires = "watch", value_parser = crate::duration::parse_duration_arg)]
-        duration: Option<Duration>,
-
-        /// With --watch, emit only added/changed/removed diffs (pair with --duration)
-        #[arg(long)]
-        changes_only: bool,
-    },
+    Nodes(NodesArgs),
 
     /// Publish a message to a key expression
-    Pub {
-        /// Key expression to publish to
-        key_expr: String,
-
-        /// JSON payload to publish
-        value: String,
-
-        /// JSON attachment metadata (e.g. '{"request_id":"001","client_id":"zenmon"}')
-        #[arg(long)]
-        att: Option<String>,
-
-        /// Republish the same value at a fixed rate (e.g. 10Hz). Requires
-        /// --count or --duration to bound the loop.
-        #[arg(long, requires = "rate_bound", value_parser = crate::duration::parse_rate_hz_arg)]
-        rate: Option<f64>,
-
-        /// With --rate, stop after N published messages
-        #[arg(long, group = "rate_bound", requires = "rate", value_parser = crate::duration::parse_count_arg)]
-        count: Option<u64>,
-
-        /// With --rate, stop after this much time (e.g. 5s)
-        #[arg(long, group = "rate_bound", requires = "rate", value_parser = crate::duration::parse_duration_arg)]
-        duration: Option<Duration>,
-    },
+    Pub(PubArgs),
 
     /// Scout the network for Zenoh nodes (no router needed).
     /// Scans multicast scouting ports in parallel to discover nodes on
     /// separately configured discovery networks.
-    Scout {
-        /// Multicast port range, START-END inclusive.
-        /// Default starts at Zenoh's default scouting port and scans 101 ports.
-        #[arg(long, value_name = "START-END", default_value = "7446-7546")]
-        port_range: String,
-
-        /// Per-port scouting timeout (e.g. 1s, 500ms)
-        #[arg(long, default_value = "1s", value_parser = crate::duration::parse_duration_arg)]
-        per_port_timeout: Duration,
-    },
+    Scout(ScoutArgs),
 
     /// Query liveliness tokens on the network
-    Liveliness {
-        /// Key expression to filter (default: "**")
-        #[arg(default_value = "**")]
-        key_expr: String,
-
-        /// Watch for changes (live subscribe)
-        #[arg(long)]
-        watch: bool,
-
-        /// With --watch, stop after N change events
-        #[arg(long, requires = "watch", value_parser = crate::duration::parse_count_arg)]
-        count: Option<u64>,
-
-        /// With --watch, stop after this much time (e.g. 5s)
-        #[arg(long, requires = "watch", value_parser = crate::duration::parse_duration_arg)]
-        duration: Option<Duration>,
-
-        /// With --watch, suppress the initial snapshot and stream only join/leave events
-        #[arg(long)]
-        changes_only: bool,
-    },
+    Liveliness(LivelinessArgs),
 
     /// Show current session information
     Info,
 
     /// Diagnose the connection: config, session, connection and admin checks,
     /// each reported pass/warn/fail, bounded by --timeout.
-    Doctor {
-        /// Overall diagnostic deadline (e.g. 5s)
-        #[arg(long, default_value = "5s", value_parser = crate::duration::parse_duration_arg)]
-        timeout: Duration,
-    },
+    Doctor(DoctorArgs),
 
     /// Test how two key expressions relate (intersect / include). Pure, no
     /// network. `a_includes_b` means A contains every key of B.
-    Keyexpr {
-        /// First key expression (A)
-        a: String,
-        /// Second key expression (B)
-        b: String,
-    },
+    Keyexpr(KeyexprArgs),
 
     /// Record received messages to a versioned NDJSON trace.
     ///
     /// `--output` writes one file (pairs with `replay`). `--dir` writes a
     /// rotating segment store with retention (pairs with `trace`), suitable
     /// for an always-on recorder.
-    Capture {
-        /// Key expression to subscribe and record
-        key_expr: String,
-
-        /// Drop messages whose key intersects this expression before writing
-        /// (repeatable), e.g. `--exclude '**/topic/sensor/pcd/**'`. The count
-        /// of dropped messages is reported when the capture ends.
-        #[arg(long = "exclude", value_name = "KEY_EXPR")]
-        exclude: Vec<String>,
-
-        /// Single-file output (NDJSON). Mutually exclusive with --dir.
-        #[arg(long, short, required_unless_present = "dir", conflicts_with = "dir")]
-        output: Option<PathBuf>,
-
-        /// Rotating segment-store directory. Mutually exclusive with --output.
-        #[arg(long, required_unless_present = "output")]
-        dir: Option<PathBuf>,
-
-        /// On-disk compression: none or zstd. zstd segments are named
-        /// `.ndjson.zst`; `trace` and `replay` read either kind.
-        #[arg(long, default_value = "none")]
-        compress: zenmon_core::trace::Compression,
-
-        /// Rotate the active segment once it reaches this size (dir mode)
-        #[arg(long, default_value = "64MB", value_parser = crate::duration::parse_byte_size_arg)]
-        rotate_size: u64,
-
-        /// …or once it is this old (dir mode)
-        #[arg(long, default_value = "1h", value_parser = crate::duration::parse_duration_arg)]
-        rotate_interval: Duration,
-
-        /// Retention: delete oldest closed segments over this total size (dir mode)
-        #[arg(long, default_value = "1GB", value_parser = crate::duration::parse_byte_size_arg)]
-        max_total_size: u64,
-
-        /// Retention: delete closed segments older than this (dir mode)
-        #[arg(long, default_value = "7d", value_parser = crate::duration::parse_duration_arg)]
-        max_age: Duration,
-
-        /// Stop after N recorded messages
-        #[arg(long, value_parser = crate::duration::parse_count_arg)]
-        count: Option<u64>,
-
-        /// Stop after this much time (e.g. 30s)
-        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
-        duration: Option<Duration>,
-    },
+    Capture(CaptureArgs),
 
     /// Replay a captured NDJSON trace by re-publishing its messages
-    Replay {
-        /// Input NDJSON trace file
-        input: PathBuf,
-
-        /// Replay original intervals at this speed multiplier (e.g. 2.0)
-        #[arg(long, default_value = "1.0", conflicts_with = "rate", value_parser = crate::duration::parse_speed_arg)]
-        speed: f64,
-
-        /// Replay at a fixed rate instead of original timing (e.g. 10Hz)
-        #[arg(long, conflicts_with = "speed", value_parser = crate::duration::parse_rate_hz_arg)]
-        rate: Option<f64>,
-
-        /// Prepend this prefix to every replayed key expression
-        #[arg(long)]
-        key_prefix: Option<String>,
-
-        /// Print what would be published without actually publishing
-        #[arg(long)]
-        dry_run: bool,
-    },
+    Replay(ReplayArgs),
 
     /// Read a rotating capture store (`capture --dir`). Pure, no network.
     Trace {
@@ -338,18 +148,7 @@ pub enum Command {
 
     /// Launch interactive TUI dashboard
     #[cfg(feature = "tui")]
-    Tui {
-        /// UI refresh interval (e.g. 100ms, 1s)
-        #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
-        refresh: Duration,
-
-        /// Allow publishing from the TUI. Off by default: the dashboard is an
-        /// observation tool, and an accidental put on a live control topic is
-        /// not a recoverable mistake. With this set, the header shows a WRITE
-        /// badge for the whole session.
-        #[arg(long)]
-        allow_publish: bool,
-    },
+    Tui(TuiArgs),
 
     /// Inspect a zenmon contract file (offline; no network).
     Contract {
@@ -361,68 +160,309 @@ pub enum Command {
     /// JSON an AI can read to reason about cause & effect. Optionally triggers a
     /// `--pub` actuation or a `--task` request first, then observes a bounded
     /// window. Data-only: it correlates, it does not diagnose.
-    #[command(group(clap::ArgGroup::new("topics").required(true).multiple(true).args(["observe", "preset"])))]
-    Scenario {
-        /// Topic to record (repeatable). At least one of --observe/--preset.
-        #[arg(long)]
-        observe: Vec<String>,
+    Scenario(ScenarioArgs),
+}
 
-        /// Expand a named topic set from the contract's `presets` (needs --contract)
-        #[arg(long)]
-        preset: Option<String>,
+#[derive(clap::Args, Debug)]
+pub struct DiscoverArgs {
+    /// Key expression to filter (default: "**")
+    #[arg(default_value = "**")]
+    pub key_expr: String,
+}
 
-        /// Prefix applied to --preset expansion (default: "**", prefix-agnostic)
-        #[arg(long, default_value = "**")]
-        prefix: String,
+#[derive(clap::Args, Debug)]
+pub struct SubArgs {
+    /// Key expression to subscribe
+    pub key_expr: String,
 
-        /// One-shot actuation trigger: publish VALUE to KEY once, after observing
-        /// starts. Mutually exclusive with --task.
-        #[arg(long = "pub", value_names = ["KEY", "VALUE"], num_args = 2, conflicts_with = "task")]
-        pub_: Option<Vec<String>>,
+    /// Pretty-print JSON output
+    #[arg(long)]
+    pub pretty: bool,
 
-        /// Task trigger: publish REQUEST_JSON to <PREFIX>/request and also
-        /// observe <PREFIX>/feedback and <PREFIX>/response. Mutually exclusive
-        /// with --pub.
-        #[arg(long, value_names = ["PREFIX", "REQUEST_JSON"], num_args = 2, conflicts_with = "pub_")]
-        task: Option<Vec<String>>,
+    /// Show timestamps
+    #[arg(long)]
+    pub timestamp: bool,
 
-        /// Sustain the --pub actuation: republish at this rate (Hz) instead of
-        /// once. Requires --pub and one of --pub-for/--pub-count.
-        #[arg(long = "pub-rate", requires = "pub_", requires = "pub_bound", value_parser = crate::duration::parse_rate_hz_arg)]
-        pub_rate: Option<f64>,
+    /// Stop after N received messages
+    #[arg(long, value_parser = crate::duration::parse_count_arg)]
+    pub count: Option<u64>,
 
-        /// With --pub-rate, stop republishing after this long (e.g. 10s)
-        #[arg(long = "pub-for", group = "pub_bound", requires = "pub_rate", value_parser = crate::duration::parse_duration_arg)]
-        pub_for: Option<Duration>,
+    /// Stop after this much time (e.g. 5s, 500ms)
+    #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+    pub duration: Option<Duration>,
 
-        /// With --pub-rate, stop republishing after N messages
-        #[arg(long = "pub-count", group = "pub_bound", requires = "pub_rate", value_parser = crate::duration::parse_count_arg)]
-        pub_count: Option<u64>,
+    /// Cap payload/attachment preview to N bytes in --json output
+    #[arg(long, value_parser = crate::duration::parse_count_arg)]
+    pub max_payload_bytes: Option<u64>,
+}
 
-        /// Capture window (e.g. 8s). Required.
-        #[arg(long = "for", value_parser = crate::duration::parse_duration_arg)]
-        for_: Duration,
+#[derive(clap::Args, Debug)]
+pub struct QueryArgs {
+    /// Key expression to query
+    pub key_expr: String,
 
-        /// Extra observe time after the trigger/window ends (e.g. 2s)
-        #[arg(long, value_parser = crate::duration::parse_duration_arg)]
-        settle: Option<Duration>,
+    /// JSON payload to include in query
+    #[arg(long)]
+    pub payload: Option<String>,
 
-        /// Extract a payload field over time into the episode's `tracks` section
-        /// (repeatable). Format `KEY:FIELD`, FIELD a dot-path — e.g.
-        /// `myfleet/topic/safety/safety_state:kind`.
-        #[arg(long)]
-        track: Vec<String>,
+    /// Query timeout (e.g. 5s, 500ms)
+    #[arg(long, default_value = "5s", value_parser = crate::duration::parse_duration_arg)]
+    pub timeout: Duration,
 
-        /// Omit the per-event `timeline` from the episode (keep meta/topics/
-        /// tracks). Much smaller output for long/high-rate sessions.
-        #[arg(long)]
-        no_timeline: bool,
+    /// Return at most N replies (output budget; more may exist)
+    #[arg(long, value_parser = crate::duration::parse_count_arg)]
+    pub limit: Option<u64>,
 
-        /// Dry run: print the resolved observe set, trigger, tracks, and window,
-        /// then exit without opening a session or triggering anything.
-        #[arg(long)]
-        explain: bool,
-    },
+    /// Reply consolidation. Default `auto` keeps one reply per key, so
+    /// when several queryables serve the same key only the fastest reply
+    /// is visible; use `none` to receive every reply.
+    #[arg(long, value_enum, default_value_t = ConsolidationArg::Auto)]
+    pub consolidation: ConsolidationArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct NodesArgs {
+    /// Watch for changes (live update)
+    #[arg(long)]
+    pub watch: bool,
+
+    /// With --watch, stop after N snapshots (or change events with --changes-only)
+    #[arg(long, requires = "watch", value_parser = crate::duration::parse_count_arg)]
+    pub count: Option<u64>,
+
+    /// With --watch, stop after this much time (e.g. 5s)
+    #[arg(long, requires = "watch", value_parser = crate::duration::parse_duration_arg)]
+    pub duration: Option<Duration>,
+
+    /// With --watch, emit only added/changed/removed diffs (pair with --duration)
+    #[arg(long)]
+    pub changes_only: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PubArgs {
+    /// Key expression to publish to
+    pub key_expr: String,
+
+    /// JSON payload to publish
+    pub value: String,
+
+    /// JSON attachment metadata (e.g. '{"request_id":"001","client_id":"zenmon"}')
+    #[arg(long)]
+    pub att: Option<String>,
+
+    /// Republish the same value at a fixed rate (e.g. 10Hz). Requires
+    /// --count or --duration to bound the loop.
+    #[arg(long, requires = "rate_bound", value_parser = crate::duration::parse_rate_hz_arg)]
+    pub rate: Option<f64>,
+
+    /// With --rate, stop after N published messages
+    #[arg(long, group = "rate_bound", requires = "rate", value_parser = crate::duration::parse_count_arg)]
+    pub count: Option<u64>,
+
+    /// With --rate, stop after this much time (e.g. 5s)
+    #[arg(long, group = "rate_bound", requires = "rate", value_parser = crate::duration::parse_duration_arg)]
+    pub duration: Option<Duration>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ScoutArgs {
+    /// Multicast port range, START-END inclusive.
+    /// Default starts at Zenoh's default scouting port and scans 101 ports.
+    #[arg(long, value_name = "START-END", default_value = "7446-7546")]
+    pub port_range: String,
+
+    /// Per-port scouting timeout (e.g. 1s, 500ms)
+    #[arg(long, default_value = "1s", value_parser = crate::duration::parse_duration_arg)]
+    pub per_port_timeout: Duration,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct LivelinessArgs {
+    /// Key expression to filter (default: "**")
+    #[arg(default_value = "**")]
+    pub key_expr: String,
+
+    /// Watch for changes (live subscribe)
+    #[arg(long)]
+    pub watch: bool,
+
+    /// With --watch, stop after N change events
+    #[arg(long, requires = "watch", value_parser = crate::duration::parse_count_arg)]
+    pub count: Option<u64>,
+
+    /// With --watch, stop after this much time (e.g. 5s)
+    #[arg(long, requires = "watch", value_parser = crate::duration::parse_duration_arg)]
+    pub duration: Option<Duration>,
+
+    /// With --watch, suppress the initial snapshot and stream only join/leave events
+    #[arg(long)]
+    pub changes_only: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DoctorArgs {
+    /// Overall diagnostic deadline (e.g. 5s)
+    #[arg(long, default_value = "5s", value_parser = crate::duration::parse_duration_arg)]
+    pub timeout: Duration,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct KeyexprArgs {
+    /// First key expression (A)
+    pub a: String,
+    /// Second key expression (B)
+    pub b: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CaptureArgs {
+    /// Key expression to subscribe and record
+    pub key_expr: String,
+
+    /// Drop messages whose key intersects this expression before writing
+    /// (repeatable), e.g. `--exclude '**/topic/sensor/pcd/**'`. The count
+    /// of dropped messages is reported when the capture ends.
+    #[arg(long = "exclude", value_name = "KEY_EXPR")]
+    pub exclude: Vec<String>,
+
+    /// Single-file output (NDJSON). Mutually exclusive with --dir.
+    #[arg(long, short, required_unless_present = "dir", conflicts_with = "dir")]
+    pub output: Option<PathBuf>,
+
+    /// Rotating segment-store directory. Mutually exclusive with --output.
+    #[arg(long, required_unless_present = "output")]
+    pub dir: Option<PathBuf>,
+
+    /// On-disk compression: none or zstd. zstd segments are named
+    /// `.ndjson.zst`; `trace` and `replay` read either kind.
+    #[arg(long, default_value = "none")]
+    pub compress: zenmon_core::trace::Compression,
+
+    /// Rotate the active segment once it reaches this size (dir mode)
+    #[arg(long, default_value = "64MB", value_parser = crate::duration::parse_byte_size_arg)]
+    pub rotate_size: u64,
+
+    /// …or once it is this old (dir mode)
+    #[arg(long, default_value = "1h", value_parser = crate::duration::parse_duration_arg)]
+    pub rotate_interval: Duration,
+
+    /// Retention: delete oldest closed segments over this total size (dir mode)
+    #[arg(long, default_value = "1GB", value_parser = crate::duration::parse_byte_size_arg)]
+    pub max_total_size: u64,
+
+    /// Retention: delete closed segments older than this (dir mode)
+    #[arg(long, default_value = "7d", value_parser = crate::duration::parse_duration_arg)]
+    pub max_age: Duration,
+
+    /// Stop after N recorded messages
+    #[arg(long, value_parser = crate::duration::parse_count_arg)]
+    pub count: Option<u64>,
+
+    /// Stop after this much time (e.g. 30s)
+    #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+    pub duration: Option<Duration>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReplayArgs {
+    /// Input NDJSON trace file
+    pub input: PathBuf,
+
+    /// Replay original intervals at this speed multiplier (e.g. 2.0)
+    #[arg(long, default_value = "1.0", conflicts_with = "rate", value_parser = crate::duration::parse_speed_arg)]
+    pub speed: f64,
+
+    /// Replay at a fixed rate instead of original timing (e.g. 10Hz)
+    #[arg(long, conflicts_with = "speed", value_parser = crate::duration::parse_rate_hz_arg)]
+    pub rate: Option<f64>,
+
+    /// Prepend this prefix to every replayed key expression
+    #[arg(long)]
+    pub key_prefix: Option<String>,
+
+    /// Print what would be published without actually publishing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[cfg(feature = "tui")]
+#[derive(clap::Args, Debug)]
+pub struct TuiArgs {
+    /// UI refresh interval (e.g. 100ms, 1s)
+    #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
+    pub refresh: Duration,
+
+    /// Allow publishing from the TUI. Off by default: the dashboard is an
+    /// observation tool, and an accidental put on a live control topic is
+    /// not a recoverable mistake. With this set, the header shows a WRITE
+    /// badge for the whole session.
+    #[arg(long)]
+    pub allow_publish: bool,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(group(clap::ArgGroup::new("topics").required(true).multiple(true).args(["observe", "preset"])))]
+pub struct ScenarioArgs {
+    /// Topic to record (repeatable). At least one of --observe/--preset.
+    #[arg(long)]
+    pub observe: Vec<String>,
+
+    /// Expand a named topic set from the contract's `presets` (needs --contract)
+    #[arg(long)]
+    pub preset: Option<String>,
+
+    /// Prefix applied to --preset expansion (default: "**", prefix-agnostic)
+    #[arg(long, default_value = "**")]
+    pub prefix: String,
+
+    /// One-shot actuation trigger: publish VALUE to KEY once, after observing
+    /// starts. Mutually exclusive with --task.
+    #[arg(long = "pub", value_names = ["KEY", "VALUE"], num_args = 2, conflicts_with = "task")]
+    pub pub_: Option<Vec<String>>,
+
+    /// Task trigger: publish REQUEST_JSON to <PREFIX>/request and also
+    /// observe <PREFIX>/feedback and <PREFIX>/response. Mutually exclusive
+    /// with --pub.
+    #[arg(long, value_names = ["PREFIX", "REQUEST_JSON"], num_args = 2, conflicts_with = "pub_")]
+    pub task: Option<Vec<String>>,
+
+    /// Sustain the --pub actuation: republish at this rate (Hz) instead of
+    /// once. Requires --pub and one of --pub-for/--pub-count.
+    #[arg(long = "pub-rate", requires = "pub_", requires = "pub_bound", value_parser = crate::duration::parse_rate_hz_arg)]
+    pub pub_rate: Option<f64>,
+
+    /// With --pub-rate, stop republishing after this long (e.g. 10s)
+    #[arg(long = "pub-for", group = "pub_bound", requires = "pub_rate", value_parser = crate::duration::parse_duration_arg)]
+    pub pub_for: Option<Duration>,
+
+    /// With --pub-rate, stop republishing after N messages
+    #[arg(long = "pub-count", group = "pub_bound", requires = "pub_rate", value_parser = crate::duration::parse_count_arg)]
+    pub pub_count: Option<u64>,
+
+    /// Capture window (e.g. 8s). Required.
+    #[arg(long = "for", value_parser = crate::duration::parse_duration_arg)]
+    pub for_: Duration,
+
+    /// Extra observe time after the trigger/window ends (e.g. 2s)
+    #[arg(long, value_parser = crate::duration::parse_duration_arg)]
+    pub settle: Option<Duration>,
+
+    /// Extract a payload field over time into the episode's `tracks` section
+    /// (repeatable). Format `KEY:FIELD`, FIELD a dot-path — e.g.
+    /// `myfleet/topic/safety/safety_state:kind`.
+    #[arg(long)]
+    pub track: Vec<String>,
+
+    /// Omit the per-event `timeline` from the episode (keep meta/topics/
+    /// tracks). Much smaller output for long/high-rate sessions.
+    #[arg(long)]
+    pub no_timeline: bool,
+
+    /// Dry run: print the resolved observe set, trigger, tracks, and window,
+    /// then exit without opening a session or triggering anything.
+    #[arg(long)]
+    pub explain: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -876,7 +916,7 @@ mod tests {
         ] {
             let cli =
                 Cli::try_parse_from(["zenmon", "query", "k/e", "--consolidation", arg]).unwrap();
-            let Command::Query { consolidation, .. } = cli.command else {
+            let Command::Query(QueryArgs { consolidation, .. }) = cli.command else {
                 panic!("expected query command");
             };
             assert_eq!(consolidation, expected, "--consolidation {arg}");
@@ -888,7 +928,7 @@ mod tests {
     #[test]
     fn query_consolidation_defaults_to_auto() {
         let cli = Cli::try_parse_from(["zenmon", "query", "k/e"]).unwrap();
-        let Command::Query { consolidation, .. } = cli.command else {
+        let Command::Query(QueryArgs { consolidation, .. }) = cli.command else {
             panic!("expected query command");
         };
         assert_eq!(consolidation, ConsolidationArg::Auto);
