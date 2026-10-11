@@ -115,8 +115,11 @@ Full notes in `tray/README.md`; the load-bearing ones:
 
 ## Testing
 
-`cargo test --workspace` runs the suite (~370 tests). Anything touching a Zenoh
-session still needs the manual loop below — the tests cover pure logic only.
+`cargo test --workspace` runs the suite (~590 tests). Most are pure logic;
+`crates/zenmon-cli/tests/e2e.rs` runs the real binary (`sub`, `pub`, `query`,
+`capture` → `trace read`) against an in-process Zenoh peer on loopback, so no
+`zenohd` is needed. The TUI and anything interactive still need the manual
+loop below.
 
 ```bash
 # Terminal 1: Start router
