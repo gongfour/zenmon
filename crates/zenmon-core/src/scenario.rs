@@ -13,19 +13,21 @@
 use serde_json::{json, Map, Value};
 use zenoh::key_expr::keyexpr;
 
-/// One observed message, already stamped with its relative time and with the
-/// causal metadata (`correlation_id`, `request_id`) extracted from the
-/// attachment. `payload` is the decoded view (`MessagePayload::to_view()`), so
+/// One observed message, already stamped with its relative time. `payload`
+/// and `attachment` are decoded views (`MessagePayload::to_view()`), so
 /// msgpack arrives as JSON.
+///
+/// The attachment is carried whole rather than mined for well-known ids:
+/// Zenoh gives attachments no schema, so which field (if any) links a request
+/// to its effects is the project's convention, not something zenmon can
+/// assume. The reader groups by whatever field its project uses.
 #[derive(Debug, Clone)]
 pub struct ScenarioEvent {
     /// Milliseconds since scenario start (first observation / trigger).
     pub t_rel_ms: u64,
     pub key_expr: String,
-    /// Causal chain id shared by mission→action→drive→safety, when present.
-    pub correlation_id: Option<String>,
-    /// Per-request id (e.g. a task request id), when present.
-    pub request_id: Option<String>,
+    /// Decoded attachment, when the message carried one.
+    pub attachment: Option<Value>,
     pub encoding: String,
     /// Sample kind ("PUT"/"DELETE").
     pub kind: String,
@@ -106,10 +108,8 @@ pub struct ScenarioMeta {
 /// the time-stamped observed events. Pure: no clocks, no network.
 ///
 /// - `topics`: per-key `{count, first_t_rel_ms, last_t_rel_ms}`.
-/// - `correlations`: only events carrying a `correlation_id`, grouped by it in
-///   time order. Events without one are absent here (they still appear in the
-///   timeline with `correlation_id: null`).
-/// - `timeline`: every event, ordered by `t_rel_ms`, with the decoded payload.
+/// - `timeline`: every event, ordered by `t_rel_ms`, with the decoded payload
+///   and, when present, the decoded attachment.
 pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
     // Stable time ordering; ties keep insertion order (a stable sort).
     let mut ordered: Vec<&ScenarioEvent> = events.iter().collect();
@@ -151,25 +151,6 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
         }
     }
 
-    // correlations: group only events that carry a correlation_id, in time order.
-    let mut correlations: Map<String, Value> = Map::new();
-    for e in &ordered {
-        let Some(cid) = &e.correlation_id else {
-            continue;
-        };
-        let entry = correlations
-            .entry(cid.clone())
-            .or_insert_with(|| Value::Array(Vec::new()));
-        if let Some(arr) = entry.as_array_mut() {
-            arr.push(json!({
-                "t_rel_ms": e.t_rel_ms,
-                "key_expr": e.key_expr,
-                "request_id": e.request_id,
-                "kind": e.kind,
-            }));
-        }
-    }
-
     // timeline: every event, ordered, with decoded payload.
     let timeline: Vec<Value> = ordered
         .iter()
@@ -177,11 +158,12 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
             let mut obj = json!({
                 "t_rel_ms": e.t_rel_ms,
                 "key_expr": e.key_expr,
-                "correlation_id": e.correlation_id,
-                "request_id": e.request_id,
                 "encoding": e.encoding,
                 "payload": e.payload,
             });
+            if let Some(att) = &e.attachment {
+                obj["attachment"] = att.clone();
+            }
             // Only the trigger event carries the marker, so ordinary events
             // serialize byte-for-byte as before.
             if e.trigger {
@@ -201,7 +183,6 @@ pub fn build_episode(meta: &ScenarioMeta, events: &[ScenarioEvent]) -> Value {
             "ended_reason": meta.ended_reason.as_str(),
         },
         "topics": Value::Object(topics),
-        "correlations": Value::Object(correlations),
         "timeline": timeline,
     })
 }
@@ -368,18 +349,11 @@ pub fn expand_preset(keys: &[String], prefix: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn ev(
-        t: u64,
-        key: &str,
-        cid: Option<&str>,
-        rid: Option<&str>,
-        payload: Value,
-    ) -> ScenarioEvent {
+    fn ev(t: u64, key: &str, attachment: Option<Value>, payload: Value) -> ScenarioEvent {
         ScenarioEvent {
             t_rel_ms: t,
             key_expr: key.to_string(),
-            correlation_id: cid.map(String::from),
-            request_id: rid.map(String::from),
+            attachment,
             encoding: "application/json".to_string(),
             kind: "PUT".to_string(),
             payload,
@@ -400,9 +374,9 @@ mod tests {
     #[test]
     fn topics_summary_counts_and_first_last() {
         let events = vec![
-            ev(10, "a/x", None, None, json!({"n": 1})),
-            ev(30, "a/x", None, None, json!({"n": 2})),
-            ev(20, "b/y", None, None, json!({"n": 3})),
+            ev(10, "a/x", None, json!({"n": 1})),
+            ev(30, "a/x", None, json!({"n": 2})),
+            ev(20, "b/y", None, json!({"n": 3})),
         ];
         let ep = build_episode(&meta(), &events);
 
@@ -419,10 +393,10 @@ mod tests {
     fn topics_include_rate_hz() {
         // 4 events over 300 ms = 3 intervals / 0.3 s = 10 Hz.
         let events = vec![
-            ev(0, "a", None, None, json!({})),
-            ev(100, "a", None, None, json!({})),
-            ev(200, "a", None, None, json!({})),
-            ev(300, "a", None, None, json!({})),
+            ev(0, "a", None, json!({})),
+            ev(100, "a", None, json!({})),
+            ev(200, "a", None, json!({})),
+            ev(300, "a", None, json!({})),
         ];
         let ep = build_episode(&meta(), &events);
         assert_eq!(ep["topics"]["a"]["rate_hz"], json!(10.0));
@@ -430,7 +404,7 @@ mod tests {
 
     #[test]
     fn topics_rate_hz_omitted_for_single_event() {
-        let ep = build_episode(&meta(), &[ev(0, "a", None, None, json!({}))]);
+        let ep = build_episode(&meta(), &[ev(0, "a", None, json!({}))]);
         assert!(ep["topics"]["a"].get("rate_hz").is_none());
     }
 
@@ -438,62 +412,33 @@ mod tests {
     fn topics_include_latest_payload() {
         // Out-of-order arrival; `latest` must be the highest-t_rel_ms payload.
         let events = vec![
-            ev(10, "a/x", None, None, json!({ "n": 1 })),
-            ev(30, "a/x", None, None, json!({ "n": 2 })),
-            ev(20, "a/x", None, None, json!({ "n": 99 })),
+            ev(10, "a/x", None, json!({ "n": 1 })),
+            ev(30, "a/x", None, json!({ "n": 2 })),
+            ev(20, "a/x", None, json!({ "n": 99 })),
         ];
         let ep = build_episode(&meta(), &events);
         assert_eq!(ep["topics"]["a/x"]["latest"], json!({ "n": 2 }));
     }
 
     #[test]
-    fn correlations_group_shared_id_in_time_order() {
-        // Provide out of order; grouping must be by ascending t_rel_ms.
+    fn timeline_carries_the_attachment_only_when_present() {
         let events = vec![
-            ev(30, "drive/cmd", Some("corr-1"), Some("r9"), json!({})),
-            ev(10, "mission/state", Some("corr-1"), Some("r9"), json!({})),
-            ev(20, "action/step", Some("corr-1"), None, json!({})),
+            ev(10, "a/x", None, json!({"v": 1})),
+            ev(20, "a/y", Some(json!({"trace": "t-1"})), json!({"v": 2})),
         ];
         let ep = build_episode(&meta(), &events);
 
-        let chain = ep["correlations"]["corr-1"].as_array().unwrap();
-        assert_eq!(chain.len(), 3);
-        assert_eq!(chain[0]["t_rel_ms"], 10);
-        assert_eq!(chain[0]["key_expr"], "mission/state");
-        assert_eq!(chain[0]["request_id"], "r9");
-        assert_eq!(chain[1]["t_rel_ms"], 20);
-        assert_eq!(chain[1]["key_expr"], "action/step");
-        assert_eq!(chain[1]["request_id"], Value::Null);
-        assert_eq!(chain[2]["t_rel_ms"], 30);
-        assert_eq!(chain[2]["kind"], "PUT");
-    }
-
-    #[test]
-    fn events_without_correlation_absent_from_correlations_but_in_timeline() {
-        let events = vec![
-            ev(10, "a/x", None, None, json!({"v": 1})),
-            ev(20, "a/y", Some("c"), None, json!({"v": 2})),
-        ];
-        let ep = build_episode(&meta(), &events);
-
-        // Only the correlated one is grouped.
-        let corr = ep["correlations"].as_object().unwrap();
-        assert_eq!(corr.len(), 1);
-        assert!(corr.contains_key("c"));
-
-        // Both are in the timeline; the uncorrelated one carries null.
         let tl = ep["timeline"].as_array().unwrap();
-        assert_eq!(tl.len(), 2);
-        assert_eq!(tl[0]["key_expr"], "a/x");
-        assert_eq!(tl[0]["correlation_id"], Value::Null);
-        assert_eq!(tl[1]["correlation_id"], "c");
+        assert!(tl[0].get("attachment").is_none(), "{}", tl[0]);
+        assert_eq!(tl[1]["attachment"]["trace"], "t-1");
+        assert!(ep.get("correlations").is_none());
     }
 
     #[test]
     fn timeline_is_ordered_and_carries_decoded_payloads() {
         let events = vec![
-            ev(50, "late", None, None, json!({"who": "last"})),
-            ev(5, "early", None, None, json!({"who": "first"})),
+            ev(50, "late", None, json!({"who": "last"})),
+            ev(5, "early", None, json!({"who": "first"})),
         ];
         let ep = build_episode(&meta(), &events);
 
@@ -509,7 +454,6 @@ mod tests {
         let ep = build_episode(&meta(), &[]);
         assert_eq!(ep["meta"]["message_count"], 0);
         assert_eq!(ep["topics"], json!({}));
-        assert_eq!(ep["correlations"], json!({}));
         assert_eq!(ep["timeline"], json!([]));
     }
 
@@ -524,11 +468,11 @@ mod tests {
     fn track_discrete_field_series_and_transitions() {
         // safety kind: 0,0,2,2,0 -> two transitions (0->2, 2->0).
         let events = vec![
-            ev(10, "safety", None, None, json!({ "kind": 0 })),
-            ev(20, "safety", None, None, json!({ "kind": 0 })),
-            ev(30, "safety", None, None, json!({ "kind": 2 })),
-            ev(40, "safety", None, None, json!({ "kind": 2 })),
-            ev(50, "safety", None, None, json!({ "kind": 0 })),
+            ev(10, "safety", None, json!({ "kind": 0 })),
+            ev(20, "safety", None, json!({ "kind": 0 })),
+            ev(30, "safety", None, json!({ "kind": 2 })),
+            ev(40, "safety", None, json!({ "kind": 2 })),
+            ev(50, "safety", None, json!({ "kind": 0 })),
         ];
         let t = build_tracks(&events, &[spec("safety", "kind")]);
         let e = &t["safety:kind"];
@@ -545,8 +489,8 @@ mod tests {
     #[test]
     fn track_numeric_field_reports_delta() {
         let events = vec![
-            ev(0, "pose", None, None, json!({ "x": 1.0 })),
-            ev(10, "pose", None, None, json!({ "x": 3.5 })),
+            ev(0, "pose", None, json!({ "x": 1.0 })),
+            ev(10, "pose", None, json!({ "x": 3.5 })),
         ];
         let t = build_tracks(&events, &[spec("pose", "x")]);
         assert_eq!(t["pose:x"]["count"], 2);
@@ -557,7 +501,7 @@ mod tests {
     fn track_high_cardinality_omits_transitions() {
         // 20 distinct values (> threshold) -> series+delta but no transitions.
         let events: Vec<_> = (0..20)
-            .map(|i| ev(i * 10, "pose", None, None, json!({ "x": i as f64 })))
+            .map(|i| ev(i * 10, "pose", None, json!({ "x": i as f64 })))
             .collect();
         let t = build_tracks(&events, &[spec("pose", "x")]);
         assert_eq!(t["pose:x"]["count"], 20);
@@ -571,7 +515,6 @@ mod tests {
             5,
             "snap",
             None,
-            None,
             json!({ "battery": { "soc_pct": 42.0 } }),
         )];
         let t = build_tracks(&events, &[spec("snap", "battery.soc_pct")]);
@@ -581,9 +524,9 @@ mod tests {
     #[test]
     fn track_ignores_other_keys_and_missing_field() {
         let events = vec![
-            ev(10, "safety", None, None, json!({ "kind": 1 })),
-            ev(20, "other", None, None, json!({ "kind": 9 })), // different key
-            ev(30, "safety", None, None, json!({ "nope": 1 })), // field absent
+            ev(10, "safety", None, json!({ "kind": 1 })),
+            ev(20, "other", None, json!({ "kind": 9 })), // different key
+            ev(30, "safety", None, json!({ "nope": 1 })), // field absent
         ];
         let t = build_tracks(&events, &[spec("safety", "kind")]);
         // Only the one matching event with the field present is counted.
@@ -592,7 +535,7 @@ mod tests {
 
     #[test]
     fn track_no_specs_is_empty_object() {
-        let events = vec![ev(10, "a", None, None, json!({ "x": 1 }))];
+        let events = vec![ev(10, "a", None, json!({ "x": 1 }))];
         assert_eq!(build_tracks(&events, &[]), json!({}));
     }
 
@@ -632,9 +575,9 @@ mod tests {
     #[test]
     fn track_wildcard_expands_to_one_entry_per_concrete_key() {
         let events = vec![
-            ev(10, "safety/policy/a", None, None, json!({ "kind": 1 })),
-            ev(20, "safety/policy/b", None, None, json!({ "kind": 2 })),
-            ev(30, "safety/policy/a", None, None, json!({ "kind": 3 })),
+            ev(10, "safety/policy/a", None, json!({ "kind": 1 })),
+            ev(20, "safety/policy/b", None, json!({ "kind": 2 })),
+            ev(30, "safety/policy/a", None, json!({ "kind": 3 })),
         ];
         let t = build_tracks(&events, &[spec("safety/policy/*", "kind")]);
         assert_eq!(t["safety/policy/a:kind"]["count"], 2);
@@ -649,9 +592,9 @@ mod tests {
         // The synthetic trigger event (the actuation/request that caused the
         // episode) carries `trigger: true` so the causal origin is visible in
         // the timeline, not only in `meta`. Ordinary events omit the marker.
-        let mut trig = ev(0, "cmd/go", None, None, json!({ "go": true }));
+        let mut trig = ev(0, "cmd/go", None, json!({ "go": true }));
         trig.trigger = true;
-        let normal = ev(10, "a/x", None, None, json!({ "n": 1 }));
+        let normal = ev(10, "a/x", None, json!({ "n": 1 }));
         let ep = build_episode(&meta(), &[trig, normal]);
 
         let tl = ep["timeline"].as_array().unwrap();

@@ -1708,25 +1708,16 @@ fn resolve_payload_arg_bytes(s: &str) -> Result<Vec<u8>, ZenmonError> {
     }
 }
 
-/// Extract a string field from a message's attachment, if the attachment parses
-/// as a JSON object carrying that key. Used for `correlation_id` / `request_id`.
-fn attachment_str(msg: &zenmon_core::types::ZenohMessage, field: &str) -> Option<String> {
-    let att = msg.attachment.as_ref()?;
-    let v = att.as_json()?;
-    v.get(field).and_then(|f| f.as_str()).map(String::from)
-}
-
-/// Build an observed [`ScenarioEvent`] from a received message, extracting the
-/// causal ids from its attachment and decoding the payload. `trigger` is always
-/// false — the synthetic trigger event is built separately.
+/// Build an observed [`ScenarioEvent`] from a received message, decoding its
+/// payload and attachment. `trigger` is always false — the synthetic trigger
+/// event is built separately.
 fn observed_event(
     msg: zenmon_core::types::ZenohMessage,
     t_rel_ms: u64,
 ) -> zenmon_core::scenario::ScenarioEvent {
     zenmon_core::scenario::ScenarioEvent {
         t_rel_ms,
-        correlation_id: attachment_str(&msg, "correlation_id"),
-        request_id: attachment_str(&msg, "request_id"),
+        attachment: msg.attachment.as_ref().map(|a| a.to_view()),
         encoding: msg.encoding.clone(),
         kind: msg.kind.clone(),
         payload: msg.payload.to_view(),
@@ -1742,8 +1733,7 @@ fn make_trigger_event(key: &str, value: &str) -> zenmon_core::scenario::Scenario
     zenmon_core::scenario::ScenarioEvent {
         t_rel_ms: 0,
         key_expr: key.to_string(),
-        correlation_id: None,
-        request_id: None,
+        attachment: None,
         encoding: String::new(),
         kind: "PUT".to_string(),
         payload: serde_json::from_str(value)
@@ -2145,8 +2135,8 @@ async fn run_scenario(
     Ok(())
 }
 
-/// Compact human summary of an episode: trigger, per-topic counts, correlation
-/// chain count, ended reason.
+/// Compact human summary of an episode: trigger, per-topic counts, ended
+/// reason.
 fn print_scenario_summary(episode: &serde_json::Value) {
     let meta = &episode["meta"];
     let trigger = &meta["trigger"];
@@ -2185,12 +2175,6 @@ fn print_scenario_summary(episode: &serde_json::Value) {
             );
         }
     }
-
-    let chains = episode["correlations"]
-        .as_object()
-        .map(|m| m.len())
-        .unwrap_or(0);
-    println!("correlations:  {} chain(s)", chains);
 }
 
 #[cfg(test)]

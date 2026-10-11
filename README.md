@@ -578,10 +578,13 @@ zenmon --contract mynet.contract.yaml scenario --preset stall --prefix myfleet -
   `delta` (numeric), and `transitions` (for discrete fields). A wildcard `KEY`
   (e.g. `topic/safety/policy/*:level`) expands to one track per matching concrete
   key.
-- **Episode** — `{ meta, topics, correlations, timeline, tracks }`. Each `topics`
+- **Episode** — `{ meta, topics, timeline, tracks, events }`. Each `topics`
   entry carries `count`, `first`/`last_t_rel_ms`, `rate_hz`, and `latest` (the last
-  decoded payload); `correlations` groups events by attachment `correlation_id`.
-  Always bounded by `--for`/`--settle`, so it terminates (agent-safe).
+  decoded payload). Each `timeline` event carries its decoded payload and, when
+  the message had one, its decoded `attachment` — zenmon reads no particular
+  attachment field, so group by whatever id your project puts there. With
+  `--track`, `tracks` holds the series and `events` lists every transition in
+  time order. Always bounded by `--for`/`--settle`, so it terminates (agent-safe).
 - **Size / preview** — `--no-timeline` drops the per-event timeline (keeps the
   summaries; much smaller for long/high-rate sessions); `--explain` prints the
   resolved plan and exits without touching the network.
@@ -845,7 +848,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 18. [x] MessagePack payload auto-decode — read cross-language binary payloads as JSON
 19. [x] Contract consumption — enrich `sub`/`discover`; `contract` inspect subcommand
 20. [x] `zenmon scenario` — correlated diagnostic sessions (trigger, observe, track → episode JSON)
-21. [ ] Automatic `events` in the episode (safety transitions, stalls) beyond `--track`
+21. [ ] Automatic `events` in the episode beyond `--track` transitions
 22. [ ] Strict contract payload validation (field/type checks against the schema)
 23. [x] Rotating capture store + `trace` reader — time-shifted inspection (see what happened while the agent was away)
 24. [x] `zenmon-tray` — always-on capture from the system tray, no terminal required

@@ -414,7 +414,7 @@ pub enum Command {
         track: Vec<String>,
 
         /// Omit the per-event `timeline` from the episode (keep meta/topics/
-        /// correlations/tracks). Much smaller output for long/high-rate sessions.
+        /// tracks). Much smaller output for long/high-rate sessions.
         #[arg(long)]
         no_timeline: bool,
 
