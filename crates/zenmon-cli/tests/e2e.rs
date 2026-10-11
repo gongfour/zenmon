@@ -493,3 +493,32 @@ fn sub_qos_shows_the_publishers_settings() {
     assert_eq!(line["qos"]["express"], true, "{line}");
     assert!(line["qos"]["reliability"].is_string(), "{line}");
 }
+
+/// `pub --congestion/--priority/--express` reach the wire as asked.
+#[test]
+fn pub_sends_with_the_requested_qos() {
+    use zenoh::qos::{CongestionControl, Priority};
+
+    let hub = Hub::open();
+    let key = format!("{}/cmd", prefix("pubqos"));
+    let sub = hub.session.declare_subscriber(&key).wait().unwrap();
+
+    run(hub.zenmon(&[
+        "pub",
+        &key,
+        "1",
+        "--congestion",
+        "block",
+        "--priority",
+        "real-time",
+        "--express",
+    ]));
+
+    let sample = sub
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .expect("message reached the hub");
+    assert_eq!(sample.congestion_control(), CongestionControl::Block);
+    assert_eq!(sample.priority(), Priority::RealTime);
+    assert!(sample.express());
+}

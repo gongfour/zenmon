@@ -296,6 +296,59 @@ pub struct PubArgs {
     /// With --rate, stop after this much time (e.g. 5s)
     #[arg(long, group = "rate_bound", requires = "rate", value_parser = crate::duration::parse_duration_arg)]
     pub duration: Option<Duration>,
+
+    /// What to do when the network is congested: drop the message (Zenoh's
+    /// default) or block until it can be sent
+    #[arg(long, value_enum)]
+    pub congestion: Option<CongestionArg>,
+
+    /// Message priority (default: data)
+    #[arg(long, value_enum)]
+    pub priority: Option<PriorityArg>,
+
+    /// Send without batching, for lower latency
+    #[arg(long)]
+    pub express: bool,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CongestionArg {
+    Drop,
+    Block,
+}
+
+impl From<CongestionArg> for zenoh::qos::CongestionControl {
+    fn from(arg: CongestionArg) -> Self {
+        match arg {
+            CongestionArg::Drop => Self::Drop,
+            CongestionArg::Block => Self::Block,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PriorityArg {
+    RealTime,
+    InteractiveHigh,
+    InteractiveLow,
+    DataHigh,
+    Data,
+    DataLow,
+    Background,
+}
+
+impl From<PriorityArg> for zenoh::qos::Priority {
+    fn from(arg: PriorityArg) -> Self {
+        match arg {
+            PriorityArg::RealTime => Self::RealTime,
+            PriorityArg::InteractiveHigh => Self::InteractiveHigh,
+            PriorityArg::InteractiveLow => Self::InteractiveLow,
+            PriorityArg::DataHigh => Self::DataHigh,
+            PriorityArg::Data => Self::Data,
+            PriorityArg::DataLow => Self::DataLow,
+            PriorityArg::Background => Self::Background,
+        }
+    }
 }
 
 #[derive(clap::Args, Debug)]
