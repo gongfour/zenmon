@@ -921,7 +921,8 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 27. [x] Field sparklines — plot any numeric field of a payload over its history
 28. [x] Publish from the TUI, behind an opt-in flag and a confirmation
 29. [x] Saved views — restore a filter, expansion and plots by name
-30. [ ] Aggregate rows for a folded branch — one line for a whole fleet's pose rate, not just its key count
+30. [x] Aggregate rows for a folded branch — branch rows carry their summed rate, and a branch's detail
+    groups it by kind of key (`*/pose  200 keys  2000 Hz`)
 31. [ ] Pinned diff baseline — compare against a message you chose, not just the previous one
 
 ## License

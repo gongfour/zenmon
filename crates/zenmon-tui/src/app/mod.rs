@@ -1093,6 +1093,57 @@ impl App {
     ///
     /// Scans `topic_hz`, so it is O(keys) and is only ever called for the one
     /// selected branch — never per visible row.
+    /// Summed rate of every key below each branch, built in one pass over
+    /// the rates so the tree can show it on every branch row each frame.
+    pub(crate) fn branch_rates(&self) -> HashMap<String, f64> {
+        let mut out: HashMap<String, f64> = HashMap::new();
+        for (key, &hz) in &self.topic_hz {
+            if hz <= 0.0 {
+                continue;
+            }
+            let mut end = 0;
+            while let Some(i) = key[end..].find('/') {
+                end += i;
+                *out.entry(key[..end].to_string()).or_default() += hz;
+                end += 1;
+            }
+        }
+        out
+    }
+
+    /// Keys below `path` grouped by what follows their first segment under
+    /// it — `agv/f001/pose` and `agv/f002/pose` under `agv` are both `*/pose`
+    /// — with a key count and summed rate, busiest first. One line for a
+    /// whole fleet's pose, however many vehicles. Empty when grouping would
+    /// not shorten anything.
+    pub(crate) fn suffix_groups(&self, path: &str) -> Vec<(String, usize, f64)> {
+        let prefix = format!("{path}/");
+        let mut groups: HashMap<String, (usize, f64)> = HashMap::new();
+        let mut keys = 0;
+        for key in self.topic_msg_counts.keys() {
+            let Some(rest) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            keys += 1;
+            // A direct child has nothing after it to group on; it stays itself.
+            let suffix = match rest.split_once('/') {
+                Some((_, tail)) => format!("*/{tail}"),
+                None => rest.to_string(),
+            };
+            let entry = groups.entry(suffix).or_default();
+            entry.0 += 1;
+            entry.1 += self.topic_hz.get(key).copied().unwrap_or(0.0);
+        }
+        if groups.len() >= keys {
+            return Vec::new();
+        }
+        let mut out: Vec<(String, usize, f64)> =
+            groups.into_iter().map(|(s, (n, hz))| (s, n, hz)).collect();
+        // Ties on the name, so equal fleets do not reshuffle every second.
+        out.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        out
+    }
+
     pub(crate) fn subtree_totals(&self, path: &str) -> (f64, u64) {
         let mut hz = 0.0;
         let mut bytes = 0;
