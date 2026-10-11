@@ -43,7 +43,7 @@ problem is explained:
 | Can't connect / router unreachable | `zenmon doctor` → if it fails, `zenmon scout` (finds nodes with no router) |
 | Who is on the network? | `zenmon nodes`, then `zenmon liveliness` for liveliness tokens |
 | What topics are flowing? | `zenmon discover`, then `zenmon sub "<key-expr>"` on keys of interest |
-| Messages aren't arriving | `zenmon discover` (is anyone publishing?) → `zenmon sub "<ke>"` (do you actually receive?) → `zenmon keyexpr "<pub-ke>" "<sub-ke>"` (do the two key expressions intersect?) |
+| Messages aren't arriving | `zenmon admin decls "<key>"` (does any router know a subscriber/publisher on it, and whose?) → `zenmon discover` (is anyone publishing?) → `zenmon sub "<ke>"` (do you actually receive?) → `zenmon keyexpr "<pub-ke>" "<sub-ke>"` (do the two key expressions intersect?) |
 | Are messages being lost? | `zenmon sub "<ke>" --detect-misses --duration 10s` — reports sequence gaps, but only from publishers that number samples (zenoh-ext AdvancedPublisher); plain puts show no misses either way, so "no misses" proves nothing for them |
 | Does the payload match the contract? | `zenmon --contract <file> sub "<ke>" --validate --count 20` — violations are listed per message |
 | Is anyone listening to this key? | `zenmon pub` reports `matched` — but `pub` writes, so propose it (§4); for a read-only check use `zenmon discover`/`liveliness` |

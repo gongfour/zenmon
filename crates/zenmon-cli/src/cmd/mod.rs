@@ -1,6 +1,7 @@
 //! One module per subcommand (or family of them). `main.rs` only parses,
 //! resolves the config, and dispatches here.
 
+pub mod admin;
 pub mod capture;
 pub mod config;
 pub mod contract;

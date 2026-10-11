@@ -129,6 +129,8 @@ pub mod types;
 // Support surface — reusable, but shaped by zenmon's own needs.
 // ---------------------------------------------------------------------------
 
+/// Reading the admin space: who declared what, per router.
+pub mod admin;
 pub mod capture;
 pub mod doctor;
 /// Merging admin-space and scouted node sets.

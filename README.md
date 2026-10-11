@@ -144,7 +144,8 @@ The skill triggers on Zenoh debugging requests and is read-only by default
 For agents that speak the Model Context Protocol instead of running shell
 commands, `zenmon mcp` serves the read-only commands as MCP tools over stdio:
 `nodes`, `discover`, `subscribe` (always bounded: 20 messages / 5 s unless
-asked otherwise), `query`, `liveliness`, `info`, `doctor`, `keyexpr_compare`,
+asked otherwise), `query`, `liveliness`, `info`, `doctor`, `declarations`,
+`admin_get`, `keyexpr_compare`,
 `trace_read`, `trace_stats` and `contract_show`. Nothing that publishes is
 exposed. Global flags before `mcp` apply to every call:
 
@@ -243,6 +244,11 @@ zenmon sub "sensor/**" --detect-misses          # also report samples lost in tr
 zenmon sub "sensor/**" --kind delete            # only DELETEs (shown as `key | DELETE`)
 zenmon sub "sensor/**" --qos                    # priority, congestion control, reliability, express
 zenmon --json nodes --watch --count 1           # one snapshot then exit
+
+# Who declared what on a key, per router (needs a router's admin space)
+zenmon admin decls "robot/**"                   # subscribers, publishers, queryables, tokens
+zenmon admin decls "robot/1/pose" --kind subscriber   # "is anything listening?"
+zenmon admin get "@/*/router"                   # raw admin-space entries
 
 # Test how two key expressions relate (pure, no network)
 zenmon --json keyexpr "a/*" "a/b"
@@ -884,7 +890,7 @@ tray/             # Tauri app: React frontend + `zenmon-tray` Rust backend
 13. [x] DELETE message display — struck-through key and a DELETE line in the TUI, `sub --kind`
 
 ### Phase 5 — Advanced Inspection
-14. [ ] Admin space explorer — browse `@/**` for router/plugin/storage state
+14. [x] Admin space explorer — `admin decls` (who declared what) and `admin get` (raw entries)
 15. [ ] Storage/history query — fetch historical data from zenoh storage backends
 16. [ ] Downsampling display — show rate-limiting configuration from router
 17. [x] Pub/sub miss detection — `sub --detect-misses` reports sequence gaps via `zenoh-ext`

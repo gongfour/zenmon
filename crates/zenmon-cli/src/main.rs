@@ -168,6 +168,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             }
         }
 
+        Command::Admin { command } => cmd::admin::run(&ctx, config, command).await?,
+
         Command::Trace { command } => cmd::trace::run(&ctx, command)?,
 
         Command::Capture(args) => cmd::capture::capture(&ctx, config, args).await?,

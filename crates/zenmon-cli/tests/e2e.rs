@@ -30,12 +30,27 @@ struct Hub {
 
 impl Hub {
     fn open() -> Hub {
+        Hub::open_as("peer")
+    }
+
+    /// A router hub, for what only routers answer (the admin space's
+    /// declaration lists).
+    fn open_router() -> Hub {
+        Hub::open_as("router")
+    }
+
+    fn open_as(mode: &str) -> Hub {
         let mut config = zenoh::Config::default();
+        let mode = format!("\"{mode}\"");
         for (key, value) in [
-            ("mode", r#""peer""#),
+            ("mode", mode.as_str()),
             ("listen/endpoints", r#"["tcp/127.0.0.1:0"]"#),
             ("scouting/multicast/enabled", "false"),
             ("scouting/gossip/enabled", "false"),
+            // zenohd serves its admin space by default; a library session
+            // does not.
+            ("adminspace/enabled", "true"),
+            ("adminspace/permissions/read", "true"),
         ] {
             config.insert_json5(key, value).expect("hub config");
         }
@@ -648,4 +663,49 @@ fn mcp_server_lists_and_runs_tools() {
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
+}
+
+/// `admin decls` answers "is anything subscribed to this?" from the router's
+/// admin space, naming who declared it.
+#[test]
+fn admin_decls_names_who_subscribes_to_a_key() {
+    let hub = Hub::open_router();
+    let p = prefix("admin");
+
+    // A subscriber, held by a separate zenmon client for the duration.
+    let mut sub = hub
+        .zenmon(&["sub", &format!("{p}/**"), "--duration", "20s"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let key = format!("{p}/robot/pose");
+    let mut found = Value::Null;
+    for _ in 0..40 {
+        let out = run(hub.zenmon(&["--json", "admin", "decls", &key, "--kind", "subscriber"]));
+        found = serde_json::from_slice(&out.stdout).unwrap();
+        if found["count"] == 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    sub.kill().unwrap();
+    let _ = sub.wait();
+
+    assert_eq!(found["count"], 1, "{found}");
+    let d = &found["items"][0];
+    assert_eq!(d["kind"], "subscriber");
+    assert_eq!(d["key_expr"], format!("{p}/**"));
+    assert_eq!(d["router"], hub.session.zid().to_string());
+    assert_eq!(d["clients"].as_array().unwrap().len(), 1, "{d}");
+
+    let out = run(hub.zenmon(&[
+        "admin",
+        "decls",
+        &format!("{p}/nobody/**"),
+        "--kind",
+        "subscriber",
+    ]));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("No router reports"));
 }

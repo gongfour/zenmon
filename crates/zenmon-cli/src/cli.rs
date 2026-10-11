@@ -134,6 +134,13 @@ pub enum Command {
     /// Replay a captured NDJSON trace by re-publishing its messages
     Replay(ReplayArgs),
 
+    /// Ask routers' admin space what they know: who declared which
+    /// subscriber, publisher, queryable or token, and the raw entries.
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
+
     /// Read a rotating capture store (`capture --dir`). Pure, no network.
     Trace {
         #[command(subcommand)]
@@ -583,6 +590,57 @@ pub enum ContractCommand {
         /// Contract path (defaults to --contract / ZENMON_CONTRACT)
         path: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AdminCommand {
+    /// Subscribers, publishers, queryables and liveliness tokens declared on
+    /// keys intersecting KEY_EXPR, with the sessions that declared them, as
+    /// each router reports them. "Is anything subscribed to this?" in one
+    /// call.
+    Decls {
+        /// Only declarations whose key intersects this (default: all)
+        #[arg(default_value = "**")]
+        key_expr: String,
+
+        /// Only these kinds (repeatable; default: all four)
+        #[arg(long, value_enum)]
+        kind: Vec<DeclKindArg>,
+
+        /// How long to wait for routers to answer
+        #[arg(long, default_value = "3s", value_parser = crate::duration::parse_duration_arg)]
+        timeout: Duration,
+    },
+
+    /// Raw admin-space entries under SELECTOR, payloads decoded.
+    Get {
+        /// Admin-space selector (must start with @/)
+        #[arg(default_value = "@/*/router")]
+        selector: String,
+
+        /// How long to wait for answers
+        #[arg(long, default_value = "3s", value_parser = crate::duration::parse_duration_arg)]
+        timeout: Duration,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeclKindArg {
+    Subscriber,
+    Publisher,
+    Queryable,
+    Token,
+}
+
+impl DeclKindArg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeclKindArg::Subscriber => "subscriber",
+            DeclKindArg::Publisher => "publisher",
+            DeclKindArg::Queryable => "queryable",
+            DeclKindArg::Token => "token",
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
