@@ -608,8 +608,8 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
         ))),
     }
 
-    // The attachment is not diffed: it carries correlation ids that change on
-    // every message by design, so marking them would be noise on every line.
+    // The attachment is not diffed: it typically carries per-message ids or
+    // timestamps that change every time, so marking them would be noise.
     if let Some((msg, _)) = app.topic_latest.get(key) {
         if let Some(att) = &msg.attachment {
             lines.push(Line::from(Span::styled(
