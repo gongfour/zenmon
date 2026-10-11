@@ -21,6 +21,7 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
         duration,
         max_payload_bytes,
         detect_misses,
+        kind,
     } = args;
     warn_redundant_namespace([key_expr.as_str()], config.namespace.as_deref());
     let max_payload_bytes = max_payload_bytes.map(|n| n as usize);
@@ -73,6 +74,8 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: SubArgs) -> Result<(), Z
                 }
             }
             item = rx.recv() => match item {
+                // Filtered-out kinds don't count toward --count.
+                Some(msg) if kind.is_some_and(|k| !k.matches(&msg)) => {}
                 Some(msg) => {
                     rendered.clear();
                     render_sub_message(
@@ -199,7 +202,9 @@ fn render_sub_message(
             contract_annotation(&c.enrich(&msg.key_expr, &msg.encoding), &msg.encoding)
         );
     }
-    let payload_str = if pretty {
+    let payload_str = if msg.is_delete() {
+        "DELETE".to_string()
+    } else if pretty {
         msg.payload.pretty()
     } else {
         format!("{}", msg.payload)

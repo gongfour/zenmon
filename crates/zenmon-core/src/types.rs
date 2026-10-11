@@ -25,6 +25,17 @@ pub struct ZenohMessage {
     pub attachment_bytes: Option<usize>,
 }
 
+/// `kind` of a DELETE sample (Zenoh's `SampleKind` Display).
+pub const KIND_DELETE: &str = "DELETE";
+
+impl ZenohMessage {
+    /// A DELETE carries no value: the key was removed. Showing its (empty)
+    /// payload like a PUT's would read as "the value is now empty".
+    pub fn is_delete(&self) -> bool {
+        self.kind == KIND_DELETE
+    }
+}
+
 /// A message payload captured **losslessly** as its original wire bytes.
 ///
 /// Structured/text views (`as_json`, `as_str`) are computed on demand, so the

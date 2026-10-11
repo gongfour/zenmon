@@ -2892,3 +2892,27 @@ fn liveliness_index_recovers_from_tokens_pushed_directly() {
     app.handle_event(live("a/alive", true));
     assert_eq!(app.liveliness_tokens.len(), 1);
 }
+
+#[test]
+fn a_deleted_key_says_so_instead_of_showing_an_empty_value() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    let mut app = App::new("test".into());
+    app.space = Space::Traffic;
+    app.handle_zenoh_message(numbered("demo/a", 1));
+    let mut delete = numbered("demo/a", 0);
+    delete.kind = zenmon_core::types::KIND_DELETE.into();
+    delete.payload = MessagePayload::from_bytes(Vec::new());
+    app.handle_zenoh_message(delete);
+    app.refresh_tree_rows();
+    app.tree_selected = app.tree_rows().len() - 1;
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("· deleted"), "header flags it");
+    assert!(
+        text.contains("DELETE — the key was removed"),
+        "latest says it"
+    );
+}

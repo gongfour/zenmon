@@ -202,6 +202,26 @@ pub struct SubArgs {
     /// timestamped source are dropped while this is on.
     #[arg(long)]
     pub detect_misses: bool,
+
+    /// Only show samples of this kind (default: both)
+    #[arg(long, value_enum)]
+    pub kind: Option<KindArg>,
+}
+
+/// A sample's kind, for filtering.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KindArg {
+    Put,
+    Delete,
+}
+
+impl KindArg {
+    pub fn matches(self, msg: &zenmon_core::types::ZenohMessage) -> bool {
+        match self {
+            KindArg::Put => !msg.is_delete(),
+            KindArg::Delete => msg.is_delete(),
+        }
+    }
 }
 
 #[derive(clap::Args, Debug)]
