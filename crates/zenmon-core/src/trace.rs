@@ -62,7 +62,10 @@ impl std::str::FromStr for Compression {
         match s.trim().to_ascii_lowercase().as_str() {
             "none" => Ok(Compression::None),
             "zstd" => Ok(Compression::Zstd),
-            other => Err(format!("unknown compression '{}' (expected none or zstd)", other)),
+            other => Err(format!(
+                "unknown compression '{}' (expected none or zstd)",
+                other
+            )),
         }
     }
 }

@@ -1152,8 +1152,8 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                 }
             } else {
                 let out = output.clone().expect("clap guarantees output or dir");
-                let file = zenmon_core::trace::CaptureFileWriter::create(&out, compress)
-                    .map_err(|e| {
+                let file =
+                    zenmon_core::trace::CaptureFileWriter::create(&out, compress).map_err(|e| {
                         ZenmonError::invalid_input(format!(
                             "cannot create {}: {}",
                             out.display(),
