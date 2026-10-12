@@ -191,7 +191,7 @@ fn pub_reaches_a_subscriber_with_its_attachment() {
         &key,
         r#"{"v":0.3}"#,
         "--att",
-        r#"{"correlation_id":"e2e-1"}"#,
+        r#"{"source":"e2e"}"#,
         "--rate",
         "20",
         "--duration",
@@ -209,7 +209,7 @@ fn pub_reaches_a_subscriber_with_its_attachment() {
     let att = sample.attachment().expect("attachment present");
     let att: Value = serde_json::from_str(&att.try_to_string().expect("utf8 attachment"))
         .expect("JSON attachment");
-    assert_eq!(att["correlation_id"], "e2e-1");
+    assert_eq!(att["source"], "e2e");
 }
 
 #[test]
