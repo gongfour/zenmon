@@ -520,6 +520,22 @@ is incompatible with `--trace`.
 | `{` / `}` (or `F5` / `F6`) | First / last recorded message |
 | `/`, `D`, `b`, `p` | Existing filter, diff, pinned baseline, numeric plot |
 
+**Available in source checkouts after 0.8.0:**
+
+| Control | Action |
+|---|---|
+| `Space` | Play / pause the local recording; at the end, restart from the beginning |
+| `F9` / `F10` | Slower / faster: 0.25×, 0.5×, 1× (default), 2×, 4× |
+| `F3` / `F4` | Next / previous match using the last successful search's argument and key scope |
+
+Playback follows receiver-time gaps and stops at the end. It opens no network
+session and sends no messages; `zenmon replay` is the separate publishing
+command. Other keyboard or mouse input pauses playback so inspection stays at a
+stable position. Changing speed preserves elapsed capture time. Frames can
+coalesce messages, especially at high speed, but history and counts still
+include every record through the displayed position. Use `[` / `]` to inspect
+individual messages, including those with identical timestamps.
+
 Seeking rebuilds history through the selected position. Rates are averages from
 the first message to that position, not the speed of loading the file. Message
 ages stay relative to the selected position. A zero-length window shows zero
@@ -569,6 +585,21 @@ an export; if publication has already finished, the command reports success.
 
 Press `F2`, type a command, then Enter. Escape closes the tools. The last result
 and marked positions remain visible when you reopen the panel.
+
+In source checkouts after 0.8.0, `Tab` / `Shift+Tab` cycle matching commands.
+For `change` / `change-prev`, type a space and a field prefix (for example
+`change /st`), then press `Tab` to select a field from the selected key's current
+payload or attachment. JSON pointer escaping is automatic. Suggestions are
+limited to 256 paths, 16 levels, and payloads/attachments up to 64 KiB; manual
+field paths remain available for larger messages. Suggestions use the same
+decoded view as field searches.
+
+Use ↑ / ↓ for the last 100 submitted commands; ↓ past the newest restores the
+draft you were typing. History stays in memory for this viewer session.
+`F3` repeats forward and `F4` backward (`Shift+F3` also works in terminals that forward it) without retyping. Selected-key
+searches retain their original key even if you select another row; all-key
+searches remain all-key. Field-change repeats compare against the value at the
+current position. Searches still stop at the loaded window's boundary.
 
 | Command | Action |
 |---|---|

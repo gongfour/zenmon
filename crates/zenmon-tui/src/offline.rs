@@ -246,17 +246,55 @@ pub async fn run_selected(
     execute!(std::io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut events = EventHandler::new(refresh, rx);
+    let mut events = EventHandler::new(refresh.min(Duration::from_millis(100)), rx);
     let mut tools = crate::offline_tools::Tools::default();
+    let mut playback = crate::playback::Playback::default();
     loop {
         terminal.draw(|frame| {
+            let status = app.offline_status.take();
+            app.offline_status = status
+                .as_ref()
+                .map(|s| format!("{} · {s}", playback.label()));
             app.render(frame);
+            app.offline_status = status;
             tools.render(frame);
         })?;
         let event = events.next().await?;
         let mut target = position;
-        if tools.input.is_some() {
-            if let Some(command) = tools.take_command(&event) {
+        let repeat = match &event {
+            AppEvent::Key(k)
+                if matches!(k.code, KeyCode::F(3) | KeyCode::F(4))
+                    && tools.input.is_none()
+                    && app.overlay == Overlay::None
+                    && !app.is_text_input_active() =>
+            {
+                playback.pause();
+                match tools
+                    .repeat(k.code == KeyCode::F(4) || k.modifiers.contains(KeyModifiers::SHIFT))
+                {
+                    Some((command, key)) => {
+                        if let Some(key) = key {
+                            focus_key(&mut app, &key);
+                            if app.selected_topic_key().as_deref() != Some(key.as_str()) {
+                                app.set_error_toast(
+                                    "The search key has no message at this position",
+                                );
+                                continue;
+                            }
+                        }
+                        Some(command)
+                    }
+                    None => {
+                        app.set_toast("Run a find/change search in F2 first");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        if tools.input.is_some() || repeat.is_some() {
+            playback.pause();
+            if let Some(command) = repeat.or_else(|| tools.take_command(&event)) {
                 let focus_match = command.trim_start().starts_with("find")
                     || command.trim_start().starts_with("change");
                 let (next, found) = crate::offline_tools::command(
@@ -280,6 +318,16 @@ pub async fn run_selected(
             }
             continue;
         }
+        if let AppEvent::Key(k) = &event {
+            if !matches!(k.code, KeyCode::Char(' ') | KeyCode::F(9) | KeyCode::F(10))
+                || app.overlay != Overlay::None
+                || app.is_text_input_active()
+            {
+                playback.pause();
+            }
+        } else if matches!(event, AppEvent::Mouse(_)) {
+            playback.pause();
+        }
         match event {
             AppEvent::Key(k)
                 if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -288,7 +336,13 @@ pub async fn run_selected(
             }
             AppEvent::Key(k) if app.overlay == Overlay::None && !app.is_text_input_active() => {
                 match k.code {
-                    KeyCode::F(2) => tools.input = Some(String::new()),
+                    KeyCode::F(2) => tools.open(&app),
+                    KeyCode::F(3) | KeyCode::F(4) => {}
+                    KeyCode::Char(' ') => {
+                        target = playback.toggle(&recording, position, Instant::now())
+                    }
+                    KeyCode::F(9) => playback.speed(false, Instant::now()),
+                    KeyCode::F(10) => playback.speed(true, Instant::now()),
                     KeyCode::Char('[') => target = position.saturating_sub(1),
                     KeyCode::Char(']') => target = (position + 1).min(recording.entries.len() - 1),
                     KeyCode::F(5) | KeyCode::Char('{') => target = 0,
@@ -302,7 +356,9 @@ pub async fn run_selected(
                     _ => app.handle_event(AppEvent::Key(k)),
                 }
             }
-            AppEvent::Tick => {} // A paused recording does not age into live 0 Hz buckets.
+            AppEvent::Tick => {
+                target = playback.target(&recording, position, Instant::now());
+            }
             other => app.handle_event(other),
         }
         reject_network_actions(&mut app);

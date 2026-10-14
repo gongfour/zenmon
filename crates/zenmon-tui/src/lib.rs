@@ -563,3 +563,4 @@ mod tests {
 mod recording;
 
 mod offline_tools;
+mod playback;
