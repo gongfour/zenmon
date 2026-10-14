@@ -170,7 +170,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
 
         Command::Admin { command } => cmd::admin::run(&ctx, config, command).await?,
 
-        Command::Trace { command } => cmd::trace::run(&ctx, command)?,
+        Command::Trace { command } => cmd::trace::run(&ctx, command).await?,
 
         Command::Capture(args) => cmd::capture::capture(&ctx, config, args).await?,
 
@@ -181,6 +181,9 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         #[cfg(feature = "tui")]
         Command::Tui(cli::TuiArgs {
             trace,
+            key,
+            since,
+            until,
             refresh,
             allow_publish,
         }) => {
@@ -189,9 +192,22 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // simply shows no contract badge.
             let contract = common::load_contract_opt(&ctx.contract)?;
             if let Some(path) = trace {
-                zenmon_tui::offline::run(&path, refresh, contract)
-                    .await
-                    .map_err(common::internal_err)?;
+                zenmon_tui::offline::run_selected(
+                    &path,
+                    refresh,
+                    contract,
+                    zenmon_core::inspection::Selection::new(
+                        key.as_deref().unwrap_or("**"),
+                        since.as_deref(),
+                        until.as_deref(),
+                    )?,
+                )
+                .await
+                .map_err(|e| {
+                    e.downcast_ref::<ZenmonError>()
+                        .cloned()
+                        .unwrap_or_else(|| common::internal_err(e))
+                })?;
             } else {
                 zenmon_tui::run(config, refresh, contract, allow_publish)
                     .await

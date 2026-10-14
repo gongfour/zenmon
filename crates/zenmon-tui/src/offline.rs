@@ -20,6 +20,7 @@ use crate::recording::Recording;
 
 impl Recording {
     fn show(&mut self, app: &mut App, position: usize) -> Result<()> {
+        let selected_key = app.selected_topic_key();
         let selected = app.tree_selected;
         let expanded = app.tree_expanded.clone();
         let unfolded = app.tree_unfolded.clone();
@@ -80,6 +81,16 @@ impl Recording {
             app.tree_user_touched = true;
         }
         app.tree_selected = selected;
+        app.refresh_tree_rows();
+        if let Some(key) = selected_key {
+            if let Some(index) = app
+                .tree_rows()
+                .iter()
+                .position(|r| r.path == key && r.kind == crate::tree::RowKind::Leaf)
+            {
+                app.tree_selected = index;
+            }
+        }
         app.connection_state = ConnectionState::Connected(String::new());
         app.offline_status = Some(format!(
             "{}/{} · {} · rates: window average",
@@ -93,6 +104,34 @@ impl Recording {
             ))
         ));
         Ok(())
+    }
+}
+
+fn focus_key(app: &mut App, key: &str) {
+    if !key
+        .to_lowercase()
+        .contains(&app.topic_filter.to_lowercase())
+    {
+        app.topic_filter.clear();
+    }
+    app.tree_unfolded.insert(String::new());
+    let mut prefix = String::new();
+    for part in key.split('/') {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+        app.tree_expanded.insert(prefix.clone());
+        app.tree_unfolded.insert(prefix.clone());
+    }
+    app.mark_tree_touched();
+    app.refresh_tree_rows();
+    if let Some(index) = app
+        .tree_rows()
+        .iter()
+        .position(|r| r.path == key && r.kind == crate::tree::RowKind::Leaf)
+    {
+        app.tree_selected = index;
     }
 }
 
@@ -131,12 +170,69 @@ pub async fn run(
     refresh: Duration,
     contract: Option<zenmon_core::contract::Contract>,
 ) -> Result<()> {
-    // Validate and load before changing terminal state.
+    run_selected(
+        path,
+        refresh,
+        contract,
+        zenmon_core::inspection::Selection::default(),
+    )
+    .await
+}
+
+pub async fn run_selected(
+    path: &Path,
+    refresh: Duration,
+    contract: Option<zenmon_core::contract::Contract>,
+    selection: zenmon_core::inspection::Selection,
+) -> Result<()> {
+    // Keep the terminal in normal mode during indexing; Ctrl+C can cancel it.
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::watch::channel(zenmon_core::inspection::Progress::default());
+    let source = path.to_path_buf();
+    eprintln!("Indexing {} (offline) · Ctrl+C cancel", path.display());
+    let mut worker = tokio::task::spawn_blocking(move || {
+        let mut last = Instant::now();
+        Recording::load_selected(
+            &source,
+            &selection,
+            crate::recording::MAX_RECORDS,
+            crate::recording::MAX_BYTES,
+            |p| {
+                crate::offline_tools::cancelled(&worker_cancel)?;
+                if last.elapsed() >= Duration::from_millis(200) || p.files == p.total_files {
+                    progress_tx.send_replace(p);
+                    last = Instant::now();
+                }
+                Ok(())
+            },
+        )
+    });
+    let mut recording = loop {
+        tokio::select! {
+            result = &mut worker => { break result??; }
+            result = tokio::signal::ctrl_c() => {
+                cancel.store(true, Ordering::Relaxed);
+                let _ = worker.await;
+                result?;
+                return Err(zenmon_core::ZenmonError::new(zenmon_core::ErrorKind::Interrupted, "indexing cancelled").into());
+            }
+            Ok(()) = progress_rx.changed() => {
+                let p = *progress_rx.borrow_and_update();
+                eprintln!("Files {}/{} · scanned {} · selected {} · {:.1} MiB decoded", p.files, p.total_files, p.scanned, p.matched, p.decoded_bytes as f64 / 1048576.0);
+            }
+        }
+    };
     eprintln!(
-        "Indexing {} (offline, temporary disk spool)…",
-        path.display()
+        "Indexed {} messages across {} keys",
+        recording.entries.len(),
+        recording.keys.len()
     );
-    let mut recording = Recording::load(path)?;
     let mut app = App::new(path.display().to_string());
     app.contract = contract;
     match zenmon_core::profile::load() {
@@ -151,10 +247,39 @@ pub async fn run(
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let mut events = EventHandler::new(refresh, rx);
+    let mut tools = crate::offline_tools::Tools::default();
     loop {
-        terminal.draw(|frame| app.render(frame))?;
+        terminal.draw(|frame| {
+            app.render(frame);
+            tools.render(frame);
+        })?;
         let event = events.next().await?;
         let mut target = position;
+        if tools.input.is_some() {
+            if let Some(command) = tools.take_command(&event) {
+                let focus_match = command.trim_start().starts_with("find")
+                    || command.trim_start().starts_with("change");
+                let (next, found) = crate::offline_tools::command(
+                    recording,
+                    &mut tools,
+                    command,
+                    position,
+                    &mut app,
+                    &mut terminal,
+                    &mut events,
+                )
+                .await?;
+                recording = next;
+                if let Some(found) = found {
+                    position = found;
+                    recording.show(&mut app, position)?;
+                    if focus_match {
+                        focus_key(&mut app, recording.key_at(position));
+                    }
+                }
+            }
+            continue;
+        }
         match event {
             AppEvent::Key(k)
                 if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -163,6 +288,7 @@ pub async fn run(
             }
             AppEvent::Key(k) if app.overlay == Overlay::None && !app.is_text_input_active() => {
                 match k.code {
+                    KeyCode::F(2) => tools.input = Some(String::new()),
                     KeyCode::Char('[') => target = position.saturating_sub(1),
                     KeyCode::Char(']') => target = (position + 1).min(recording.entries.len() - 1),
                     KeyCode::F(5) | KeyCode::Char('{') => target = 0,

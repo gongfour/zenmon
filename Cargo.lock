@@ -7671,6 +7671,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml 1.1.4+spec-1.1.0",
@@ -7707,6 +7708,7 @@ name = "zenmon-tui"
 version = "0.7.0"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "color-eyre",
  "crossterm",
  "futures",

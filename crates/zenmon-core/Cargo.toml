@@ -24,3 +24,6 @@ toml.workspace = true
 directories.workspace = true
 # `install` only: parsing the version a zenmon binary reports.
 semver = "1"
+
+# Atomic, no-clobber offline exports.
+tempfile = "3"
