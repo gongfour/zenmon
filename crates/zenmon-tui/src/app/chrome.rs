@@ -106,7 +106,7 @@ impl App {
         if let Some(status) = &self.offline_status {
             frame.render_widget(
                 Paragraph::new(format!(
-                    "OFFLINE  {status}\n[ / ] message · , / . ±1s · {{ first · }} last · F2 tools · ? help"
+                    "OFFLINE  {status}\nSpace play/pause · F9/F10 speed · [ / ] message · , / . ±1s · F2 tools · F3/F4 match"
                 ))
                 .style(Style::default().fg(Color::Cyan)),
                 area,
@@ -649,7 +649,7 @@ impl App {
 
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = if self.offline_status.is_some() {
-            "F2 tools  [ / ] message  ,/. ±1s  {/} first/last  / filter  D diff  p plot  y copy  ? help  q quit"
+            "Space play  F9/F10 speed  F2 tools  F3/F4 match  ,/. ±1s  / filter  p plot  ? help  q quit"
         } else {
             match self.space {
             Space::Traffic => {
@@ -700,6 +700,18 @@ impl App {
             })
             .collect();
         if self.offline_status.is_some() {
+            lines.insert(
+                0,
+                Line::from("  Space  play/pause local recording (no network transmission)"),
+            );
+            lines.insert(
+                1,
+                Line::from("  F9/F10 slower/faster: 0.25x, 0.5x, 1x, 2x, 4x"),
+            );
+            lines.insert(
+                2,
+                Line::from("  F3 / F4 next / previous match of the last search"),
+            );
             lines.insert(
                 0,
                 Line::from("  F2     offline search, time jump, marks, export"),
