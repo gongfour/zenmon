@@ -1,0 +1,10 @@
+# Optional metadata: no project identifier, service list, or role model needed.
+topics:
+  - key: demo/temperature
+    description: Temperature measurement
+    encoding: application/json
+    payload:
+      celsius: f64
+presets:
+  readings:
+    - demo/**

@@ -484,8 +484,8 @@ mod tests {
 
     #[test]
     fn a_ros_style_instance_suffix_is_split_off_for_dimming() {
-        let (stem, hash) = split_instance_hash("demo/robot1/node/mission_manager_a6f69029");
-        assert_eq!(stem, "demo/robot1/node/mission_manager");
+        let (stem, hash) = split_instance_hash("demo/device1/node/job_manager_a6f69029");
+        assert_eq!(stem, "demo/device1/node/job_manager");
         assert_eq!(hash, "_a6f69029");
     }
 
@@ -496,7 +496,7 @@ mod tests {
         // group heuristic went wrong on `stack/alice/robot_1`.
         for key in [
             "demo/robot_1/stack/alice/robot_1",
-            "fleet/robot1",
+            "network/device1",
             "a_b",
             "plain",
         ] {

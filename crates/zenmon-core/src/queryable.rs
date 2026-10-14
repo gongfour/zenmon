@@ -48,28 +48,28 @@ mod tests {
     #[test]
     fn non_wild_key_reuses_itself() {
         assert_eq!(
-            resolve_reply_key("robot/status", None).unwrap(),
-            "robot/status"
+            resolve_reply_key("device/status", None).unwrap(),
+            "device/status"
         );
     }
 
     #[test]
     fn wild_key_without_reply_key_errors() {
-        let e = resolve_reply_key("robot/**", None).unwrap_err();
+        let e = resolve_reply_key("device/**", None).unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidInput);
     }
 
     #[test]
     fn wild_key_with_concrete_reply_key_ok() {
         assert_eq!(
-            resolve_reply_key("robot/**", Some("robot/status")).unwrap(),
-            "robot/status"
+            resolve_reply_key("device/**", Some("device/status")).unwrap(),
+            "device/status"
         );
     }
 
     #[test]
     fn wild_reply_key_rejected() {
-        let e = resolve_reply_key("robot/**", Some("robot/*")).unwrap_err();
+        let e = resolve_reply_key("device/**", Some("device/*")).unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidInput);
     }
 

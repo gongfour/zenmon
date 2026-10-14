@@ -170,7 +170,7 @@ pub enum Command {
 
     /// Record a correlated multi-topic diagnostic session and emit one episode
     /// JSON an AI can read to reason about cause & effect. Optionally triggers a
-    /// `--pub` actuation or a `--task` request first, then observes a bounded
+    /// `--pub` actuation first, then observes a bounded
     /// window. Data-only: it correlates, it does not diagnose.
     Scenario(ScenarioArgs),
 }
@@ -517,9 +517,9 @@ pub struct TuiArgs {
 }
 
 #[derive(clap::Args, Debug)]
-#[command(group(clap::ArgGroup::new("topics").required(true).multiple(true).args(["observe", "preset"])))]
+#[command(group(clap::ArgGroup::new("topics").required(true).multiple(true).args(["observe", "preset", "until_key"])))]
 pub struct ScenarioArgs {
-    /// Topic to record (repeatable). At least one of --observe/--preset.
+    /// Topic to record (repeatable). At least one of --observe/--preset/--until-key.
     #[arg(long)]
     pub observe: Vec<String>,
 
@@ -531,16 +531,25 @@ pub struct ScenarioArgs {
     #[arg(long, default_value = "**")]
     pub prefix: String,
 
-    /// One-shot actuation trigger: publish VALUE to KEY once, after observing
-    /// starts. Mutually exclusive with --task.
-    #[arg(long = "pub", value_names = ["KEY", "VALUE"], num_args = 2, conflicts_with = "task")]
+    /// Publish VALUE to KEY after observation starts.
+    #[arg(long = "pub", value_names = ["KEY", "VALUE"], num_args = 2)]
     pub pub_: Option<Vec<String>>,
 
-    /// Task trigger: publish REQUEST_JSON to <PREFIX>/request and also
-    /// observe <PREFIX>/feedback and <PREFIX>/response. Mutually exclusive
-    /// with --pub.
-    #[arg(long, value_names = ["PREFIX", "REQUEST_JSON"], num_args = 2, conflicts_with = "pub_")]
-    pub task: Option<Vec<String>>,
+    /// Attachment for --pub (literal UTF-8, @file, or - for stdin).
+    #[arg(long, requires = "pub_")]
+    pub att: Option<String>,
+
+    /// Stop on a PUT matching this key expression. Automatically observed.
+    #[arg(long)]
+    pub until_key: Option<String>,
+
+    /// Require a payload JSON pointer to equal a JSON value before stopping.
+    #[arg(long, requires = "until_key", value_names = ["POINTER", "JSON"], num_args = 2)]
+    pub until_payload: Option<Vec<String>>,
+
+    /// Require an attachment JSON pointer to equal a JSON value before stopping.
+    #[arg(long, requires = "until_key", value_names = ["POINTER", "JSON"], num_args = 2)]
+    pub until_attachment: Option<Vec<String>>,
 
     /// Sustain the --pub actuation: republish at this rate (Hz) instead of
     /// once. Requires --pub and one of --pub-for/--pub-count.
@@ -565,7 +574,7 @@ pub struct ScenarioArgs {
 
     /// Extract a payload field over time into the episode's `tracks` section
     /// (repeatable). Format `KEY:FIELD`, FIELD a dot-path — e.g.
-    /// `myfleet/topic/safety/safety_state:kind`.
+    /// `demo/topic/safety/safety_state:kind`.
     #[arg(long)]
     pub track: Vec<String>,
 
@@ -1131,67 +1140,50 @@ mod tests {
         );
     }
 
-    /// --pub and --task are mutually exclusive triggers.
     #[test]
-    fn scenario_pub_and_task_conflict() {
+    fn scenario_generic_conditions_parse_and_require_a_key() {
+        assert!(Cli::try_parse_from([
+            "zenmon",
+            "scenario",
+            "--until-key",
+            "demo/result",
+            "--for",
+            "8s",
+            "--pub",
+            "demo/input",
+            "{}",
+            "--att",
+            "{}",
+            "--until-payload",
+            "/id",
+            "42",
+            "--until-attachment",
+            "/token",
+            "\"abc\"",
+        ])
+        .is_ok());
         assert!(Cli::try_parse_from([
             "zenmon",
             "scenario",
             "--observe",
-            "a/**",
+            "demo/**",
             "--for",
             "8s",
-            "--pub",
-            "k",
-            "v",
-            "--task",
-            "p",
-            "{}",
+            "--until-payload",
+            "/id",
+            "42",
         ])
         .is_err());
-    }
-
-    /// Each trigger accepts exactly its two positional values.
-    #[test]
-    fn scenario_pub_and_task_take_two_values() {
         assert!(Cli::try_parse_from([
             "zenmon",
             "scenario",
             "--observe",
-            "a/**",
+            "demo/**",
             "--for",
             "8s",
-            "--pub",
-            "cmd/go",
-            "{\"go\":true}",
-        ])
-        .is_ok());
-        assert!(Cli::try_parse_from([
-            "zenmon",
-            "scenario",
-            "--preset",
-            "stall",
-            "--prefix",
-            "myfleet",
-            "--for",
-            "8s",
-            "--settle",
-            "2s",
             "--task",
-            "myfleet/task/mission/mission",
-            "{\"mission_id\":\"m1\"}",
-        ])
-        .is_ok());
-        // --pub with only one value is rejected (num_args = 2).
-        assert!(Cli::try_parse_from([
-            "zenmon",
-            "scenario",
-            "--observe",
-            "a/**",
-            "--for",
-            "8s",
-            "--pub",
-            "onlykey",
+            "demo/job",
+            "{}",
         ])
         .is_err());
     }

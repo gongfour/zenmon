@@ -398,7 +398,7 @@ impl App {
         }
         if key.contains('*') {
             // A wildcard put fans out to every matching subscriber, which on a
-            // fleet is every vehicle at once. Nothing about the editor makes
+            // network is every device at once. Nothing about the editor makes
             // that intent visible, so it is refused rather than confirmed.
             self.publish_result = Some(Err("wildcards are not allowed here — name one key".into()));
             return;
@@ -691,7 +691,7 @@ impl App {
             })
             .collect();
         // Dead first, then by key. A token that stopped is the finding; on a
-        // fleet it is a handful of rows among thousands, and scrolling to them
+        // network it is a handful of rows among thousands, and scrolling to them
         // is the work this ordering removes.
         token_idx.sort_by(|&a, &b| {
             let (ta, tb) = (&self.liveliness_tokens[a], &self.liveliness_tokens[b]);

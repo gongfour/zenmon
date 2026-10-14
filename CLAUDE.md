@@ -4,6 +4,14 @@
 
 zenmon is a Rust CLI + TUI tool for monitoring and debugging Zenoh networks. Single binary `zenmon` with headless CLI subcommands and an interactive ratatui TUI dashboard, plus `zenmon-tray`, a Tauri desktop app that runs background capture from the system tray.
 
+The product goal is to make Zenoh easy to explore, use, and debug for any
+application. Basic workflows must work without a contract or project-specific
+key naming. Keep application schemas and conventions in user-supplied files;
+present contracts and scenario adapters as optional advanced features.
+
+`README.md` is the short introduction and quick start. Detailed usage belongs
+in `docs/usage.md`; tray-specific development notes belong in `tray/README.md`.
+
 ## Build & Run
 
 ```bash
@@ -37,7 +45,9 @@ cargo builds, and a dev binary prints a warning naming the fix on startup. To
 identify a binary, run it and read the first line — do **not** grep the exe for
 UI strings, Tauri compresses embedded assets. Details in `tray/README.md`.
 
-Requires: Rust 1.75+, Node 20+ (tray only), zenohd for testing (homebrew: `brew install zenoh`)
+Requires: current stable Rust (use the committed lockfile), Node 20+ (tray only).
+Automated CLI tests start their own loopback Zenoh sessions; a local `zenohd`
+is useful for manual client-mode testing.
 
 ## Project Structure
 

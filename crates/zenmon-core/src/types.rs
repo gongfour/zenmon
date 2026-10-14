@@ -396,7 +396,7 @@ pub enum LivelinessEvent {
 
 impl LivelinessToken {
     /// Extract a human-readable node name from the key expression.
-    /// e.g. "fleet/r1/node/action_executor_ec98a701" -> "action_executor"
+    /// e.g. "network/r1/node/action_executor_ec98a701" -> "action_executor"
     /// Falls back to the last path segment with hash stripped.
     pub fn node_name(&self) -> Option<String> {
         let last = self.key_expr.rsplit('/').next()?;

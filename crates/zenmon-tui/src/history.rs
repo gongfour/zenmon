@@ -1,7 +1,7 @@
 //! Per-key message history.
 //!
 //! The detail pane used to show "history" by filtering one global 500-entry
-//! ring by key. On a fleet that is not history at all: one neighbour publishing
+//! ring by key. On a network that is not history at all: one neighbour publishing
 //! at 100 Hz evicts a 1 Hz key's entire past within seconds, so the pane that is
 //! supposed to explain a quiet key is empty exactly when you need it.
 //!

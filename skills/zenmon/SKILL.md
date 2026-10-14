@@ -48,7 +48,7 @@ problem is explained:
 | Does the payload match the contract? | `zenmon --contract <file> sub "<ke>" --validate --count 20` — violations are listed per message |
 | Is anyone listening to this key? | `zenmon pub` reports `matched` — but `pub` writes, so propose it (§4); for a read-only check use `zenmon discover`/`liveliness` |
 | Was the key deleted, or is its value empty? | `zenmon sub "<ke>" --kind delete` — DELETEs print as `key \| DELETE` |
-| Why did it reach this state? (cause & effect) | `zenmon scenario --observe "<key-expr>" --for <e.g. 8s>` to collect an episode JSON, then reason over it. Observe-only; its `--pub`/`--task` actuation forms mutate the network — see §4. |
+| Why did it reach this state? (cause & effect) | `zenmon scenario --observe "<key-expr>" --for <e.g. 8s>` to collect an episode JSON, then reason over it. Observe-only; its `--pub` actuation forms mutate the network — see §4. |
 
 ## 3. Long-running commands
 
@@ -70,6 +70,6 @@ problem is explained:
 - Topics are discovered from **received messages**, not the admin space — a
   topic that is currently silent only appears once you `sub` to it.
 - **Read-only boundary:** `pub`, `replay`, `queryable`, and `scenario` run with
-  `--pub`/`--task` inject data into a live network. You may *propose* them, but
+  `--pub` inject data into a live network. You may *propose* them, but
   run them only after the user explicitly confirms. Plain `scenario` with only
   `--observe`/`--preset` is read-only.

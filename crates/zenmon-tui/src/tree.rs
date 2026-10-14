@@ -1,8 +1,8 @@
 //! The hierarchical index over observed key expressions.
 //!
 //! A flat, sorted key list stops being usable somewhere around fifty keys, and a
-//! namespace like `agv/{id}/pose` reaches that with twenty vehicles. This splits
-//! each key on `/` and keeps the segments as a tree, so a whole fleet collapses
+//! namespace like `sensors/{id}/pose` reaches that with twenty devices. This splits
+//! each key on `/` and keeps the segments as a tree, so a whole network collapses
 //! to one row you expand.
 //!
 //! Purely structural: no ratatui, no zenoh, no clock. Recency lives in the app's
@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashSet};
 struct TreeNode {
     /// This node's own segment (`"f1"`). Empty for the root.
     segment: String,
-    /// Full key prefix down to and including this node (`"agv/f1"`).
+    /// Full key prefix down to and including this node (`"sensors/f1"`).
     path: String,
     children: BTreeMap<String, TreeNode>,
     /// A message has arrived on exactly this path, so it is a real key and not
@@ -229,7 +229,7 @@ impl KeyTree {
 
     /// The run of branches from the root down while each has exactly one child.
     ///
-    /// A namespace under a single common prefix (`agv/...` and nothing else)
+    /// A namespace under a single common prefix (`sensors/...` and nothing else)
     /// would otherwise open on one useless row; this opens through the shared
     /// stem to the first point where there is actually a choice to make.
     pub fn single_child_chain(&self) -> Vec<String> {
@@ -397,10 +397,10 @@ mod tests {
 
     #[test]
     fn key_count_accumulates_up_the_path() {
-        let t = tree(&["agv/f1/pose", "agv/f1/battery", "agv/f2/pose"]);
-        assert_eq!(t.key_count_at("agv"), 3);
-        assert_eq!(t.key_count_at("agv/f1"), 2);
-        assert_eq!(t.key_count_at("agv/f2"), 1);
+        let t = tree(&["sensors/f1/pose", "sensors/f1/battery", "sensors/f2/pose"]);
+        assert_eq!(t.key_count_at("sensors"), 3);
+        assert_eq!(t.key_count_at("sensors/f1"), 2);
+        assert_eq!(t.key_count_at("sensors/f2"), 1);
         assert_eq!(t.key_count_at("nope"), 0);
     }
 
@@ -465,48 +465,56 @@ mod tests {
 
     #[test]
     fn a_matching_branch_keeps_its_whole_subtree() {
-        let t = tree(&["agv/f1/pose", "agv/f1/battery", "srv/health"]);
+        let t = tree(&["sensors/f1/pose", "sensors/f1/battery", "srv/health"]);
         let (e, u) = (set(&[]), set(&[]));
-        // "agv" matches, so everything under it shows without matching itself.
+        // "sensors" matches, so everything under it shows without matching itself.
         assert_eq!(
-            paths(&t.flatten(&opts(&e, &u, "agv"))),
-            vec!["agv", "agv/f1", "agv/f1/battery", "agv/f1/pose"]
+            paths(&t.flatten(&opts(&e, &u, "sensors"))),
+            vec![
+                "sensors",
+                "sensors/f1",
+                "sensors/f1/battery",
+                "sensors/f1/pose"
+            ]
         );
     }
 
     #[test]
     fn a_deep_match_pulls_its_ancestors_along() {
-        let t = tree(&["agv/f1/pose", "agv/f2/battery", "srv/health"]);
+        let t = tree(&["sensors/f1/pose", "sensors/f2/battery", "srv/health"]);
         let (e, u) = (set(&[]), set(&[]));
         // Only `battery` matches, but its path to the root has to be walkable.
         assert_eq!(
             paths(&t.flatten(&opts(&e, &u, "battery"))),
-            vec!["agv", "agv/f2", "agv/f2/battery"]
+            vec!["sensors", "sensors/f2", "sensors/f2/battery"]
         );
     }
 
     #[test]
     fn filtering_expands_without_touching_the_users_expansion_state() {
-        let t = tree(&["agv/f1/pose"]);
+        let t = tree(&["sensors/f1/pose"]);
         let (e, u) = (set(&[]), set(&[]));
         // Nothing is expanded, yet the match is reachable...
         let rows = t.flatten(&opts(&e, &u, "pose"));
-        assert_eq!(paths(&rows), vec!["agv", "agv/f1", "agv/f1/pose"]);
+        assert_eq!(
+            paths(&rows),
+            vec!["sensors", "sensors/f1", "sensors/f1/pose"]
+        );
         assert_eq!(rows[0].kind, RowKind::Branch { expanded: true });
         // ...and clearing the filter returns the collapsed tree unchanged.
-        assert_eq!(paths(&t.flatten(&opts(&e, &u, ""))), vec!["agv"]);
+        assert_eq!(paths(&t.flatten(&opts(&e, &u, ""))), vec!["sensors"]);
     }
 
     #[test]
     fn a_filter_matching_nothing_yields_no_rows() {
-        let t = tree(&["agv/f1/pose"]);
+        let t = tree(&["sensors/f1/pose"]);
         let (e, u) = (set(&[]), set(&[]));
         assert!(t.flatten(&opts(&e, &u, "zzz")).is_empty());
     }
 
     #[test]
     fn filtering_is_case_insensitive() {
-        let t = tree(&["AGV/F1/Pose"]);
+        let t = tree(&["SENSORS/F1/Pose"]);
         let (e, u) = (set(&[]), set(&[]));
         assert_eq!(t.flatten(&opts(&e, &u, "pose")).len(), 3);
     }
@@ -515,15 +523,15 @@ mod tests {
     fn an_expanded_branch_over_the_threshold_folds_to_one_row() {
         let mut t = KeyTree::new();
         for i in 0..200 {
-            t.insert(&format!("agv/f{i:03}/pose"));
+            t.insert(&format!("sensors/f{i:03}/pose"));
         }
-        let (e, u) = (set(&["agv"]), set(&[]));
+        let (e, u) = (set(&["sensors"]), set(&[]));
         let rows = t.flatten(&opts(&e, &u, ""));
         assert_eq!(rows.len(), 2, "expected the branch plus one summary");
         assert_eq!(rows[0].kind, RowKind::Branch { expanded: true });
         assert_eq!(rows[1].kind, RowKind::FoldSummary { hidden: 200 });
         // The summary carries its parent's path so unfolding is a set insert.
-        assert_eq!(rows[1].path, "agv");
+        assert_eq!(rows[1].path, "sensors");
         assert_eq!(rows[1].depth, 1);
     }
 
@@ -531,9 +539,9 @@ mod tests {
     fn unfolding_lists_the_children_after_all() {
         let mut t = KeyTree::new();
         for i in 0..20 {
-            t.insert(&format!("agv/f{i:02}/pose"));
+            t.insert(&format!("sensors/f{i:02}/pose"));
         }
-        let (e, u) = (set(&["agv"]), set(&["agv"]));
+        let (e, u) = (set(&["sensors"]), set(&["sensors"]));
         let rows = t.flatten(&opts(&e, &u, ""));
         // The branch plus its 20 children (each still collapsed).
         assert_eq!(rows.len(), 21);
@@ -546,9 +554,9 @@ mod tests {
     fn a_branch_at_the_threshold_is_not_folded() {
         let mut t = KeyTree::new();
         for i in 0..12 {
-            t.insert(&format!("agv/f{i:02}"));
+            t.insert(&format!("sensors/f{i:02}"));
         }
-        let (e, u) = (set(&["agv"]), set(&[]));
+        let (e, u) = (set(&["sensors"]), set(&[]));
         let rows = t.flatten(&opts(&e, &u, ""));
         assert_eq!(rows.len(), 13, "12 is the threshold, not over it");
     }
@@ -559,11 +567,14 @@ mod tests {
         // so folding the filtered results back up would defeat it.
         let mut t = KeyTree::new();
         for i in 0..200 {
-            t.insert(&format!("agv/f{i:03}/pose"));
+            t.insert(&format!("sensors/f{i:03}/pose"));
         }
         let (e, u) = (set(&[]), set(&[]));
         let rows = t.flatten(&opts(&e, &u, "f017"));
-        assert_eq!(paths(&rows), vec!["agv", "agv/f017", "agv/f017/pose"]);
+        assert_eq!(
+            paths(&rows),
+            vec!["sensors", "sensors/f017", "sensors/f017/pose"]
+        );
     }
 
     #[test]
@@ -585,18 +596,18 @@ mod tests {
 
     #[test]
     fn branch_paths_lists_every_node_with_children() {
-        let t = tree(&["agv/f1/pose", "agv/f2/pose", "srv/health"]);
+        let t = tree(&["sensors/f1/pose", "sensors/f2/pose", "srv/health"]);
         let mut got = t.branch_paths();
         got.sort();
-        assert_eq!(got, vec!["agv", "agv/f1", "agv/f2", "srv"]);
+        assert_eq!(got, vec!["sensors", "sensors/f1", "sensors/f2", "srv"]);
     }
 
     #[test]
     fn single_child_chain_stops_at_the_first_real_choice() {
-        let t = tree(&["agv/f1/pose", "agv/f2/pose"]);
-        // `agv` is the only root child, but under it there are two vehicles, so
-        // opening past `agv` would be a guess.
-        assert_eq!(t.single_child_chain(), vec!["agv"]);
+        let t = tree(&["sensors/f1/pose", "sensors/f2/pose"]);
+        // `sensors` is the only root child, but under it there are two devices, so
+        // opening past `sensors` would be a guess.
+        assert_eq!(t.single_child_chain(), vec!["sensors"]);
     }
 
     #[test]

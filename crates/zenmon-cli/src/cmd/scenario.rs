@@ -19,7 +19,10 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: ScenarioArgs) -> Result<
         preset,
         prefix,
         pub_,
-        task,
+        att,
+        until_key,
+        until_payload,
+        until_attachment,
         pub_rate,
         pub_for,
         pub_count,
@@ -29,7 +32,6 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: ScenarioArgs) -> Result<
         no_timeline,
         explain,
     } = args;
-    // A resolved contract lets --task surface & validate its request schema.
     let contract = load_contract_opt(&ctx.contract)?;
     run_scenario(
         ctx.json,
@@ -38,7 +40,10 @@ pub async fn run(ctx: &Ctx, config: ZenmonConfig, args: ScenarioArgs) -> Result<
         preset,
         prefix,
         pub_,
-        task,
+        att,
+        until_key,
+        until_payload,
+        until_attachment,
         pub_rate,
         pub_for,
         pub_count,
@@ -72,13 +77,17 @@ fn observed_event(
 }
 
 /// Build the synthetic trigger event at `t_rel_ms = 0` — the scenario's own
-/// actuation/request that caused the episode. `value` is parsed as JSON for the
+/// publication/request that caused the episode. `value` is parsed as JSON for the
 /// payload view, falling back to a plain string.
-fn make_trigger_event(key: &str, value: &str) -> zenmon_core::scenario::ScenarioEvent {
+fn make_trigger_event(
+    key: &str,
+    value: &str,
+    attachment: Option<&str>,
+) -> zenmon_core::scenario::ScenarioEvent {
     zenmon_core::scenario::ScenarioEvent {
         t_rel_ms: 0,
         key_expr: key.to_string(),
-        attachment: None,
+        attachment: attachment.map(|a| serde_json::from_str(a).unwrap_or_else(|_| a.into())),
         encoding: String::new(),
         kind: "PUT".to_string(),
         payload: serde_json::from_str(value)
@@ -88,8 +97,8 @@ fn make_trigger_event(key: &str, value: &str) -> zenmon_core::scenario::Scenario
 }
 
 /// The `scenario` orchestration: resolve observed keys, subscribe, optionally
-/// trigger a `--pub`/`--task`, observe a bounded window (early-exiting on the
-/// task response), then build and print the episode.
+/// trigger a `--pub`, observe a bounded window (early-exiting on the
+/// matching message), then build and print the episode.
 #[allow(clippy::too_many_arguments)]
 async fn run_scenario(
     json: bool,
@@ -98,7 +107,10 @@ async fn run_scenario(
     preset: Option<String>,
     prefix: String,
     mut pub_: Option<Vec<String>>,
-    mut task: Option<Vec<String>>,
+    att: Option<String>,
+    until_key: Option<String>,
+    until_payload: Option<Vec<String>>,
+    until_attachment: Option<Vec<String>>,
     pub_rate: Option<f64>,
     pub_for: Option<Duration>,
     pub_count: Option<u64>,
@@ -134,36 +146,21 @@ async fn run_scenario(
         });
     }
 
+    if pub_.as_ref().is_some_and(|p| p[1] == "-") && att.as_deref() == Some("-") {
+        return Err(ZenmonError::invalid_input(
+            "payload and attachment cannot both read stdin",
+        ));
+    }
+
     // Resolve @file / stdin payloads for the trigger before anyone reads them.
     if let Some(p) = pub_.as_mut() {
         p[1] = resolve_payload_arg(&p[1])?;
     }
-    if let Some(p) = task.as_mut() {
-        p[1] = resolve_payload_arg(&p[1])?;
-    }
+    let attachment = att.as_deref().map(resolve_payload_arg).transpose()?;
+    let condition =
+        zenmon_core::scenario::StopCondition::new(until_key, until_payload, until_attachment)?;
 
-    // If a contract is resolved and we're triggering a --task, surface its
-    // request schema (so the caller need not read source to build the request)
-    // and lightly validate the provided request. Display-only, never fatal.
-    if let (Some(pair), Some(c)) = (&task, &contract) {
-        if let Some(schema) = c.request_schema(&pair[0]) {
-            eprintln!("# contract request schema for '{}':", pair[0]);
-            for line in serde_json::to_string_pretty(&schema)
-                .unwrap_or_default()
-                .lines()
-            {
-                eprintln!("#   {}", line);
-            }
-            if let Ok(provided) = serde_json::from_str::<serde_json::Value>(&pair[1]) {
-                for w in zenmon_core::contract::validate_against_schema(&schema, &provided) {
-                    eprintln!("# ⚠ request: {}", w);
-                }
-            }
-        }
-    }
-
-    // Resolve the observed key set: --observe, then --preset expansion, then the
-    // two task-derived topics. Deduplicate while preserving order.
+    // Resolve user-supplied observation keys and presets.
     let mut observed: Vec<String> = Vec::new();
     let push_unique = |set: &mut Vec<String>, k: String| {
         if !set.contains(&k) {
@@ -196,23 +193,17 @@ async fn run_scenario(
         }
     }
 
-    // A --task adds its feedback/response topics and defines a response key that
-    // ends the scenario early.
-    let mut response_key: Option<String> = None;
-    let trigger: TriggerInfo = if let Some(pair) = &task {
-        let task_prefix = pair[0].trim_end_matches('/').to_string();
-        let request_json = pair[1].clone();
-        let request_key = format!("{}/request", task_prefix);
-        let feedback_key = format!("{}/feedback", task_prefix);
-        let resp_key = format!("{}/response", task_prefix);
-        push_unique(&mut observed, feedback_key);
-        push_unique(&mut observed, resp_key.clone());
-        response_key = Some(resp_key);
-        TriggerInfo::Task {
-            request_key,
-            request_bytes: request_json.len(),
+    if let Some(key) = condition.key() {
+        // An existing broader subscription already supplies this key.
+        let covered = observed.iter().any(|k| {
+            zenoh::key_expr::keyexpr::new(k)
+                .is_ok_and(|expr| expr.includes(zenoh::key_expr::keyexpr::new(key).unwrap()))
+        });
+        if !covered {
+            push_unique(&mut observed, key.to_string());
         }
-    } else if let Some(pair) = &pub_ {
+    }
+    let trigger = if let Some(pair) = &pub_ {
         TriggerInfo::Pub {
             key_expr: pair[0].clone(),
             bytes: pair[1].len(),
@@ -232,15 +223,10 @@ async fn run_scenario(
         if let Some(p) = &pub_ {
             keys.push(p[0].as_str());
         }
-        if let Some(p) = &task {
-            keys.push(p[0].as_str());
-        }
         warn_redundant_namespace(keys, config.namespace.as_deref());
     }
 
-    let trigger_desc = if let Some(p) = &task {
-        format!("task -> {}/request", p[0].trim_end_matches('/'))
-    } else if let Some(p) = &pub_ {
+    let trigger_desc = if let Some(p) = &pub_ {
         format!("pub -> {}", p[0])
     } else {
         "none".to_string()
@@ -250,11 +236,17 @@ async fn run_scenario(
         .map(|s| format!("{}:{}", s.key, s.field))
         .collect();
 
+    for key in observed.iter().chain(pub_.iter().map(|p| &p[0])) {
+        zenoh::key_expr::keyexpr::new(key.as_str())
+            .map_err(|e| ZenmonError::invalid_input(format!("invalid key '{key}': {e}")))?;
+    }
+
     // --explain: print the resolved plan and stop before any network side effect.
     if explain {
         if json {
             let plan = serde_json::json!({
                 "trigger": trigger_desc,
+                "until": condition,
                 "observed": observed,
                 "tracks": track_specs,
                 "for_ms": for_.as_millis() as u64,
@@ -264,6 +256,7 @@ async fn run_scenario(
         } else {
             println!("scenario plan (dry run):");
             println!("  trigger: {trigger_desc}");
+            println!("  until: {}", serde_json::to_string(&condition)?);
             println!("  observe ({}):", observed.len());
             for k in &observed {
                 println!("    {k}");
@@ -283,7 +276,7 @@ async fn run_scenario(
     let session = zenmon_core::session::open_session(config).await?;
 
     // Subscribe to every observed key into one channel BEFORE triggering, so we
-    // never miss the reaction to our own actuation.
+    // never miss the reaction to our own publication.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let mut subscriptions = Vec::with_capacity(observed.len());
     for key in &observed {
@@ -305,61 +298,68 @@ async fn run_scenario(
     let stopwatch = Instant::now();
     let mut events: Vec<ScenarioEvent> = Vec::new();
     // A sustained --pub runs on a background task, bounded by --pub-for/--pub-count.
-    let mut pub_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut pub_task: Option<tokio::task::JoinHandle<Result<(), ZenmonError>>> = None;
 
     // Fire the trigger and record it as the causal origin (t_rel_ms = 0). A
     // publish failure on a one-shot path is fatal.
-    let trigger_ev: Option<ScenarioEvent> = match (&task, &pub_) {
-        (Some(pair), _) => {
-            let request_key = format!("{}/request", pair[0].trim_end_matches('/'));
-            session
-                .put(&request_key, pair[1].clone())
-                .await
-                .map_err(internal_err)?;
-            Some(make_trigger_event(&request_key, &pair[1]))
-        }
-        (_, Some(pair)) => {
+    let trigger_ev: Option<ScenarioEvent> = match &pub_ {
+        Some(pair) => {
             let key = pair[0].clone();
             let value = pair[1].clone();
             match pub_rate {
                 // Sustained: republish at a fixed rate on a background task so
-                // the actuation persists through the observe window (defeats a
+                // the publication persists through the observe window (defeats a
                 // command watchdog), bounded by --pub-for/--pub-count.
                 Some(hz) => {
                     let s = session.clone();
                     let bounds = watch::Bounds::new(pub_count, pub_for);
                     let (k, v) = (key.clone(), value.clone());
+                    let attachment = attachment.clone();
                     pub_task = Some(tokio::spawn(async move {
                         let mut interval =
                             tokio::time::interval(crate::duration::rate_tick_interval(hz));
                         let mut budget = watch::Budget::start(bounds);
                         loop {
-                            interval.tick().await;
-                            if s.put(&k, v.clone()).await.is_err() {
-                                break;
+                            tokio::select! {
+                                biased;
+                                _ = watch::sleep_until_opt(budget.deadline()) => break,
+                                _ = interval.tick() => {},
                             }
+                            zenmon_core::publish::put_with(
+                                &s,
+                                &k,
+                                v.clone().into_bytes(),
+                                attachment.as_deref().map(str::as_bytes),
+                                Default::default(),
+                            )
+                            .await?;
                             if budget.record() {
                                 break;
                             }
                         }
+                        Ok::<(), ZenmonError>(())
                     }));
                 }
                 None => {
-                    session
-                        .put(&key, value.clone())
-                        .await
-                        .map_err(internal_err)?;
+                    zenmon_core::publish::put_with(
+                        &session,
+                        &key,
+                        value.clone().into_bytes(),
+                        attachment.as_deref().map(str::as_bytes),
+                        Default::default(),
+                    )
+                    .await?;
                 }
             }
-            Some(make_trigger_event(&key, &value))
+            Some(make_trigger_event(&key, &value, attachment.as_deref()))
         }
-        (None, None) => None,
+        None => None,
     };
     if let Some(te) = trigger_ev {
         events.push(te);
     }
 
-    // Observe the window. Ends when the task response arrives OR --for elapses;
+    // Observe the window. Ends when the matching message arrives OR --for elapses;
     // then observe --settle more. Ctrl+C ends early with what we have.
     let window_deadline = stopwatch + for_;
     let mut ended_reason = EndedReason::WindowElapsed;
@@ -381,13 +381,12 @@ async fn run_scenario(
             item = rx.recv() => match item {
                 Some(msg) => {
                     let t_rel_ms = stopwatch.elapsed().as_millis() as u64;
-                    let is_response = response_key
-                        .as_deref()
-                        .is_some_and(|rk| rk == msg.key_expr);
-                    events.push(observed_event(msg, t_rel_ms));
+                    let event = observed_event(msg, t_rel_ms);
+                    let is_response = condition.matches(&event);
+                    events.push(event);
                     // First response ends the active window; then run --settle.
                     if is_response && settle_until.is_none() {
-                        ended_reason = EndedReason::TaskResponse;
+                        ended_reason = EndedReason::ConditionMatched;
                         match settle {
                             Some(s) => settle_until = Some(Instant::now() + s),
                             None => break,
@@ -421,15 +420,27 @@ async fn run_scenario(
         }
     }
 
-    if let Some(h) = pub_task {
-        h.abort();
-    }
+    let publish_result = if let Some(h) = pub_task {
+        if h.is_finished() {
+            h.await.map_err(internal_err)?
+        } else {
+            h.abort();
+            match h.await {
+                Ok(result) => result,
+                Err(e) if e.is_cancelled() => Ok(()),
+                Err(e) => Err(internal_err(e)),
+            }
+        }
+    } else {
+        Ok(())
+    };
     // Deterministic teardown: each subscriber is undeclared before the session
     // closes, instead of being aborted and undeclared by drop glue.
     for subscription in subscriptions {
         subscription.stop().await;
     }
     session.close().await.map_err(internal_err)?;
+    publish_result?;
 
     let meta = ScenarioMeta {
         trigger,
@@ -439,6 +450,7 @@ async fn run_scenario(
         ended_reason,
     };
     let mut episode = build_episode(&meta, &events);
+    episode["meta"]["until"] = serde_json::to_value(&condition)?;
     // One time-ordered list: value changes on tracked fields, plus what
     // timing alone shows (a key going quiet or stopping, a DELETE).
     // When observation actually ended — earlier than the window when a task
@@ -495,7 +507,6 @@ fn print_scenario_summary(episode: &serde_json::Value) {
     let meta = &episode["meta"];
     let trigger = &meta["trigger"];
     let trigger_str = match trigger["kind"].as_str() {
-        Some("task") => format!("task -> {}", trigger["request_key"].as_str().unwrap_or("")),
         Some("pub") => format!("pub -> {}", trigger["key_expr"].as_str().unwrap_or("")),
         _ => "none".to_string(),
     };
