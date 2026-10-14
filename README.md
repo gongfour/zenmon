@@ -65,9 +65,18 @@ This creates 900 synthetic temperature, power, and status messages. Select a
 key, press `p` to plot a field, then use `,` / `.` to move through time.
 The script refuses to overwrite an existing file.
 
-![Offline recording: payload changes, attachments, and numeric history](docs/assets/offline-demo.png)
+![Recorded demo: step through temperature history, then find the warming-to-ready state change](docs/assets/offline-demo.gif)
 
-[Watch the captured-frame demo](docs/assets/offline-demo.gif) · [Offline controls and limits](docs/usage.md#browse-a-recording-in-the-dashboard)
+**From a changing value to the moment it changed.** This 22-second recording
+shows the actual dashboard with synthetic data: step forward and backward
+through temperature history, then use `F2` → `change /state` on `demo/status`
+to jump from `warming` at 5 seconds to `ready` at 8 seconds.
+Waiting time is trimmed and time navigation is sped up.
+
+To try the same field search, press `F2`, run `goto +5s`, select `demo/status`,
+then press `F2` and run `change /state`.
+
+[Still image](docs/assets/offline-demo.png) · [Offline controls and limits](docs/usage.md#browse-a-recording-in-the-dashboard)
 
 **Ready for live traffic?**
 
