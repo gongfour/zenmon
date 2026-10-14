@@ -458,6 +458,8 @@ pub struct Sent {
 const LIVELINESS_EVENT_CAP: usize = 200;
 
 pub struct App {
+    pub offline_status: Option<String>,
+    pub(crate) offline_now: Option<Instant>,
     pub space: Space,
     pub overlay: Overlay,
     pub pane_focus: PaneFocus,
@@ -666,6 +668,8 @@ impl App {
             pane_focus: PaneFocus::Master,
             detail_mode: DetailMode::Live,
             should_quit: false,
+            offline_status: None,
+            offline_now: None,
             connection_state: ConnectionState::Connecting,
             endpoint,
             space_tab_rects: [None; 2],
@@ -849,6 +853,18 @@ impl App {
     /// in `lib.rs` clears those fields after the new session is established.
     /// Does NOT clear query results, history, or user-entered filters, which
     /// are session-scoped user inputs that should survive a reconnect.
+    pub(crate) fn palette_action_available(&self, action: PaletteAction) -> bool {
+        self.offline_status.is_none()
+            || matches!(
+                action,
+                PaletteAction::SwitchSpace(Space::Traffic)
+                    | PaletteAction::OpenHelp
+                    | PaletteAction::SaveProfile
+                    | PaletteAction::LoadProfile
+                    | PaletteAction::Quit
+            )
+    }
+
     pub fn clear_network_state(&mut self) {
         self.key_tree = KeyTree::new();
         self.tree_expanded.clear();
@@ -1081,16 +1097,28 @@ impl App {
     pub(crate) fn key_freshness(&self, key: &str) -> KeyFreshness {
         match self.topic_latest.get(key) {
             None => KeyFreshness::NoData,
-            Some((_, at)) if at.elapsed().as_secs() >= IDLE_DIM_SECS => KeyFreshness::Idle,
+            Some((_, at))
+                if self
+                    .offline_now
+                    .unwrap_or_else(Instant::now)
+                    .saturating_duration_since(*at)
+                    .as_secs()
+                    >= IDLE_DIM_SECS =>
+            {
+                KeyFreshness::Idle
+            }
             Some(_) => KeyFreshness::Live,
         }
     }
 
     /// Seconds since the last message on `key`, if one was ever recorded.
     pub(crate) fn idle_secs(&self, key: &str) -> Option<u64> {
-        self.topic_latest
-            .get(key)
-            .map(|(_, at)| at.elapsed().as_secs())
+        self.topic_latest.get(key).map(|(_, at)| {
+            self.offline_now
+                .unwrap_or_else(Instant::now)
+                .saturating_duration_since(*at)
+                .as_secs()
+        })
     }
 
     /// Aggregate rate and bandwidth for every key at or below `path`.

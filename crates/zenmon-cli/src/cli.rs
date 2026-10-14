@@ -504,6 +504,10 @@ pub struct ReplayArgs {
 #[cfg(feature = "tui")]
 #[derive(clap::Args, Debug)]
 pub struct TuiArgs {
+    /// Inspect a capture file or store offline, without opening a network session.
+    #[arg(long, conflicts_with = "allow_publish")]
+    pub trace: Option<PathBuf>,
+
     /// UI refresh interval (e.g. 100ms, 1s)
     #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
     pub refresh: Duration,
@@ -666,6 +670,8 @@ impl DeclKindArg {
 
 #[derive(Subcommand, Debug)]
 pub enum TraceCommand {
+    /// Strict offline integrity check of a capture file or store.
+    Verify { path: PathBuf },
     /// Per-topic rollup: count, rate, last value, time span.
     Stats {
         /// Trace store directory

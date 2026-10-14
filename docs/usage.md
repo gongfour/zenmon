@@ -480,6 +480,69 @@ between them. The fix is to decouple collection from reading:
   `--last-per-key` collapses to the latest record per topic; `--every N`
   samples large windows.
 
+### Verify stored data
+
+```bash
+zenmon trace verify ./trace
+zenmon --json trace verify ./capture.ndjson
+```
+
+Verification reads all recognized segments (or a single file) without opening a
+network session. It checks JSON/schema versions, concrete keys, message kinds,
+payload and attachment base64, receiver timestamps, and complete zstd frames.
+Each issue identifies its file and 1-based line. Exit 0 means the stored records
+passed these checks; exit 2 means a check failed. JSON includes `valid`, `files`,
+`records` (valid records), `issue_count`, and up to 100 detailed `issues`.
+An empty store fails. Unrecognized filenames in a store are ignored.
+
+Run this against a stopped capture or a stable copy. Unlike the live-tolerant
+reader, verification rejects unfinished compressed frames and partial records.
+It cannot prove that every network message was received, that no segment was
+removed, or that valid bytes were not altered: the capture format has no
+independent delivery ledger or checksum manifest. It does not repair files.
+
+### Browse a recording in the dashboard
+
+```bash
+zenmon tui --trace ./trace
+zenmon tui --trace ./capture.ndjson
+```
+
+The dashboard opens at the final recorded message, with an **OFFLINE** header.
+No network session, discovery, query, or publisher is created. `--allow-publish`
+is incompatible with `--trace`.
+
+| Control | Action |
+|---|---|
+| `[` / `]` | Previous / next recorded message |
+| `F7` / `F8` | Back / forward one second |
+| `F5` / `F6` | First / last recorded message |
+| `/`, `D`, `b`, `p` | Existing filter, diff, pinned baseline, numeric plot |
+
+Seeking rebuilds history through the selected position. Rates are averages from
+the first message to that position, not the speed of loading the file. Message
+ages stay relative to the selected position. A zero-length window shows zero
+rates. Payload and attachment bytes are preserved; the existing history limits
+still apply (128 entries per key, capped previews and a shared history budget).
+The existing key-count limit also applies. Plots follow message order, with
+one sample per message rather than a uniformly spaced time axis.
+
+This initial offline viewer accepts up to 100,000 records or 64 MiB of decoded
+NDJSON, rejecting larger input explicitly. For a smaller window, export records
+from a store (the example uses `jq` to remove the reader's summary trailer):
+
+```bash
+zenmon --json trace read ./trace --key "demo/**" --since 10m --limit 10000 \
+  | jq -c 'select(has("schema_version"))' > subset.ndjson
+zenmon tui --trace subset.ndjson
+```
+
+The viewer requires complete records and compressed frames; it does not follow
+an actively growing recording. v2 files use receiver wall-clock timestamps;
+new captures retain milliseconds. Older captures keep their original time
+precision. A legacy v1 file uses capture-relative offsets; open separate v1
+capture sessions individually. Mixing v1 and v2 timestamps is rejected.
+
 ## Contract-aware monitoring
 
 Contracts are optional. A minimal contract contains only `topics` with `key`,
@@ -609,7 +672,13 @@ zenmon --json scenario \
 - `--no-timeline` removes per-message output but retains summaries and tracks.
 - `--explain` validates and shows the plan without opening a network session.
 
-The episode's `meta.ended_reason` is `condition_matched` or `window_elapsed`.
+The episode's `meta.ended_reason` is `condition_matched`, `window_elapsed`,
+`interrupted`, or `stream_closed`. Ctrl+C writes the partial episode, skips any
+remaining settle period, and exits with code 130. An observation stream ending
+unexpectedly writes the partial episode and exits with code 3. A quiet or
+reconnecting Zenoh session does not necessarily close its subscriber: this is
+not a publisher-liveness detector. An ordinary observation-window timeout is
+still a successful recording (exit 0), even if no stop condition matched.
 A condition match means the requested message arrived, not that an application
 operation succeeded; inspect its payload to decide that. Automatic `silence`,
 `stopped`, `deleted`, and tracked `change` events describe observations.

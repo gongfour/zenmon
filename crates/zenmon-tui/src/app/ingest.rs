@@ -137,6 +137,10 @@ impl App {
     }
 
     pub(crate) fn handle_zenoh_message(&mut self, msg: ZenohMessage) {
+        self.ingest_at(msg, Instant::now());
+    }
+
+    pub(crate) fn ingest_at(&mut self, msg: ZenohMessage, received: Instant) {
         // `insert` reports only genuinely new keys, so the steady state of a
         // running stream does no work here at all — no sort, no cache
         // invalidation, no reconsidering the automatic expansion.
@@ -150,8 +154,8 @@ impl App {
         // 10 Hz while holding the message you stopped to read.
         if !self.history_paused {
             self.topic_latest
-                .insert(msg.key_expr.clone(), (msg.clone(), Instant::now()));
-            self.history.record(&msg);
+                .insert(msg.key_expr.clone(), (msg.clone(), received));
+            self.history.record_at(&msg, received);
         }
 
         *self
@@ -211,6 +215,20 @@ impl App {
         self.tree_expanded.retain(|p| self.key_tree.has_children(p));
         self.tree_unfolded.retain(|p| self.key_tree.has_children(p));
         self.tree_expanded_version = self.tree_expanded_version.wrapping_add(1);
+    }
+
+    pub(crate) fn offline_bandwidth(&mut self, elapsed: f64) {
+        self.topic_rates.clear();
+        self.total_rate = RateWindow::new(RATE_WINDOW_SECS);
+        if elapsed > 0.0 {
+            self.total_rate
+                .push((self.total_byte_count as f64 / elapsed) as u64);
+            for (key, bytes) in &self.topic_byte_counts {
+                let mut rate = RateWindow::new(RATE_WINDOW_SECS);
+                rate.push((*bytes as f64 / elapsed) as u64);
+                self.topic_rates.insert(key.clone(), rate);
+            }
+        }
     }
 
     pub fn update_hz(&mut self) {

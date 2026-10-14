@@ -15,6 +15,29 @@ pub fn run(ctx: &Ctx, command: TraceCommand) -> Result<(), ZenmonError> {
             .transpose()
     };
     match command {
+        TraceCommand::Verify { path } => {
+            let report = zenmon_core::verify::verify(&path)?;
+            if ctx.json {
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                println!(
+                    "{} files, {} valid records, {} issues",
+                    report.files, report.records, report.issue_count
+                );
+                for issue in &report.issues {
+                    println!(
+                        "{}:{}: {}",
+                        issue.path.display(),
+                        issue.line.unwrap_or(0),
+                        issue.message
+                    );
+                }
+                println!("Checks stored data only; cannot prove network delivery or detect missing files without a manifest.");
+            }
+            if !report.valid {
+                return Err(ZenmonError::invalid_input("trace integrity check failed"));
+            }
+        }
         TraceCommand::Stats {
             dir,
             key,

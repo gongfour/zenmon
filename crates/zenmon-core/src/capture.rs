@@ -67,7 +67,7 @@ impl CaptureRecord {
             source_timestamp: msg.timestamp.clone(),
             received_offset_ms: offset.as_millis() as u64,
             kind: msg.kind.clone(),
-            received_at: Some(humantime::format_rfc3339_seconds(received_at).to_string()),
+            received_at: Some(humantime::format_rfc3339_millis(received_at).to_string()),
         }
     }
 
@@ -388,11 +388,11 @@ mod tests {
     #[test]
     fn from_message_populates_received_at_as_rfc3339() {
         let m = msg("a/b", b"{}".to_vec(), None);
-        let t = std::time::UNIX_EPOCH + Duration::from_secs(1_752_668_096);
+        let t = std::time::UNIX_EPOCH + Duration::from_millis(1_752_668_096_123);
         let rec = CaptureRecord::from_message(&m, Duration::from_millis(10), t);
         assert_eq!(rec.schema_version, 2);
         let got = rec.received_at.as_deref().unwrap();
-        assert_eq!(got, "2025-07-16T12:14:56Z"); // humantime rfc3339 of that epoch second
+        assert_eq!(got, "2025-07-16T12:14:56.123Z");
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn parse_accepts_v2_and_rejects_v3() {
         let m = msg("a/b", b"x".to_vec(), None);
-        let t = std::time::UNIX_EPOCH + Duration::from_secs(1_752_668_096);
+        let t = std::time::UNIX_EPOCH + Duration::from_millis(1_752_668_096_123);
         let line =
             serde_json::to_string(&CaptureRecord::from_message(&m, Duration::ZERO, t)).unwrap();
         assert!(CaptureRecord::parse_line(&line, 1).is_ok());

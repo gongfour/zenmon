@@ -103,6 +103,16 @@ impl App {
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
+        if let Some(status) = &self.offline_status {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "OFFLINE  {status}\n[ / ] message · F7 / F8 ±1s · F5 first · F6 last · ? help"
+                ))
+                .style(Style::default().fg(Color::Cyan)),
+                area,
+            );
+            return;
+        }
         // Split rather than one string: the failure reason is what gets
         // shortened when the line is tight, and the part after it — the retry
         // count, or what to press — has to survive whole. Truncating the
@@ -638,13 +648,17 @@ impl App {
     }
 
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
-        let hint = match self.space {
+        let hint = if self.offline_status.is_some() {
+            "[ / ] message  F7/F8 ±1s  F5/F6 first/last  / filter  D diff  p plot  y copy  ? help  q quit"
+        } else {
+            match self.space {
             Space::Traffic => {
                 "Tab space  j/k move  h/l fold  / filter  D diff  p plot  L live  Q request  y copy  : cmds  ? help  q quit"
             }
             Space::Network => {
                 "Tab space  j/k move  / filter  D dead only  s scout  y copy  : cmds  d doctor  ? help  q quit"
             }
+        }
         };
         frame.render_widget(
             Paragraph::new(Span::styled(hint, Style::default().fg(Color::DarkGray))),
@@ -674,6 +688,7 @@ impl App {
         // the `:` palette can never drift apart.
         let mut lines: Vec<Line> = palette_commands()
             .iter()
+            .filter(|cmd| self.palette_action_available(cmd.action))
             .map(|cmd| {
                 Line::from(vec![
                     Span::styled(
@@ -684,6 +699,11 @@ impl App {
                 ])
             })
             .collect();
+        if self.offline_status.is_some() {
+            lines.insert(0, Line::from("  [ / ] previous / next recorded message"));
+            lines.insert(1, Line::from("  F7/F8 backward / forward one second"));
+            lines.insert(2, Line::from("  F5/F6 first / last recorded message"));
+        }
         // The tree keys have no palette entry (they act on the cursor, not the
         // app), so they are listed here explicitly.
         lines.push(Line::from(""));

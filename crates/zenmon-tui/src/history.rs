@@ -143,7 +143,12 @@ pub struct History {
 
 impl History {
     pub fn record(&mut self, msg: &ZenohMessage) {
-        let entry = HistoryEntry::from_message(msg);
+        self.record_at(msg, Instant::now());
+    }
+
+    pub fn record_at(&mut self, msg: &ZenohMessage, received: Instant) {
+        let mut entry = HistoryEntry::from_message(msg);
+        entry.received = received;
         let key = self.per_key.entry(msg.key_expr.clone()).or_default();
         // Take the delta, not the new entry's size: the push may have evicted
         // an older entry to stay under the per-key cap, and that entry can be

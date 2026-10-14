@@ -750,7 +750,8 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, cmd)| {
-                needle.is_empty() || cmd.label.to_ascii_lowercase().contains(&needle)
+                self.palette_action_available(cmd.action)
+                    && (needle.is_empty() || cmd.label.to_ascii_lowercase().contains(&needle))
             })
             .map(|(i, _)| i)
             .collect()

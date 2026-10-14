@@ -57,6 +57,12 @@ pub struct EventHandler {
     _task: tokio::task::JoinHandle<()>,
 }
 
+impl Drop for EventHandler {
+    fn drop(&mut self) {
+        self._task.abort();
+    }
+}
+
 impl EventHandler {
     pub fn new(
         tick_delay: std::time::Duration,
