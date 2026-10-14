@@ -1,5 +1,6 @@
 //! A compact time/key index over a private spool, never the caller's live files.
 use color_eyre::{eyre::eyre, Result};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs::File,
@@ -27,6 +28,7 @@ pub(crate) struct Entry {
     key_bytes: u64,
 }
 pub(crate) struct Recording {
+    pub fingerprint: String,
     pub entries: Vec<Entry>,
     pub keys: Vec<String>,
     by_key: Vec<Vec<usize>>,
@@ -58,45 +60,60 @@ impl Recording {
         let mut key_ids = HashMap::new();
         let mut offset = 0u64;
         let mut legacy = None;
-        inspection::scan(path, selection, progress, |record, line| {
-            if entries.len() >= max_records || offset + line.len() as u64 > max_bytes as u64 {
-                return Err(ZenmonError::invalid_input(format!("offline index exceeds {max_records} records or {max_bytes} spool bytes; reopen with --key, --since and --until, or use: zenmon trace export <INPUT> --output window.ndjson --key '<KEY>' --since <START> --until <END>")));
-            }
-            let is_legacy = record.received_at.is_none();
-            if legacy.is_some_and(|v| v != is_legacy) {
-                return Err(ZenmonError::invalid_input(
-                    "cannot mix relative v1 and absolute v2 timestamps",
-                ));
-            }
-            legacy = Some(is_legacy);
-            let time = inspection::record_time(record)?;
-            let next_id = keys.len();
-            let key = *key_ids.entry(record.key_expr.clone()).or_insert_with(|| {
-                keys.push(record.key_expr.clone());
-                next_id
-            });
-            if keys.len() > crate::app::MAX_KEYS {
-                return Err(ZenmonError::invalid_input(
-                    "offline index exceeds 10,000 keys; reopen with --key '<KEY>'",
-                ));
-            }
-            let bytes = (record.payload_bytes()?.len()
-                + record.attachment_bytes()?.map_or(0, |v| v.len())) as u64;
-            spool
-                .write_all(line.as_bytes())
-                .map_err(inspection::io_error)?;
-            entries.push(Entry {
-                time,
-                offset,
-                len: line.len(),
-                key,
-                bytes,
-                total_bytes: 0,
-                key_bytes: 0,
-            });
-            offset += line.len() as u64;
-            Ok(())
-        })?;
+        let mut source_hash = Sha256::new();
+        let mut selected_hash = Sha256::new();
+        inspection::scan_observed(
+            path,
+            selection,
+            progress,
+            |record, line| {
+                selected_hash.update((line.len() as u64).to_le_bytes());
+                selected_hash.update(line.as_bytes());
+                if entries.len() >= max_records || offset + line.len() as u64 > max_bytes as u64 {
+                    return Err(ZenmonError::invalid_input(format!("offline index exceeds {max_records} records or {max_bytes} spool bytes; reopen with --key, --since and --until, or use: zenmon trace export <INPUT> --output window.ndjson --key '<KEY>' --since <START> --until <END>")));
+                }
+                let is_legacy = record.received_at.is_none();
+                if legacy.is_some_and(|v| v != is_legacy) {
+                    return Err(ZenmonError::invalid_input(
+                        "cannot mix relative v1 and absolute v2 timestamps",
+                    ));
+                }
+                legacy = Some(is_legacy);
+                let time = inspection::record_time(record)?;
+                let next_id = keys.len();
+                let key = *key_ids.entry(record.key_expr.clone()).or_insert_with(|| {
+                    keys.push(record.key_expr.clone());
+                    next_id
+                });
+                if keys.len() > crate::app::MAX_KEYS {
+                    return Err(ZenmonError::invalid_input(
+                        "offline index exceeds 10,000 keys; reopen with --key '<KEY>'",
+                    ));
+                }
+                let bytes = (record.payload_bytes()?.len()
+                    + record.attachment_bytes()?.map_or(0, |v| v.len()))
+                    as u64;
+                spool
+                    .write_all(line.as_bytes())
+                    .map_err(inspection::io_error)?;
+                entries.push(Entry {
+                    time,
+                    offset,
+                    len: line.len(),
+                    key,
+                    bytes,
+                    total_bytes: 0,
+                    key_bytes: 0,
+                });
+                offset += line.len() as u64;
+                Ok(())
+            },
+            |line| {
+                source_hash.update((line.len() as u64).to_le_bytes());
+                source_hash.update(line.as_bytes());
+                Ok(())
+            },
+        )?;
         if entries.is_empty() {
             return Err(eyre!("no records in capture"));
         }
@@ -112,6 +129,11 @@ impl Recording {
             by_key[entry.key].push(i);
         }
         Ok(Self {
+            fingerprint: format!(
+                "{:x}:{:x}",
+                source_hash.finalize(),
+                selected_hash.finalize()
+            ),
             entries,
             keys,
             by_key,

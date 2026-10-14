@@ -104,6 +104,18 @@ pub fn scan(
     mut progress: impl FnMut(Progress) -> Result<()>,
     mut visit: impl FnMut(&CaptureRecord, &str) -> Result<()>,
 ) -> Result<Progress> {
+    scan_observed(path, selection, &mut progress, &mut visit, |_| Ok(()))
+}
+
+/// Observe every validated source line, including records excluded by selection.
+/// Used to fingerprint an offline investigation without a second pass over input.
+pub fn scan_observed(
+    path: &Path,
+    selection: &Selection,
+    mut progress: impl FnMut(Progress) -> Result<()>,
+    mut visit: impl FnMut(&CaptureRecord, &str) -> Result<()>,
+    mut observe: impl FnMut(&str) -> Result<()>,
+) -> Result<Progress> {
     let paths = verify::capture_paths(path)?;
     let mut p = Progress {
         total_files: paths.len(),
@@ -129,6 +141,7 @@ pub fn scan(
                 .map_err(|e| {
                     ZenmonError::invalid_input(format!("{}:{line_number}: {e}", path.display()))
                 })?;
+            observe(&line)?;
             p.scanned += 1;
             p.decoded_bytes += line.len() as u64;
             if selection.matches(&record)? {

@@ -30,6 +30,8 @@ robotics, and other Zenoh applications. No project-specific contract required.
   Browse saved traffic offline with `zenmon tui --trace ./trace`.
   Press `F2` to jump to a time, search messages and attachments, find field
   changes, or export a marked interval.
+  Play saved traffic with `Space`, adjust speed with `F9` / `F10`, and resume
+  your investigation when you reopen the same recording.
   The optional tray app keeps recording without an open terminal.
 - **Automate the investigation.** Use JSON/NDJSON output, time-bounded
   subscriptions, and an optional MCP interface for agent workflows.

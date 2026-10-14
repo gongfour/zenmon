@@ -562,5 +562,6 @@ mod tests {
 
 mod recording;
 
+mod investigation;
 mod offline_tools;
 mod playback;

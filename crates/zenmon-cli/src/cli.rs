@@ -508,6 +508,10 @@ pub struct TuiArgs {
     #[arg(long, conflicts_with = "allow_publish")]
     pub trace: Option<PathBuf>,
 
+    /// Do not restore or save the local investigation state (offline only).
+    #[arg(long, requires = "trace")]
+    pub no_resume: bool,
+
     /// Select recorded keys before indexing (offline only).
     #[arg(long, requires = "trace")]
     pub key: Option<String>,

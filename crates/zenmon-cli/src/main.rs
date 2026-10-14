@@ -181,6 +181,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
         #[cfg(feature = "tui")]
         Command::Tui(cli::TuiArgs {
             trace,
+            no_resume,
             key,
             since,
             until,
@@ -192,7 +193,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // simply shows no contract badge.
             let contract = common::load_contract_opt(&ctx.contract)?;
             if let Some(path) = trace {
-                zenmon_tui::offline::run_selected(
+                zenmon_tui::offline::run_with_resume(
                     &path,
                     refresh,
                     contract,
@@ -201,6 +202,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
                         since.as_deref(),
                         until.as_deref(),
                     )?,
+                    !no_resume,
                 )
                 .await
                 .map_err(|e| {
