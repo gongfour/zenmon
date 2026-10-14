@@ -34,7 +34,7 @@ pub(crate) struct Tools {
     draft: String,
     fields: Vec<String>,
     completion: Option<(Vec<String>, usize)>,
-    last_search: Option<(String, Option<String>)>,
+    pub(crate) last_search: Option<(String, Option<String>)>,
 }
 impl Tools {
     pub fn open(&mut self, app: &App) {

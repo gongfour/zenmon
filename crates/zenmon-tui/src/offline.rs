@@ -185,6 +185,16 @@ pub async fn run_selected(
     contract: Option<zenmon_core::contract::Contract>,
     selection: zenmon_core::inspection::Selection,
 ) -> Result<()> {
+    run_with_resume(path, refresh, contract, selection, true).await
+}
+
+pub async fn run_with_resume(
+    path: &Path,
+    refresh: Duration,
+    contract: Option<zenmon_core::contract::Contract>,
+    selection: zenmon_core::inspection::Selection,
+    resume: bool,
+) -> Result<()> {
     // Keep the terminal in normal mode during indexing; Ctrl+C can cancel it.
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -239,17 +249,50 @@ pub async fn run_selected(
         Ok(profiles) => app.profiles = profiles,
         Err(e) => app.set_error_toast(format!("Saved views unavailable: {e}")),
     }
-    let mut position = recording.entries.len() - 1;
+    let (mut checkpoints, restored, persistence_message) =
+        crate::investigation::Checkpoints::open(path, &recording, resume);
+    let mut position = restored
+        .as_ref()
+        .map_or(recording.entries.len() - 1, |s| s.position);
+    let mut tools = crate::offline_tools::Tools::default();
     recording.show(&mut app, position)?;
+    if let Some(state) = restored {
+        app.apply_profile(&state.view);
+        if let Some(key) = &state.selected_key {
+            // Restore only the visible selection; never clear the saved filter.
+            if let Some(i) = app
+                .tree_rows()
+                .iter()
+                .position(|r| r.path == *key && r.kind == crate::tree::RowKind::Leaf)
+            {
+                app.tree_selected = i;
+            }
+        }
+        tools.start = state.start;
+        tools.end = state.end;
+        tools.last_search = state.search;
+        tools.message = "Restored investigation (paused)".into();
+        app.set_toast("Restored investigation (paused)");
+    }
+    if let Some(message) = persistence_message {
+        app.set_error_toast(message);
+    }
     enable_raw_mode()?;
     let _guard = TerminalGuard;
     execute!(std::io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let mut events = EventHandler::new(refresh.min(Duration::from_millis(100)), rx);
-    let mut tools = crate::offline_tools::Tools::default();
+    let mut last_checkpoint = Instant::now();
     let mut playback = crate::playback::Playback::default();
     loop {
+        if checkpoints.enabled() && last_checkpoint.elapsed() >= Duration::from_secs(5) {
+            let state = crate::investigation::State::snapshot(&recording, position, &app, &tools);
+            if let Err(e) = checkpoints.checkpoint(state, false).await {
+                app.set_error_toast(format!("Could not save investigation: {e}"));
+            }
+            last_checkpoint = Instant::now();
+        }
         terminal.draw(|frame| {
             let status = app.offline_status.take();
             app.offline_status = status
@@ -369,6 +412,13 @@ pub async fn run_selected(
             position = target;
             recording.show(&mut app, position)?;
         }
+    }
+    let state = crate::investigation::State::snapshot(&recording, position, &app, &tools);
+    let saved = checkpoints.checkpoint(state, true).await;
+    drop(terminal);
+    drop(_guard);
+    if let Err(e) = saved {
+        eprintln!("Could not save investigation: {e}");
     }
     Ok(())
 }

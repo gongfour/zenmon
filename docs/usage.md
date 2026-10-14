@@ -508,7 +508,8 @@ zenmon tui --trace ./trace
 zenmon tui --trace ./capture.ndjson
 ```
 
-The dashboard opens at the final recorded message, with an **OFFLINE** header.
+The dashboard opens with an **OFFLINE** header. It restores a matching local
+investigation when available; otherwise it starts at the final recorded message.
 No network session, discovery, query, or publisher is created. `--allow-publish`
 is incompatible with `--trace`.
 
@@ -520,7 +521,7 @@ is incompatible with `--trace`.
 | `{` / `}` (or `F5` / `F6`) | First / last recorded message |
 | `/`, `D`, `b`, `p` | Existing filter, diff, pinned baseline, numeric plot |
 
-**Available in source checkouts after 0.8.0:**
+**Playback and repeated search (0.9.0+):**
 
 | Control | Action |
 |---|---|
@@ -535,6 +536,41 @@ stable position. Changing speed preserves elapsed capture time. Frames can
 coalesce messages, especially at high speed, but history and counts still
 include every record through the displayed position. Use `[` / `]` to inspect
 individual messages, including those with identical timestamps.
+
+#### Resume an investigation (0.9.0+)
+
+The viewer checkpoints the current message position, selected key, display
+filter, expanded branches, plots, diff setting, last search and interval marks
+every five seconds in the background and once more on normal `q` / Ctrl+C exit.
+Reopening the same capture resumes **paused at 1×**; it never starts playback or
+publishes messages automatically. Command history, unsent input and pinned
+payload baselines are not persisted.
+
+State lives under the OS-local `zenmon` data directory in `investigations/`
+(macOS: `~/Library/Application Support/zenmon/investigations`; Windows:
+`%LOCALAPPDATA%\zenmon\data\investigations`; Linux:
+`${XDG_DATA_HOME:-~/.local/share}/zenmon/investigations`). Set
+`ZENMON_TUI_STATE_DIR` to use another directory. Each canonical capture path
+has one checkpoint, named by a hash of that path. State contains key names,
+filters and the last search argument, but no captured payloads. On Unix,
+new state directories and files are owner-only.
+
+SHA-256 fingerprints cover all validated source record lines, including those
+excluded by startup filters, and the selected record sequence. They are computed
+during indexing, without a second input scan. Changed contents or a different
+loaded selection cause a fresh start; a later checkpoint replaces the old one.
+Recompression with identical record lines is compatible. Moving a capture to a
+new canonical path starts a separate investigation. Exact message positions
+preserve ordering even when several records have the same timestamp.
+
+Use `zenmon tui --trace ./trace --no-resume` to bypass both restoration and
+checkpoint writes for this run. To forget all investigations, remove the
+`investigations` directory while viewers are closed. Corrupt, oversized or
+unsupported-version state files are reported and left untouched; inspection
+still works. Checkpoints are atomically replaced, with a 1 MiB limit. Concurrent
+viewers of the same path use the last completed checkpoint. Abrupt termination
+may lose changes since the last successful checkpoint. Source captures are never
+modified by persistence.
 
 Seeking rebuilds history through the selected position. Rates are averages from
 the first message to that position, not the speed of loading the file. Message
@@ -586,7 +622,7 @@ an export; if publication has already finished, the command reports success.
 Press `F2`, type a command, then Enter. Escape closes the tools. The last result
 and marked positions remain visible when you reopen the panel.
 
-In source checkouts after 0.8.0, `Tab` / `Shift+Tab` cycle matching commands.
+`Tab` / `Shift+Tab` cycle matching commands (0.9.0+).
 For `change` / `change-prev`, type a space and a field prefix (for example
 `change /st`), then press `Tab` to select a field from the selected key's current
 payload or attachment. JSON pointer escaping is automatic. Suggestions are

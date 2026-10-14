@@ -7637,7 +7637,7 @@ dependencies = [
 
 [[package]]
 name = "zenmon-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -7660,7 +7660,7 @@ dependencies = [
 
 [[package]]
 name = "zenmon-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.1",
@@ -7683,7 +7683,7 @@ dependencies = [
 
 [[package]]
 name = "zenmon-tray"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "directories",
  "semver",
@@ -7705,15 +7705,18 @@ dependencies = [
 
 [[package]]
 name = "zenmon-tui"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
  "color-eyre",
  "crossterm",
+ "directories",
  "futures",
  "ratatui",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
