@@ -160,3 +160,6 @@ pub use crate::error::{ErrorKind, Result, ZenmonError};
 pub use crate::session::open_session;
 
 pub mod verify;
+
+/// Strict selection and lossless offline export.
+pub mod inspection;

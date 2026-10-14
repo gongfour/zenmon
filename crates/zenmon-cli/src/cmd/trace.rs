@@ -5,7 +5,7 @@ use zenmon_core::error::ZenmonError;
 use super::Ctx;
 use crate::cli::TraceCommand;
 
-pub fn run(ctx: &Ctx, command: TraceCommand) -> Result<(), ZenmonError> {
+pub async fn run(ctx: &Ctx, command: TraceCommand) -> Result<(), ZenmonError> {
     use zenmon_core::trace::{self, ReadFilter, ReadOptions};
     // Pure file reader — never opens a Zenoh session.
     let now = std::time::SystemTime::now();
@@ -15,6 +15,50 @@ pub fn run(ctx: &Ctx, command: TraceCommand) -> Result<(), ZenmonError> {
             .transpose()
     };
     match command {
+        TraceCommand::Export {
+            path,
+            output,
+            key,
+            since,
+            until,
+        } => {
+            let selection =
+                zenmon_core::inspection::Selection::new(&key, since.as_deref(), until.as_deref())?;
+            use std::sync::{
+                atomic::{AtomicBool, Ordering},
+                Arc,
+            };
+            let cancel = Arc::new(AtomicBool::new(false));
+            let worker_cancel = cancel.clone();
+            let destination = output.clone();
+            let mut worker = tokio::task::spawn_blocking(move || {
+                zenmon_core::inspection::export(&path, &destination, &selection, |_| {
+                    if worker_cancel.load(Ordering::Relaxed) {
+                        Err(ZenmonError::new(
+                            zenmon_core::ErrorKind::Interrupted,
+                            "export cancelled",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+            });
+            let count = tokio::select! {
+                result = &mut worker => result.map_err(|e| ZenmonError::internal(e.to_string()))??,
+                result = tokio::signal::ctrl_c() => {
+                    cancel.store(true, Ordering::Relaxed);
+                    let completed = worker.await.map_err(|e| ZenmonError::internal(e.to_string()))?;
+                    result.map_err(zenmon_core::inspection::io_error)?;
+                    // If publication won the race, report the completed export.
+                    completed?
+                }
+            };
+            if ctx.json {
+                println!("{}", serde_json::json!({"output":output,"records":count}));
+            } else {
+                println!("Exported {count} records to {}", output.display());
+            }
+        }
         TraceCommand::Verify { path } => {
             let report = zenmon_core::verify::verify(&path)?;
             if ctx.json {

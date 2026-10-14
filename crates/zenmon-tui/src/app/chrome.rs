@@ -106,7 +106,7 @@ impl App {
         if let Some(status) = &self.offline_status {
             frame.render_widget(
                 Paragraph::new(format!(
-                    "OFFLINE  {status}\n[ / ] message · , / . ±1s · {{ first · }} last · ? help"
+                    "OFFLINE  {status}\n[ / ] message · , / . ±1s · {{ first · }} last · F2 tools · ? help"
                 ))
                 .style(Style::default().fg(Color::Cyan)),
                 area,
@@ -649,7 +649,7 @@ impl App {
 
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = if self.offline_status.is_some() {
-            "[ / ] message  ,/. ±1s  {/} first/last  / filter  D diff  p plot  y copy  ? help  q quit"
+            "F2 tools  [ / ] message  ,/. ±1s  {/} first/last  / filter  D diff  p plot  y copy  ? help  q quit"
         } else {
             match self.space {
             Space::Traffic => {
@@ -700,6 +700,10 @@ impl App {
             })
             .collect();
         if self.offline_status.is_some() {
+            lines.insert(
+                0,
+                Line::from("  F2     offline search, time jump, marks, export"),
+            );
             lines.insert(0, Line::from("  [ / ] previous / next recorded message"));
             lines.insert(
                 1,

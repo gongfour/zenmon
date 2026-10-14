@@ -514,6 +514,7 @@ is incompatible with `--trace`.
 
 | Control | Action |
 |---|---|
+| `F2` | Offline tools: time jump, search, field changes, marked export |
 | `[` / `]` | Previous / next recorded message |
 | `,` / `.` (or `F7` / `F8`) | Back / forward one second |
 | `{` / `}` (or `F5` / `F6`) | First / last recorded message |
@@ -536,15 +537,66 @@ Limits are explicit: 1,000,000 records, 2 GiB of decoded spool data, 10,000 keys
 and 16 MiB per decoded NDJSON line. The selected history has a 64 MiB record
 budget in addition to the existing TUI history limits. If even the latest
 payloads exceed that budget, opening the view fails with a narrower-filter hint.
-Initial indexing still scans the complete input and needs temporary disk space.
-For a smaller window, export records
-from a store (the example uses `jq` to remove the reader's summary trailer):
+Initial indexing still scans and validates the complete input, including records
+outside the filter, but stores only matching records. Progress reports completed
+files, scanned/selected records and decoded bytes; it does not guess a percentage
+for compressed data. Ctrl+C cancels indexing and removes the temporary spool.
+Use key and time bounds before indexing to reduce disk usage and view size:
 
 ```bash
-zenmon --json trace read ./trace --key "demo/**" --since 10m --limit 10000 \
-  | jq -c 'select(has("schema_version"))' > subset.ndjson
+zenmon tui --trace ./trace --key "sensor/**" \
+  --since 2026-08-06T07:20:00Z --until 2026-08-06T07:21:00Z
+zenmon trace export ./trace --output subset.ndjson --key "sensor/**" \
+  --since 2026-08-06T07:20:00Z --until 2026-08-06T07:21:00Z
+zenmon trace verify subset.ndjson
 zenmon tui --trace subset.ndjson
 ```
+
+`--since` is inclusive and `--until` exclusive. v2 time bounds accept RFC3339
+or an age relative to the current wall clock (`10m`). For v1 recordings, use
+capture offsets such as `--since +10s --until +20s`; wall-clock bounds on v1
+and offset bounds on v2 are rejected. These flags require `--trace` on `tui`.
+
+`trace export` reads a file, compressed file or segment directory and writes a
+standalone plain NDJSON file without a summary trailer. Original records,
+including payload/attachment bytes, encoding, timestamps and offsets, are
+preserved. The destination must not exist. Empty selections, malformed input,
+and cancelled scans leave no output. A private temporary file in the destination
+directory is published without replacement only after success. Ctrl+C cancels
+an export; if publication has already finished, the command reports success.
+
+### Offline investigation tools
+
+Press `F2`, type a command, then Enter. Escape closes the tools. The last result
+and marked positions remain visible when you reopen the panel.
+
+| Command | Action |
+|---|---|
+| `goto +10s` | Jump ten seconds after the first message in the loaded window |
+| `goto 2026-08-06T07:20:30Z` | Jump to the first message at or after this receiver time |
+| `find warning` / `find-prev warning` | Next / previous payload or attachment text match on the selected key |
+| `find-all warning` / `find-all-prev warning` | Search all loaded keys |
+| `change /state` / `change-prev /state` | Next / previous message whose payload field differs from its current value |
+| `change attachment:/request_id` | Find a change in an attachment field |
+| `mark-start` / `mark-end` | Mark the current message as an inclusive range endpoint |
+| `export /path/to/slice.ndjson` | Export the selected key between both marks |
+| `export-all /path/to/slice.ndjson` | Export all loaded keys between both marks |
+
+Search is case-sensitive and checks original UTF-8 byte sequences and the
+existing decoded JSON/MessagePack view; arbitrary binary data is not interpreted
+as text. Field paths are JSON pointers (`/a~1b` addresses a key named `a/b`).
+The current message must contain the field; later removal counts as a change.
+Commands search the full loaded window beyond the current position, never wrap,
+and do not search records excluded by startup filters. Searching and exporting
+run off the UI thread; Escape or Ctrl+C cancels the operation. A search result
+selects its key and clears a display filter if needed to reveal it.
+
+Time jumps outside the loaded window report an error. Equal timestamps retain
+source order; `goto` picks the first of those messages, and `[`/`]` traverse the
+rest. No finer timestamp precision is invented. Marks refer to exact message
+positions, so an export can include only part of a group with equal timestamps.
+Set both marks explicitly; reversed ranges are rejected. Output paths may contain
+spaces and are entered literally, without shell quoting or `~` expansion.
 
 The viewer requires complete records and compressed frames; it does not follow
 an actively growing recording. v2 files use receiver wall-clock timestamps;

@@ -508,6 +508,16 @@ pub struct TuiArgs {
     #[arg(long, conflicts_with = "allow_publish")]
     pub trace: Option<PathBuf>,
 
+    /// Select recorded keys before indexing (offline only).
+    #[arg(long, requires = "trace")]
+    pub key: Option<String>,
+    /// Inclusive start: RFC3339, age (10m), or +offset for v1 recordings.
+    #[arg(long, requires = "trace")]
+    pub since: Option<String>,
+    /// Exclusive end, using the same clock as --since.
+    #[arg(long, requires = "trace")]
+    pub until: Option<String>,
+
     /// UI refresh interval (e.g. 100ms, 1s)
     #[arg(long, default_value = "100ms", value_parser = crate::duration::parse_duration_arg)]
     pub refresh: Duration,
@@ -672,6 +682,20 @@ impl DeclKindArg {
 pub enum TraceCommand {
     /// Strict offline integrity check of a capture file or store.
     Verify { path: PathBuf },
+    /// Export a lossless, filtered NDJSON file offline. Never overwrites a file.
+    Export {
+        path: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "**")]
+        key: String,
+        /// Inclusive start: RFC3339, age (10m), or +offset for v1 recordings.
+        #[arg(long)]
+        since: Option<String>,
+        /// Exclusive end.
+        #[arg(long)]
+        until: Option<String>,
+    },
     /// Per-topic rollup: count, rate, last value, time span.
     Stats {
         /// Trace store directory

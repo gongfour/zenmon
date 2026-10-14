@@ -561,3 +561,5 @@ mod tests {
 }
 
 mod recording;
+
+mod offline_tools;
