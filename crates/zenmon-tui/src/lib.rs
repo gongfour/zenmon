@@ -559,3 +559,5 @@ mod tests {
         assert!(should_draw(false, true, PERIOD, false));
     }
 }
+
+mod recording;

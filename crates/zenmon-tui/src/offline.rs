@@ -14,89 +14,12 @@ use std::{
     path::Path,
     time::{Duration, Instant, SystemTime},
 };
-use zenmon_core::{
-    capture::CaptureRecord,
-    trace,
-    types::{MessagePayload, ZenohMessage},
-    verify,
-};
+use zenmon_core::types::{MessagePayload, ZenohMessage};
 
-const MAX_RECORDS: usize = 100_000;
-const MAX_BYTES: usize = 64 * 1024 * 1024;
+use crate::recording::Recording;
 
-struct Entry {
-    record: CaptureRecord,
-    time: SystemTime,
-}
-struct Recording {
-    entries: Vec<Entry>,
-}
 impl Recording {
-    fn load(path: &Path) -> Result<Self> {
-        Self::load_with_limits(path, MAX_RECORDS, MAX_BYTES)
-    }
-
-    fn load_with_limits(path: &Path, max_records: usize, max_bytes: usize) -> Result<Self> {
-        let paths = verify::capture_paths(path)?;
-        let mut entries = Vec::new();
-        let mut bytes = 0usize;
-        for path in paths {
-            for (i, line) in trace::open_capture_lines(&path)?.strict().enumerate() {
-                let line = line.map_err(|e| eyre!("{}:{}: {e}", path.display(), i + 1))?;
-                bytes = bytes.saturating_add(line.len());
-                if entries.len() >= max_records || bytes > max_bytes {
-                    return Err(eyre!("offline view exceeds 100,000 records or 64 MiB decoded NDJSON; use trace read filters to export a smaller file"));
-                }
-                let record = CaptureRecord::parse_line(&line, i + 1)
-                    .and_then(|r| {
-                        verify::validate_record(&r)?;
-                        Ok(r)
-                    })
-                    .map_err(|e| eyre!("{}:{}: {e}", path.display(), i + 1))?;
-                let time = match &record.received_at {
-                    Some(t) => trace::parse_time_bound(t, SystemTime::now())?,
-                    None => SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_millis(record.received_offset_ms))
-                        .ok_or_else(|| eyre!("record time out of range"))?,
-                };
-                entries.push(Entry { record, time });
-            }
-        }
-        if entries.is_empty() {
-            return Err(eyre!("no records in capture"));
-        }
-        let legacy = entries[0].record.received_at.is_none();
-        if entries
-            .iter()
-            .any(|e| e.record.received_at.is_none() != legacy)
-        {
-            return Err(eyre!("cannot combine relative v1 timestamps with absolute v2 timestamps; open them separately"));
-        }
-        // Stable ordering preserves file order within equal receiver timestamps.
-        entries.sort_by_key(|e| e.time);
-        Ok(Self { entries })
-    }
-
-    fn seek_time(&self, position: usize, forward: bool) -> usize {
-        let time = self.entries[position].time;
-        let target = if forward {
-            time.checked_add(Duration::from_secs(1))
-        } else {
-            time.checked_sub(Duration::from_secs(1))
-        }
-        .unwrap_or(time);
-        if forward {
-            self.entries
-                .partition_point(|e| e.time < target)
-                .min(self.entries.len() - 1)
-        } else {
-            self.entries
-                .partition_point(|e| e.time <= target)
-                .saturating_sub(1)
-        }
-    }
-
-    fn show(&self, app: &mut App, position: usize) -> Result<()> {
+    fn show(&mut self, app: &mut App, position: usize) -> Result<()> {
         let selected = app.tree_selected;
         let expanded = app.tree_expanded.clone();
         let unfolded = app.tree_unfolded.clone();
@@ -108,12 +31,13 @@ impl Recording {
         let end = self.entries[position].time;
         let now = Instant::now();
         app.offline_now = Some(now);
-        for entry in &self.entries[..=position] {
-            let r = &entry.record;
+        for index in self.snapshot(position)? {
+            let time = self.entries[index].time;
+            let r = self.read(index)?;
             let payload = r.payload_bytes()?;
             let attachment = r.attachment_bytes()?;
             let received = now
-                .checked_sub(end.duration_since(entry.time).unwrap_or_default())
+                .checked_sub(end.duration_since(time).unwrap_or_default())
                 .ok_or_else(|| eyre!("capture time span is too large"))?;
             let msg = ZenohMessage {
                 key_expr: r.key_expr.clone(),
@@ -128,6 +52,15 @@ impl Recording {
             };
             app.ingest_at(msg, received);
         }
+        app.topic_msg_counts.clear();
+        app.topic_byte_counts.clear();
+        for (key, count, bytes) in self.counts(position) {
+            app.topic_msg_counts
+                .insert(self.keys[key].clone(), count as u32);
+            app.topic_byte_counts.insert(self.keys[key].clone(), bytes);
+        }
+        app.total_msg_count = (position + 1) as u32;
+        app.total_byte_count = self.entries[position].total_bytes;
         app.evict_excess_keys();
         let elapsed = end
             .duration_since(self.entries[0].time)
@@ -152,11 +85,12 @@ impl Recording {
             "{}/{} · {} · rates: window average",
             position + 1,
             self.entries.len(),
-            self.entries[position]
-                .record
-                .received_at
-                .as_deref()
-                .unwrap_or("v1 relative time")
+            self.read(position)?.received_at.unwrap_or_else(|| format!(
+                "+{}ms",
+                end.duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            ))
         ));
         Ok(())
     }
@@ -178,6 +112,7 @@ fn reject_network_actions(app: &mut App) {
         );
     if requested {
         app.space = Space::Traffic;
+        app.detail_mode = crate::app::DetailMode::Live;
         app.overlay = Overlay::None;
         app.set_error_toast("Offline capture: network operations are unavailable");
     }
@@ -197,7 +132,11 @@ pub async fn run(
     contract: Option<zenmon_core::contract::Contract>,
 ) -> Result<()> {
     // Validate and load before changing terminal state.
-    let recording = Recording::load(path)?;
+    eprintln!(
+        "Indexing {} (offline, temporary disk spool)…",
+        path.display()
+    );
+    let mut recording = Recording::load(path)?;
     let mut app = App::new(path.display().to_string());
     app.contract = contract;
     match zenmon_core::profile::load() {
@@ -226,10 +165,14 @@ pub async fn run(
                 match k.code {
                     KeyCode::Char('[') => target = position.saturating_sub(1),
                     KeyCode::Char(']') => target = (position + 1).min(recording.entries.len() - 1),
-                    KeyCode::F(5) => target = 0,
-                    KeyCode::F(6) => target = recording.entries.len() - 1,
-                    KeyCode::F(7) => target = recording.seek_time(position, false),
-                    KeyCode::F(8) => target = recording.seek_time(position, true),
+                    KeyCode::F(5) | KeyCode::Char('{') => target = 0,
+                    KeyCode::F(6) | KeyCode::Char('}') => target = recording.entries.len() - 1,
+                    KeyCode::F(7) | KeyCode::Char(',') => {
+                        target = recording.seek_time(position, false)
+                    }
+                    KeyCode::F(8) | KeyCode::Char('.') => {
+                        target = recording.seek_time(position, true)
+                    }
                     _ => app.handle_event(AppEvent::Key(k)),
                 }
             }
@@ -251,29 +194,34 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recording::{MAX_BYTES, MAX_RECORDS};
+    use zenmon_core::{capture::CaptureRecord, trace};
+    fn records() -> Vec<CaptureRecord> {
+        (0..3)
+            .map(|i| CaptureRecord {
+                schema_version: 1,
+                key_expr: "demo/value".into(),
+                payload_base64: ["MA==", "MQ==", "Mg=="][i as usize].into(),
+                encoding: "application/json".into(),
+                attachment_base64: Some("AP8=".into()),
+                source_timestamp: None,
+                received_at: None,
+                received_offset_ms: i * 1000,
+                kind: "PUT".into(),
+            })
+            .collect()
+    }
     fn recording() -> Recording {
-        Recording {
-            entries: (0..3)
-                .map(|i| Entry {
-                    time: SystemTime::UNIX_EPOCH + Duration::from_secs(i),
-                    record: CaptureRecord {
-                        schema_version: 1,
-                        key_expr: "demo/value".into(),
-                        payload_base64: ["MA==", "MQ==", "Mg=="][i as usize].into(),
-                        encoding: "application/json".into(),
-                        attachment_base64: Some("AP8=".into()),
-                        source_timestamp: None,
-                        received_at: None,
-                        received_offset_ms: i * 1000,
-                        kind: "PUT".into(),
-                    },
-                })
-                .collect(),
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        for record in records() {
+            writeln!(file, "{}", serde_json::to_string(&record).unwrap()).unwrap();
         }
+        Recording::load(file.path()).unwrap()
     }
     #[test]
     fn seeking_rebuilds_history_without_future_values_and_keeps_binary_attachment() {
-        let r = recording();
+        let mut r = recording();
         let mut app = App::new("test".into());
         r.show(&mut app, 2).unwrap();
         assert_eq!(app.history.get("demo/value").unwrap().len(), 3);
@@ -325,14 +273,10 @@ mod tests {
     fn loader_checks_compressed_input_and_limits_before_display() {
         let path =
             std::env::temp_dir().join(format!("zenmon-offline-{}.ndjson.zst", std::process::id()));
-        let r = recording();
         let mut writer = trace::CaptureFileWriter::create(&path, trace::Compression::Zstd).unwrap();
-        for entry in &r.entries {
+        for record in records() {
             writer
-                .write_line(
-                    &serde_json::to_string(&entry.record).unwrap(),
-                    SystemTime::now(),
-                )
+                .write_line(&serde_json::to_string(&record).unwrap(), SystemTime::now())
                 .unwrap();
         }
         writer.finish().unwrap();
@@ -343,5 +287,21 @@ mod tests {
         std::fs::write(&path, "broken\n").unwrap();
         assert!(Recording::load(&path).is_err());
         std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    #[ignore = "manual benchmark: set ZENMON_BENCH_TRACE to a capture file"]
+    fn benchmark_recording_seek() {
+        let path = std::env::var("ZENMON_BENCH_TRACE").expect("capture path");
+        let start = Instant::now();
+        let mut recording = Recording::load(Path::new(&path)).unwrap();
+        eprintln!("index/load: {:?}", start.elapsed());
+        let mut app = App::new("benchmark".into());
+        let start = Instant::now();
+        for delta in 1..=5 {
+            recording
+                .show(&mut app, recording.entries.len() - delta)
+                .unwrap();
+        }
+        eprintln!("five backward seeks: {:?}", start.elapsed());
     }
 }

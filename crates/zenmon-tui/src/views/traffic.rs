@@ -406,25 +406,29 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
         .bg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
     let inactive = Style::default().fg(Color::DarkGray);
-    let mode_line = Line::from(vec![
-        Span::styled(
-            "[L]ive",
-            if app.detail_mode == DetailMode::Live {
-                active
-            } else {
-                inactive
-            },
-        ),
-        Span::raw("  "),
-        Span::styled(
-            "[Q]uery",
-            if app.detail_mode == DetailMode::Query {
-                active
-            } else {
-                inactive
-            },
-        ),
-    ]);
+    let mode_line = if app.offline_status.is_some() {
+        Line::from(Span::styled("Recorded", active))
+    } else {
+        Line::from(vec![
+            Span::styled(
+                "[L]ive",
+                if app.detail_mode == DetailMode::Live {
+                    active
+                } else {
+                    inactive
+                },
+            ),
+            Span::raw("  "),
+            Span::styled(
+                "[Q]uery",
+                if app.detail_mode == DetailMode::Query {
+                    active
+                } else {
+                    inactive
+                },
+            ),
+        ])
+    };
     let mut header_lines = vec![Line::from(Span::styled(
         header,
         Style::default().fg(Color::Gray),
@@ -683,7 +687,9 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
 
     lines.push(Line::from(""));
     let held = history.map_or(0, |h| h.len());
-    let hist_header = if app.history_paused {
+    let hist_header = if app.offline_status.is_some() {
+        format!("─ recorded history · {held} held ─")
+    } else if app.history_paused {
         format!("─ history · {held} held · PAUSED (space=resume) ─")
     } else {
         format!("─ history · {held} held (space=pause) ─")

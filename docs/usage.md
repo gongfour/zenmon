@@ -515,8 +515,8 @@ is incompatible with `--trace`.
 | Control | Action |
 |---|---|
 | `[` / `]` | Previous / next recorded message |
-| `F7` / `F8` | Back / forward one second |
-| `F5` / `F6` | First / last recorded message |
+| `,` / `.` (or `F7` / `F8`) | Back / forward one second |
+| `{` / `}` (or `F5` / `F6`) | First / last recorded message |
 | `/`, `D`, `b`, `p` | Existing filter, diff, pinned baseline, numeric plot |
 
 Seeking rebuilds history through the selected position. Rates are averages from
@@ -527,8 +527,17 @@ still apply (128 entries per key, capped previews and a shared history budget).
 The existing key-count limit also applies. Plots follow message order, with
 one sample per message rather than a uniformly spaced time axis.
 
-This initial offline viewer accepts up to 100,000 records or 64 MiB of decoded
-NDJSON, rejecting larger input explicitly. For a smaller window, export records
+The viewer streams records into a private temporary disk spool and builds a
+compact time/key index. Seeking reads only recent history for each key, while
+counts and rates still cover the entire selected interval. The spool is removed
+when the viewer exits; source captures are never modified.
+
+Limits are explicit: 1,000,000 records, 2 GiB of decoded spool data, 10,000 keys,
+and 16 MiB per decoded NDJSON line. The selected history has a 64 MiB record
+budget in addition to the existing TUI history limits. If even the latest
+payloads exceed that budget, opening the view fails with a narrower-filter hint.
+Initial indexing still scans the complete input and needs temporary disk space.
+For a smaller window, export records
 from a store (the example uses `jq` to remove the reader's summary trailer):
 
 ```bash

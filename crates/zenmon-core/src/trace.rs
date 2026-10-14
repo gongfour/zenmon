@@ -416,6 +416,7 @@ pub struct CaptureLines {
     reader: Box<dyn BufRead>,
     compressed: bool,
     strict: bool,
+    max_line_bytes: Option<usize>,
     done: bool,
 }
 
@@ -441,11 +442,18 @@ pub fn open_capture_lines(path: &Path) -> Result<CaptureLines, ZenmonError> {
         reader,
         compressed,
         strict: false,
+        max_line_bytes: None,
         done: false,
     })
 }
 
 impl CaptureLines {
+    /// Bound one decoded line, including its newline, before allocating more.
+    pub fn bounded(mut self, max_line_bytes: usize) -> Self {
+        self.max_line_bytes = Some(max_line_bytes);
+        self
+    }
+
     /// Reject unfinished compression frames instead of tolerating active writes.
     pub fn strict(mut self) -> Self {
         self.strict = true;
@@ -466,7 +474,18 @@ impl Iterator for CaptureLines {
             return None;
         }
         let mut buf = String::new();
-        match self.reader.read_line(&mut buf) {
+        use std::io::Read;
+        let result = match self.max_line_bytes {
+            Some(max) => (&mut self.reader).take(max as u64 + 1).read_line(&mut buf),
+            None => self.reader.read_line(&mut buf),
+        };
+        if self.max_line_bytes.is_some_and(|max| buf.len() > max) {
+            self.done = true;
+            return Some(Err(ZenmonError::invalid_input(
+                "capture record exceeds the line-size limit",
+            )));
+        }
+        match result {
             Ok(0) => {
                 self.done = true;
                 None
@@ -1571,5 +1590,16 @@ mod tests {
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].key, "a/x"); // only a/* matched
         std::fs::remove_dir_all(&dir).ok();
+    }
+    #[test]
+    fn bounded_reader_rejects_an_oversized_line_and_stops() {
+        let dir = tempdir_unique("bounded-line");
+        let path = dir.join("input.ndjson");
+        std::fs::write(&path, "12\n1234\n").unwrap();
+        let mut lines = open_capture_lines(&path).unwrap().strict().bounded(3);
+        assert_eq!(lines.next().unwrap().unwrap(), "12");
+        assert!(lines.next().unwrap().is_err());
+        assert!(lines.next().is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
