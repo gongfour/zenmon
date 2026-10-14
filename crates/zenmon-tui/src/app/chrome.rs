@@ -106,7 +106,7 @@ impl App {
         if let Some(status) = &self.offline_status {
             frame.render_widget(
                 Paragraph::new(format!(
-                    "OFFLINE  {status}\n[ / ] message · F7 / F8 ±1s · F5 first · F6 last · ? help"
+                    "OFFLINE  {status}\n[ / ] message · , / . ±1s · {{ first · }} last · ? help"
                 ))
                 .style(Style::default().fg(Color::Cyan)),
                 area,
@@ -649,7 +649,7 @@ impl App {
 
     fn render_hint_bar(&self, frame: &mut Frame, area: Rect) {
         let hint = if self.offline_status.is_some() {
-            "[ / ] message  F7/F8 ±1s  F5/F6 first/last  / filter  D diff  p plot  y copy  ? help  q quit"
+            "[ / ] message  ,/. ±1s  {/} first/last  / filter  D diff  p plot  y copy  ? help  q quit"
         } else {
             match self.space {
             Space::Traffic => {
@@ -701,8 +701,14 @@ impl App {
             .collect();
         if self.offline_status.is_some() {
             lines.insert(0, Line::from("  [ / ] previous / next recorded message"));
-            lines.insert(1, Line::from("  F7/F8 backward / forward one second"));
-            lines.insert(2, Line::from("  F5/F6 first / last recorded message"));
+            lines.insert(
+                1,
+                Line::from("  ,/. or F7/F8 backward / forward one second"),
+            );
+            lines.insert(
+                2,
+                Line::from("  {/} or F5/F6 first / last recorded message"),
+            );
         }
         // The tree keys have no palette entry (they act on the cursor, not the
         // app), so they are listed here explicitly.

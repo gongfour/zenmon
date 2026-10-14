@@ -52,6 +52,24 @@ zenmon --version
 
 ## Try it
 
+**Try the offline dashboard without a router:**
+
+```bash
+python3 scripts/demo.py --output demo.ndjson
+zenmon tui --trace demo.ndjson
+```
+
+This creates 900 synthetic temperature, power, and status messages. Select a
+key, press `p` to plot a field, then use `,` / `.` to move through time.
+The script refuses to overwrite an existing file.
+
+![Offline recording: payload changes, attachments, and numeric history](docs/assets/offline-demo.png)
+
+[Watch the captured-frame demo](docs/assets/offline-demo.gif) · [Offline controls and limits](docs/usage.md#browse-a-recording-in-the-dashboard)
+
+**Ready for live traffic?**
+
+
 With a Zenoh router running locally on `tcp/localhost:7447`, open the dashboard:
 
 ```bash
