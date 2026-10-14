@@ -769,10 +769,20 @@ fn scenario_reports_a_key_that_stops() {
             .recv_timeout(Duration::from_secs(10))
             .unwrap()
             .expect("scenario ready trigger");
-        for i in 0..25 {
-            publisher.put(i.to_string()).wait().unwrap();
+        // A fixed number of sleeps can consume the entire observation window
+        // on a busy CI runner. Bound publication by elapsed time so the fixture
+        // leaves a quiet interval in which a stop can actually be observed.
+        let started = std::time::Instant::now();
+        let mut count = 0;
+        while started.elapsed() < Duration::from_millis(1200) {
+            publisher.put(count.to_string()).wait().unwrap();
+            count += 1;
             thread::sleep(Duration::from_millis(50));
         }
+        assert!(
+            count >= 5,
+            "fixture could not establish a steady stream: {count} samples"
+        );
     });
 
     let sel = format!("{p}/**");
