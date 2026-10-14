@@ -415,6 +415,62 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
     #[test]
+    #[ignore = "manual render benchmark: set ZENMON_BENCH_TRACE to a capture file"]
+    fn benchmark_recording_render() {
+        let path = std::env::var("ZENMON_BENCH_TRACE").expect("capture path");
+        let start = Instant::now();
+        let mut recording = Recording::load(Path::new(&path)).unwrap();
+        let mut app = App::new("render benchmark".into());
+        recording
+            .show(&mut app, recording.entries.len() - 1)
+            .unwrap();
+        eprintln!(
+            "load_and_show_ms={:.3}",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        let largest = app
+            .topic_latest
+            .iter()
+            .max_by_key(|(_, (m, _))| m.payload_bytes)
+            .map(|(k, _)| k.clone())
+            .unwrap();
+        let smallest = app
+            .topic_latest
+            .iter()
+            .min_by_key(|(_, (m, _))| m.payload_bytes)
+            .map(|(k, _)| k.clone())
+            .unwrap();
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+        for (label, key) in [("largest", largest), ("smallest", smallest)] {
+            focus_key(&mut app, &key);
+            app.topic_detail_scroll = 0;
+            let start = Instant::now();
+            terminal.draw(|f| app.render(f)).unwrap();
+            eprintln!(
+                "{label} payload_bytes={} first_frame_ms={:.3}",
+                app.topic_latest[&key].0.payload_bytes,
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            let mut idle = Vec::new();
+            for _ in 0..100 {
+                let start = Instant::now();
+                terminal.draw(|f| app.render(f)).unwrap();
+                idle.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            idle.sort_by(f64::total_cmp);
+            let mut scroll = Vec::new();
+            for offset in [3, 6, 9, 30, 100, 1000, 3, 0] {
+                app.topic_detail_scroll = offset;
+                let start = Instant::now();
+                terminal.draw(|f| app.render(f)).unwrap();
+                scroll.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            scroll.sort_by(f64::total_cmp);
+            eprintln!("{label} idle_p50_ms={:.3} idle_p95_ms={:.3} scroll_p50_ms={:.3} scroll_max_ms={:.3}",idle[50],idle[95],scroll[4],scroll[7]);
+        }
+    }
+
+    #[test]
     #[ignore = "manual benchmark: set ZENMON_BENCH_TRACE to a capture file"]
     fn benchmark_recording_seek() {
         let path = std::env::var("ZENMON_BENCH_TRACE").expect("capture path");

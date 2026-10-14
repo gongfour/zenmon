@@ -10,7 +10,7 @@ use crate::app::{
     QueryStatus,
 };
 use crate::diff::{self, DiffTag};
-use crate::history::PAYLOAD_CAP_BYTES;
+use crate::history::{compact_snippet as snippet, PAYLOAD_CAP_BYTES};
 use crate::plot;
 use crate::tree::{RowKind, TreeRow};
 use crate::views::fmt::format_stream_timestamp;
@@ -20,6 +20,128 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use zenmon_core::types::KIND_DELETE;
+
+// A single selected-key viewport, not a second history or raw-message store.
+// Cells above this budget are rendered normally and are not retained.
+const DETAIL_CACHE_BYTES: usize = 2 * 1024 * 1024;
+#[derive(Debug, PartialEq, Eq)]
+struct DetailContent {
+    key: String,
+    history: Option<(u64, u64, usize)>,
+    latest_at: Option<std::time::Instant>,
+    pinned: Option<u64>,
+    diff: bool,
+    plot: Option<String>,
+    paused: bool,
+    offline: bool,
+}
+#[derive(Default)]
+pub(crate) struct DetailCache {
+    content: Option<DetailContent>,
+    changed_count: Option<usize>,
+    viewport: Option<(u16, u16, u16, ratatui::buffer::Buffer)>,
+    #[cfg(test)]
+    builds: usize,
+}
+impl DetailCache {
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+fn prepare_detail_cache(app: &App, key: &str) -> Option<usize> {
+    let history = app.history.get(key);
+    let content = DetailContent {
+        key: key.into(),
+        history: history
+            .and_then(|h| Some((h.latest()?.id(), h.iter().next_back()?.id(), h.len()))),
+        latest_at: app.topic_latest.get(key).map(|(_, at)| *at),
+        pinned: app
+            .pinned_baseline
+            .as_ref()
+            .filter(|(k, _)| k == key)
+            .map(|(_, e)| e.id()),
+        diff: app.diff_enabled,
+        plot: app.plot_field.get(key).cloned(),
+        paused: app.history_paused,
+        offline: app.offline_status.is_some(),
+    };
+    let mut cache = app.detail_cache.borrow_mut();
+    if cache.content.as_ref() != Some(&content) {
+        cache.changed_count = if app.diff_enabled {
+            history
+                .and_then(|h| h.latest())
+                .zip(app.diff_baseline(key, history))
+                .map(|(current, (baseline, _))| diff::changed_paths(&current.view, baseline).len())
+        } else {
+            None
+        };
+        cache.content = Some(content);
+        cache.viewport = None;
+    }
+    cache.changed_count
+}
+fn render_cached_body(app: &App, key: &str, frame: &mut Frame, area: Rect) {
+    use ratatui::{
+        buffer::{Buffer, Cell},
+        widgets::Widget,
+    };
+    let mut cache = app.detail_cache.borrow_mut();
+    let hit = cache
+        .viewport
+        .as_ref()
+        .is_some_and(|(width, height, scroll, _)| {
+            *width == area.width && *height == area.height && *scroll == app.topic_detail_scroll
+        });
+    if !hit {
+        // Release the previous viewport before allocating its replacement.
+        cache.viewport = None;
+        if usize::from(area.width) * usize::from(area.height) * std::mem::size_of::<Cell>()
+            > DETAIL_CACHE_BYTES
+        {
+            frame.render_widget(
+                Paragraph::new(live_body(app, key, area.width))
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.topic_detail_scroll, 0)),
+                area,
+            );
+            return;
+        }
+        let local = Rect::new(0, 0, area.width, area.height);
+        let mut buffer = Buffer::empty(local);
+        Paragraph::new(live_body(app, key, area.width))
+            .wrap(Wrap { trim: false })
+            .scroll((app.topic_detail_scroll, 0))
+            .render(local, &mut buffer);
+        let bytes = buffer.content.len() * std::mem::size_of::<Cell>()
+            + buffer
+                .content
+                .iter()
+                .map(|c| c.symbol().len())
+                .sum::<usize>();
+        copy_viewport(frame, area, &buffer);
+        if bytes <= DETAIL_CACHE_BYTES {
+            cache.viewport = Some((area.width, area.height, app.topic_detail_scroll, buffer));
+        }
+        #[cfg(test)]
+        {
+            cache.builds += 1;
+        }
+    } else if let Some((_, _, _, buffer)) = &cache.viewport {
+        copy_viewport(frame, area, buffer);
+    }
+}
+fn copy_viewport(frame: &mut Frame, area: Rect, buffer: &ratatui::buffer::Buffer) {
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if let (Some(source), Some(destination)) = (
+                buffer.cell((x, y)),
+                frame.buffer_mut().cell_mut((area.x + x, area.y + y)),
+            ) {
+                destination.clone_from(source);
+            }
+        }
+    }
+}
 
 /// Unicode block glyphs (low→high) for the master sparkbar.
 const SPARK_GLYPHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -302,6 +424,8 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     let [header_area, body_area] =
         Layout::vertical([Constraint::Length(header_h), Constraint::Fill(1)]).areas(inner);
 
+    let changed_count = prepare_detail_cache(app, &key);
+
     // Header line: {hz} Hz · {bw} · {encoding?} · {n} msgs
     let hz = app.topic_hz.get(&key).copied().unwrap_or(0.0);
     let bw = format_bytes_per_sec(app.topic_bytes_per_sec(&key));
@@ -333,18 +457,12 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     }
     // How many leaves moved, so "did anything change" is answerable from the
     // header without reading the body.
-    if app.diff_enabled {
-        let h = app.history.get(&key);
-        if let (Some(cur), Some((base, _))) =
-            (h.and_then(|h| h.latest()), app.diff_baseline(&key, h))
-        {
-            let n = diff::changed_paths(&cur.view, base).len();
-            header.push_str(&match n {
-                0 => " · unchanged".to_string(),
-                1 => " · 1 field changed".to_string(),
-                n => format!(" · {n} fields changed"),
-            });
-        }
+    if let Some(n) = changed_count {
+        header.push_str(&match n {
+            0 => " · unchanged".to_string(),
+            1 => " · 1 field changed".to_string(),
+            n => format!(" · {n} fields changed"),
+        });
     }
     // The master row dims when a key goes quiet; the detail says for how long,
     // since a stopped publisher is usually the thing being investigated.
@@ -439,15 +557,16 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     header_lines.push(mode_line);
     frame.render_widget(Paragraph::new(header_lines), header_area);
 
-    let body_lines = match app.detail_mode {
-        DetailMode::Live => live_body(app, &key, body_area.width),
-        DetailMode::Query => query_body(app),
-    };
-
-    let para = Paragraph::new(body_lines)
-        .wrap(Wrap { trim: false })
-        .scroll((app.topic_detail_scroll, 0));
-    frame.render_widget(para, body_area);
+    if app.detail_mode == DetailMode::Live {
+        render_cached_body(app, &key, frame, body_area);
+    } else {
+        frame.render_widget(
+            Paragraph::new(query_body(app))
+                .wrap(Wrap { trim: false })
+                .scroll((app.topic_detail_scroll, 0)),
+            body_area,
+        );
+    }
 }
 
 /// The detail pane for a branch row: what the whole subtree under it is doing.
@@ -539,17 +658,6 @@ fn render_subtree_summary(app: &App, frame: &mut Frame, area: Rect, row: &TreeRo
             .scroll((app.topic_detail_scroll, 0)),
         inner,
     );
-}
-
-/// Truncate a single-line payload snippet for the history/results list.
-fn snippet(text: &str, max: usize) -> String {
-    let one_line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one_line.chars().count() > max {
-        let cut: String = one_line.chars().take(max.saturating_sub(1)).collect();
-        format!("{}…", cut)
-    } else {
-        one_line
-    }
 }
 
 /// Colour for a diff verdict. Unchanged fields are dimmed rather than the
@@ -707,10 +815,7 @@ fn live_body<'a>(app: &'a App, key: &str, width: u16) -> Vec<Line<'a>> {
                 let value = if entry.kind == KIND_DELETE {
                     Span::styled("DELETE", Style::default().fg(Color::Red))
                 } else {
-                    Span::styled(
-                        snippet(&entry.view.to_string(), 60),
-                        Style::default().fg(Color::White),
-                    )
+                    Span::styled(entry.snippet(), Style::default().fg(Color::White))
                 };
                 lines.push(Line::from(vec![
                     Span::styled(format!("{}  ", ts), Style::default().fg(Color::DarkGray)),
@@ -800,4 +905,133 @@ fn section_owned(label: String) -> Line<'static> {
         label,
         Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
     ))
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+    use std::time::Instant;
+    use zenmon_core::types::{MessagePayload, ZenohMessage};
+
+    fn message(key: &str, n: u64) -> ZenohMessage {
+        let payload = MessagePayload::from_json(
+            &serde_json::json!({"value":n,"한글":"한글 😀 wide text", "array":(0..200).collect::<Vec<_>>() }),
+        );
+        ZenohMessage {
+            key_expr: key.into(),
+            payload_bytes: payload.len(),
+            payload,
+            encoding: "application/json".into(),
+            timestamp: None,
+            kind: "PUT".into(),
+            attachment_bytes: Some(16),
+            attachment: Some(MessagePayload::from_json(
+                &serde_json::json!({"sequence":n}),
+            )),
+            qos: None,
+        }
+    }
+    fn select(app: &mut App, key: &str) {
+        app.refresh_tree_rows();
+        app.tree_selected = app
+            .tree_rows()
+            .iter()
+            .position(|r| r.path == key && r.kind == RowKind::Leaf)
+            .unwrap();
+    }
+    fn draw(app: &App, width: u16, height: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render_detail(app, f, f.area())).unwrap();
+        terminal.backend().buffer().clone()
+    }
+    fn compare_fresh(app: &App, width: u16, height: u16) {
+        let cached = draw(app, width, height);
+        app.detail_cache.borrow_mut().clear();
+        let fresh = draw(app, width, height);
+        assert_eq!(cached, fresh);
+    }
+    #[test]
+    fn idle_view_reuses_cells_but_scrolling_and_resize_match_fresh_rendering() {
+        let mut app = App::new("test".into());
+        app.ingest_at(message("a", 1), Instant::now());
+        app.ingest_at(message("a", 2), Instant::now());
+        select(&mut app, "a");
+        let first = draw(&app, 80, 30);
+        let builds = app.detail_cache.borrow().builds;
+        assert_eq!(first, draw(&app, 80, 30));
+        assert_eq!(app.detail_cache.borrow().builds, builds);
+        for scroll in [1, 3, 20, 190, 240, 400, 0] {
+            app.topic_detail_scroll = scroll;
+            compare_fresh(&app, 80, 30);
+            compare_fresh(&app, 31, 15);
+        }
+        compare_fresh(&app, 140, 40);
+    }
+    #[test]
+    fn cache_tracks_messages_pins_diff_plot_pause_and_offline_state() {
+        let mut app = App::new("test".into());
+        let at = Instant::now();
+        app.ingest_at(message("a", 1), at);
+        app.ingest_at(message("a", 2), at);
+        select(&mut app, "a");
+        draw(&app, 80, 30);
+        // Even equal receiver times do not alias two messages.
+        app.ingest_at(message("a", 3), at);
+        compare_fresh(&app, 80, 30);
+        app.toggle_pinned_baseline();
+        compare_fresh(&app, 80, 30);
+        app.ingest_at(message("a", 4), at);
+        compare_fresh(&app, 80, 30);
+        app.toggle_pinned_baseline();
+        compare_fresh(&app, 80, 30);
+        app.diff_enabled = false;
+        compare_fresh(&app, 80, 30);
+        app.diff_enabled = true;
+        compare_fresh(&app, 80, 30);
+        app.plot_field.insert("a".into(), "/value".into());
+        compare_fresh(&app, 80, 30);
+        app.history_paused = true;
+        compare_fresh(&app, 80, 30);
+        app.offline_status = Some("paused capture".into());
+        compare_fresh(&app, 80, 30);
+        app.history_paused = false;
+        app.ingest_at(message("b", 20), at);
+        select(&mut app, "b");
+        compare_fresh(&app, 80, 30);
+        app.clear_network_state();
+        assert!(app.detail_cache.borrow().viewport.is_none());
+        app.ingest_at(message("b", 30), at);
+        select(&mut app, "b");
+        compare_fresh(&app, 80, 30);
+        let mut delete = message("b", 40);
+        delete.kind = "DELETE".into();
+        app.ingest_at(delete, at);
+        compare_fresh(&app, 80, 30);
+    }
+    #[test]
+    fn a_busy_other_key_does_not_rebuild_the_selected_view() {
+        let mut app = App::new("test".into());
+        app.ingest_at(message("a", 1), Instant::now());
+        select(&mut app, "a");
+        draw(&app, 80, 30);
+        let builds = app.detail_cache.borrow().builds;
+        app.ingest_at(message("b", 2), Instant::now());
+        select(&mut app, "a");
+        draw(&app, 80, 30);
+        assert_eq!(builds, app.detail_cache.borrow().builds);
+        // Removing the held history while retaining the latest message must invalidate it.
+        app.history.remove("a");
+        compare_fresh(&app, 80, 30);
+    }
+    #[test]
+    fn oversized_viewport_is_not_retained() {
+        let mut app = App::new("test".into());
+        app.ingest_at(message("a", 1), Instant::now());
+        select(&mut app, "a");
+        let height =
+            (DETAIL_CACHE_BYTES / std::mem::size_of::<ratatui::buffer::Cell>() / 512 + 10) as u16;
+        draw(&app, 514, height);
+        assert!(app.detail_cache.borrow().viewport.is_none());
+    }
 }

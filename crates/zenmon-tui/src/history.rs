@@ -16,6 +16,10 @@
 //! payloads. Copying is what the pane needs to read, not what the wire carried.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    OnceLock,
+};
 use std::time::Instant;
 
 use zenmon_core::types::ZenohMessage;
@@ -41,6 +45,9 @@ const EVICT_TO_FRACTION: f64 = 0.9;
 /// One past message, as much of it as is worth keeping.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
+    // Identity survives cloning for pins, but never repeats after a clear/seek.
+    id: u64,
+    snippet: OnceLock<String>,
     /// `MessagePayload::to_view_capped` output — parsed JSON where the payload
     /// was JSON, which is what the diff walks.
     pub view: serde_json::Value,
@@ -57,7 +64,10 @@ pub struct HistoryEntry {
 
 impl HistoryEntry {
     fn from_message(msg: &ZenohMessage) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            snippet: OnceLock::new(),
             view: msg.payload.to_view_capped(PAYLOAD_CAP_BYTES),
             raw_len: msg.payload_bytes,
             truncated: msg.payload.len() > PAYLOAD_CAP_BYTES,
@@ -68,6 +78,16 @@ impl HistoryEntry {
         }
     }
 
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// The history list needs only a small, stable single-line summary.
+    pub(crate) fn snippet(&self) -> &str {
+        self.snippet
+            .get_or_init(|| compact_snippet(&self.view.to_string(), 60))
+    }
+
     /// Rough retained size.
     ///
     /// The stored value is a parsed structure, not bytes, so its true footprint
@@ -75,7 +95,20 @@ impl HistoryEntry {
     /// costs nothing — good enough to drive a budget, and the budget is a
     /// safety rail rather than an accounting figure.
     fn approx_bytes(&self) -> usize {
-        self.raw_len.min(PAYLOAD_CAP_BYTES)
+        // Reserve the maximum UTF-8 summary size even before it is populated.
+        self.raw_len.min(PAYLOAD_CAP_BYTES) + 60 * 4
+    }
+}
+
+/// Normalize whitespace and truncate by Unicode character, matching the list's
+/// existing display semantics. Raw bytes and the structured view stay intact.
+pub(crate) fn compact_snippet(text: &str, max: usize) -> String {
+    let one_line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > max {
+        let cut: String = one_line.chars().take(max.saturating_sub(1)).collect();
+        format!("{cut}…")
+    } else {
+        one_line
     }
 }
 
@@ -303,6 +336,24 @@ mod tests {
         );
         // The oldest survivor is entry #10, not #0.
         assert_eq!(k.iter().last().unwrap().view, serde_json::json!({"n": 10}),);
+    }
+
+    #[test]
+    fn summary_is_lazy_bounded_and_does_not_replace_the_structured_view() {
+        let entry = HistoryEntry::from_message(&msg(
+            "k",
+            serde_json::json!({"text":"한글 😀  spaced ".repeat(200)}),
+        ));
+        let original = entry.view.clone();
+        assert!(entry.snippet.get().is_none());
+        let summary = entry.snippet();
+        assert_eq!(summary, compact_snippet(&original.to_string(), 60));
+        assert!(summary.chars().count() <= 60);
+        assert!(std::ptr::eq(summary.as_ptr(), entry.snippet().as_ptr()));
+        assert_eq!(entry.view, original);
+        assert_eq!(entry.clone().id(), entry.id());
+        let next = HistoryEntry::from_message(&msg("k", original));
+        assert_ne!(next.id(), entry.id());
     }
 
     #[test]

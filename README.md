@@ -185,6 +185,19 @@ cargo test --locked --workspace --exclude zenmon-tray
 Build the tray with the Tauri CLI; see the [tray development guide](tray/README.md).
 The default Cargo build includes the CLI and TUI.
 
+To measure offline rendering against a local recording (no network session):
+
+```bash
+ZENMON_BENCH_TRACE=/path/to/capture cargo test --release --locked -p zenmon-tui \
+  benchmark_recording_render -- --ignored --nocapture
+```
+
+The benchmark reports initial rendering, idle-frame p50/p95, and scrolling at
+120×30 cells for large and small payloads. It uses a test terminal backend, so
+terminal-emulator drawing and display latency are not included. Compare the
+same input, build profile and machine; measure process memory separately from
+compilation.
+
 ## License
 
 [MIT](LICENSE)

@@ -763,6 +763,13 @@ zenmon tui --allow-publish                # opt in to writing (see below)
 Two spaces — **Traffic** (`1`) and **Network** (`2`) — each a master list with a
 detail pane. `Tab` switches; `Enter`/`Esc` move focus between the panes.
 
+Unchanged detail views reuse their rendered cells, and history snippets are
+formatted once on demand. Message changes, diff/pin/plot controls, scrolling and
+resizing refresh the display. The cache retains only one viewport, up to 2 MiB
+of estimated cell storage; larger viewports render without retaining a copy.
+History summaries count toward the existing shared history budget. This applies
+to live and offline traffic; search and export still use the original records.
+
 ### Traffic — what is on the wire
 
 The master pane is the key hierarchy, not a flat list. A network publishing
