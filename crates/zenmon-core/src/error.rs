@@ -22,6 +22,8 @@ pub type Result<T, E = ZenmonError> = std::result::Result<T, E>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
+    /// The user interrupted an operation.
+    Interrupted,
     /// Failed to reach / connect to the Zenoh network.
     Connection,
     /// An operation exceeded its deadline.
@@ -77,6 +79,7 @@ impl ZenmonError {
     /// to a distinct non-zero code that agents/shells can branch on.
     pub fn exit_code(&self) -> i32 {
         match self.kind {
+            ErrorKind::Interrupted => 130,
             ErrorKind::Internal => 1,
             ErrorKind::InvalidInput => 2,
             ErrorKind::Connection => 3,
@@ -144,6 +147,7 @@ mod tests {
             (ErrorKind::Timeout, "\"timeout\""),
             (ErrorKind::InvalidInput, "\"invalid_input\""),
             (ErrorKind::NotFound, "\"not_found\""),
+            (ErrorKind::Interrupted, "\"interrupted\""),
             (ErrorKind::Internal, "\"internal\""),
         ];
         for (kind, expected) in cases {
@@ -197,6 +201,10 @@ mod tests {
         assert_eq!(ZenmonError::connection("x").exit_code(), 3);
         assert_eq!(ZenmonError::timeout("x").exit_code(), 4);
         assert_eq!(ZenmonError::not_found("x").exit_code(), 5);
+        assert_eq!(
+            ZenmonError::new(ErrorKind::Interrupted, "x").exit_code(),
+            130
+        );
     }
 
     #[test]

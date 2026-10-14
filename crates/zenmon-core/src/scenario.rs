@@ -66,6 +66,8 @@ impl TriggerInfo {
 pub enum EndedReason {
     /// A PUT matched the user-supplied stop condition.
     ConditionMatched,
+    Interrupted,
+    StreamClosed,
     /// The `--for` window (plus `--settle`) elapsed.
     WindowElapsed,
 }
@@ -74,6 +76,8 @@ impl EndedReason {
     fn as_str(&self) -> &'static str {
         match self {
             EndedReason::ConditionMatched => "condition_matched",
+            EndedReason::Interrupted => "interrupted",
+            EndedReason::StreamClosed => "stream_closed",
             EndedReason::WindowElapsed => "window_elapsed",
         }
     }

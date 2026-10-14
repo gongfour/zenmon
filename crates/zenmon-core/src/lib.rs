@@ -158,3 +158,5 @@ pub mod scenario;
 pub use crate::config::{ConnectMode, ZenmonConfig};
 pub use crate::error::{ErrorKind, Result, ZenmonError};
 pub use crate::session::open_session;
+
+pub mod verify;

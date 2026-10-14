@@ -180,6 +180,7 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
 
         #[cfg(feature = "tui")]
         Command::Tui(cli::TuiArgs {
+            trace,
             refresh,
             allow_publish,
         }) => {
@@ -187,9 +188,15 @@ async fn run(cli: Cli, resolved: ResolvedConfig) -> Result<(), ZenmonError> {
             // the same way `sub` and `discover` do; without one the detail pane
             // simply shows no contract badge.
             let contract = common::load_contract_opt(&ctx.contract)?;
-            zenmon_tui::run(config, refresh, contract, allow_publish)
-                .await
-                .map_err(common::internal_err)?;
+            if let Some(path) = trace {
+                zenmon_tui::offline::run(&path, refresh, contract)
+                    .await
+                    .map_err(common::internal_err)?;
+            } else {
+                zenmon_tui::run(config, refresh, contract, allow_publish)
+                    .await
+                    .map_err(common::internal_err)?;
+            }
         }
 
         Command::Contract { command } => cmd::contract::run(&ctx, command)?,

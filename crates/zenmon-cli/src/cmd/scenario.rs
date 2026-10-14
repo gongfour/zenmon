@@ -364,6 +364,7 @@ async fn run_scenario(
     let window_deadline = stopwatch + for_;
     let mut ended_reason = EndedReason::WindowElapsed;
     let mut settle_until: Option<Instant> = None;
+    let mut health = tokio::time::interval(Duration::from_millis(100));
 
     loop {
         // In the settle phase the effective deadline is the settle end; before
@@ -376,7 +377,14 @@ async fn run_scenario(
                 if !json {
                     eprintln!("\nStopped.");
                 }
+                ended_reason = EndedReason::Interrupted;
                 break;
+            }
+            _ = health.tick() => {
+                if subscriptions.iter().any(|s| s.is_finished()) {
+                    ended_reason = EndedReason::StreamClosed;
+                    break;
+                }
             }
             item = rx.recv() => match item {
                 Some(msg) => {
@@ -393,27 +401,33 @@ async fn run_scenario(
                         }
                     }
                 }
-                None => break,
+                None => { ended_reason = EndedReason::StreamClosed; break; },
             }
         }
     }
 
     // If --settle was requested but the window elapsed without a response, still
     // observe the extra settle time before finishing.
-    if settle_until.is_none() {
+    if settle_until.is_none() && ended_reason == EndedReason::WindowElapsed {
         if let Some(s) = settle {
             let settle_end = Instant::now() + s;
             loop {
                 tokio::select! {
                     biased;
                     _ = tokio::time::sleep_until(settle_end.into()) => break,
-                    _ = tokio::signal::ctrl_c() => break,
+                    _ = tokio::signal::ctrl_c() => { ended_reason = EndedReason::Interrupted; break; },
+                    _ = health.tick() => {
+                        if subscriptions.iter().any(|s| s.is_finished()) {
+                            ended_reason = EndedReason::StreamClosed;
+                            break;
+                        }
+                    }
                     item = rx.recv() => match item {
                         Some(msg) => {
                             let t_rel_ms = stopwatch.elapsed().as_millis() as u64;
                             events.push(observed_event(msg, t_rel_ms));
                         }
-                        None => break,
+                        None => { ended_reason = EndedReason::StreamClosed; break; },
                     }
                 }
             }
@@ -498,7 +512,16 @@ async fn run_scenario(
     } else {
         print_scenario_summary(&episode);
     }
-    Ok(())
+    match ended_reason {
+        EndedReason::Interrupted => Err(ZenmonError::new(
+            zenmon_core::error::ErrorKind::Interrupted,
+            "scenario interrupted; partial episode written",
+        )),
+        EndedReason::StreamClosed => Err(ZenmonError::connection(
+            "observation stream closed; partial episode written",
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Compact human summary of an episode: trigger, per-topic counts, ended

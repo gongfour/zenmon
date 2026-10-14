@@ -27,6 +27,7 @@ robotics, and other Zenoh applications. No project-specific contract required.
 - **Understand the network.** Inspect sessions, liveliness tokens, router
   declarations, and connection diagnostics.
 - **Look back in time.** Record a rotating capture store and read it offline.
+  Browse saved traffic offline with `zenmon tui --trace ./trace`.
   The optional tray app keeps recording without an open terminal.
 - **Automate the investigation.** Use JSON/NDJSON output, time-bounded
   subscriptions, and an optional MCP interface for agent workflows.
@@ -93,8 +94,10 @@ zenmon nodes
 zenmon capture "demo/**" --dir ./trace --max-total-size 1GB --max-age 7d
 
 # Inspect the recording offline
+zenmon trace verify ./trace
 zenmon trace stats ./trace
 zenmon trace read ./trace --key "demo/**" --limit 20
+zenmon tui --trace ./trace
 
 # Return machine-readable messages, ending after 10 messages or 5 seconds
 zenmon --json sub "demo/**" --count 10 --duration 5s

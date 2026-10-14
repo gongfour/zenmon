@@ -415,6 +415,7 @@ impl SegmentWriter {
 pub struct CaptureLines {
     reader: Box<dyn BufRead>,
     compressed: bool,
+    strict: bool,
     done: bool,
 }
 
@@ -439,11 +440,18 @@ pub fn open_capture_lines(path: &Path) -> Result<CaptureLines, ZenmonError> {
     Ok(CaptureLines {
         reader,
         compressed,
+        strict: false,
         done: false,
     })
 }
 
 impl CaptureLines {
+    /// Reject unfinished compression frames instead of tolerating active writes.
+    pub fn strict(mut self) -> Self {
+        self.strict = true;
+        self
+    }
+
     /// Whether the file is zstd-compressed.
     pub fn is_compressed(&self) -> bool {
         self.compressed
@@ -473,7 +481,11 @@ impl Iterator for CaptureLines {
                 Some(Ok(buf))
             }
             // An unfinished zstd frame: stop at the last complete line.
-            Err(e) if self.compressed && e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Err(e)
+                if self.compressed
+                    && !self.strict
+                    && e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
                 self.done = true;
                 None
             }

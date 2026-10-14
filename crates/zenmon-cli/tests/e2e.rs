@@ -844,3 +844,78 @@ fn scenario_stops_only_on_correlated_put_and_sends_attachment() {
     assert_eq!(episode["topics"][&result]["count"], 3);
     assert_eq!(episode["timeline"][0]["attachment"]["token"], "ours");
 }
+
+#[cfg(unix)]
+#[test]
+fn scenario_interrupt_preserves_episode_and_skips_settle() {
+    use std::process::Stdio;
+    use std::time::Instant;
+    for window in ["30s", "20ms"] {
+        let hub = Hub::open();
+        let key = prefix("scenario-interrupt");
+        let sub = hub.session.declare_subscriber(&key).wait().unwrap();
+        let mut child = hub
+            .zenmon(&[
+                "--json",
+                "scenario",
+                "--observe",
+                &key,
+                "--pub",
+                &key,
+                "{}",
+                "--for",
+                window,
+                "--settle",
+                "20s",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let ready = sub.recv_timeout(Duration::from_secs(10)).unwrap();
+        if ready.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("trigger never arrived");
+        }
+        thread::sleep(Duration::from_millis(150));
+        assert!(Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("interrupted scenario waited for settle");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(130));
+        let episode: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(episode["meta"]["ended_reason"], "interrupted");
+        assert!(episode["meta"]["message_count"].as_u64().unwrap() >= 1);
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["kind"], "interrupted");
+    }
+}
+
+#[test]
+fn verify_reports_corrupt_records_offline_with_nonzero_status() {
+    let dir = temp_dir("verify");
+    let path = dir.join("broken.ndjson");
+    std::fs::write(&path, "not-json\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_zenmon"))
+        .args(["--json", "-e", "tcp/127.0.0.1:1", "trace", "verify"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["valid"], false);
+    assert_eq!(report["issues"][0]["line"], 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
