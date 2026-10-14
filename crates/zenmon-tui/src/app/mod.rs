@@ -458,6 +458,7 @@ pub struct Sent {
 const LIVELINESS_EVENT_CAP: usize = 200;
 
 pub struct App {
+    pub(crate) detail_cache: std::cell::RefCell<crate::views::traffic::DetailCache>,
     pub offline_status: Option<String>,
     pub(crate) offline_now: Option<Instant>,
     pub space: Space,
@@ -691,6 +692,7 @@ impl App {
             tree_selected: 0,
             topics_filtering: false,
             diff_enabled: true,
+            detail_cache: Default::default(),
             pinned_baseline: None,
             contract: None,
             plot_field: HashMap::new(),
@@ -866,6 +868,7 @@ impl App {
     }
 
     pub fn clear_network_state(&mut self) {
+        self.detail_cache.get_mut().clear();
         self.key_tree = KeyTree::new();
         self.tree_expanded.clear();
         self.tree_unfolded.clear();
