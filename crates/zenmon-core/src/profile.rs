@@ -2,7 +2,7 @@
 //!
 //! A profile is what you were *looking at* — the filter, which branches were
 //! open, which field each key was plotting — so that "the layout I use when a
-//! forklift stalls" survives closing the terminal.
+//! device stalls" survives closing the terminal.
 //!
 //! ## Why this is not in the tray's config file
 //!
@@ -171,10 +171,10 @@ mod tests {
     fn profile(name: &str) -> TuiProfile {
         TuiProfile {
             name: name.into(),
-            filter: "agv".into(),
-            expanded: vec!["agv".into(), "agv/f001".into()],
-            unfolded: vec!["agv".into()],
-            plot_fields: [("agv/f001/battery".to_string(), "/percent".to_string())]
+            filter: "sensors".into(),
+            expanded: vec!["sensors".into(), "sensors/f001".into()],
+            unfolded: vec!["sensors".into()],
+            plot_fields: [("sensors/f001/battery".to_string(), "/percent".to_string())]
                 .into_iter()
                 .collect(),
             diff_enabled: true,
@@ -218,9 +218,9 @@ mod tests {
 
         let back = load_from(&path).unwrap();
         assert_eq!(back, set);
-        assert_eq!(back.get("stall").unwrap().filter, "agv");
+        assert_eq!(back.get("stall").unwrap().filter, "sensors");
         assert_eq!(
-            back.get("stall").unwrap().plot_fields["agv/f001/battery"],
+            back.get("stall").unwrap().plot_fields["sensors/f001/battery"],
             "/percent"
         );
         let _ = std::fs::remove_file(&path);
@@ -262,7 +262,7 @@ mod tests {
             r#"
 [[profile]]
 name = "old"
-filter = "agv"
+filter = "sensors"
 "#,
         )
         .unwrap();

@@ -4,8 +4,8 @@
 //!
 //! Zenoh is schema-less, so a contract is the missing schema layer. This module
 //! loads a contract file and answers "what is this topic?" for observed keys.
-//! It *displays* schemas rather than *validating* them, so payload schemas are
-//! kept as loose [`serde_json::Value`] rather than parsed into typed schemas.
+//! Optional compact schemas support display and payload validation. Schema
+//! bodies remain [`serde_json::Value`] so contracts can describe arbitrary keys.
 //!
 //! **zenmon application internals — not part of the public API.** The contract
 //! file format is owned by the `zenmon` CLI; this module is `pub` only because
@@ -75,7 +75,7 @@ pub struct Endpoint {
     /// One of [`ENDPOINT_ROLES`].
     #[serde(default)]
     pub role: String,
-    /// Payload/message type as the service declares it (e.g. `fleet::SafetyState`).
+    /// Payload/message type as the service declares it (e.g. `network::SafetyState`).
     #[serde(default, rename = "type")]
     pub message_type: Option<String>,
     /// QoS as declared by this endpoint. Shape is project-defined.
@@ -93,14 +93,16 @@ pub struct Endpoint {
 pub const ENDPOINT_ROLES: &[&str] = &[
     "publisher",
     "subscriber",
+    "queryable",
+    "querier",
     "call_server",
     "call_client",
     "task_server",
     "task_client",
 ];
 
-const PRODUCING_ROLES: &[&str] = &["publisher", "call_client", "task_client"];
-const CONSUMING_ROLES: &[&str] = &["subscriber", "call_server", "task_server"];
+const PRODUCING_ROLES: &[&str] = &["publisher", "querier", "call_client", "task_client"];
+const CONSUMING_ROLES: &[&str] = &["subscriber", "queryable", "call_server", "task_server"];
 
 /// One topic's contract entry. Known metadata is typed; the payload schema body
 /// is kept raw for display.
@@ -256,7 +258,7 @@ pub struct Contract {
     #[serde(default)]
     pub topics: Vec<TopicContract>,
     /// Named observe-sets for `zenmon scenario --preset NAME`. Keys are
-    /// relative to `--prefix`, so one preset serves any fleet namespace. They
+    /// relative to `--prefix`, so one preset serves any network namespace. They
     /// live here rather than in zenmon because which topics matter for a
     /// diagnosis is a fact about the project, not about the tool.
     #[serde(default)]
@@ -264,7 +266,7 @@ pub struct Contract {
 }
 
 /// Messaging patterns a topic may declare.
-const VALID_PATTERNS: &[&str] = &["pub-sub", "call", "task", "liveliness"];
+const VALID_PATTERNS: &[&str] = &["pub-sub", "query", "call", "task", "liveliness"];
 
 impl Contract {
     /// Parse a contract from a YAML string.
@@ -502,7 +504,7 @@ impl Contract {
     /// The request-payload schema for an observed key, with `$ref`s expanded.
     /// A `task` topic keeps it under `phases.request`; a `call` topic under
     /// `request`. Returns `None` when the key is not declared or has no request
-    /// schema. Used to help a caller build a `--task`/`call` request.
+    /// schema. Legacy phase metadata remains readable for existing contracts.
     pub fn request_schema(&self, observed_key: &str) -> Option<Value> {
         let topic = self.lookup(observed_key)?;
         let raw = topic
@@ -1347,7 +1349,7 @@ types:
     x: f64
     y: f64
 topics:
-  - key: robot/state
+  - key: device/state
     payload:
       pose: { $ref: Pose2D }
       mode: idle|run|fault
@@ -1355,7 +1357,7 @@ topics:
       tags: "[str]?"
       waypoints:
         - { id: u32, label: str? }
-  - key: robot/wrapped
+  - key: device/wrapped
     enveloped: true
     payload: { v: f64 }
 "#;
@@ -1363,7 +1365,7 @@ topics:
     fn check(payload: Value) -> PayloadCheck {
         Contract::from_yaml_str(STRICT)
             .unwrap()
-            .check_payload("robot/state", &payload)
+            .check_payload("device/state", &payload)
     }
 
     #[test]
@@ -1410,11 +1412,11 @@ topics:
     fn enveloped_and_undeclared_topics_are_not_checked() {
         let c = Contract::from_yaml_str(STRICT).unwrap();
         assert_eq!(
-            c.check_payload("robot/wrapped", &json!({})),
+            c.check_payload("device/wrapped", &json!({})),
             PayloadCheck::Enveloped
         );
         assert_eq!(
-            c.check_payload("robot/other", &json!({})),
+            c.check_payload("device/other", &json!({})),
             PayloadCheck::NoSchema
         );
     }
@@ -1423,5 +1425,37 @@ topics:
     fn envelopes_are_off_unless_declared() {
         let c = Contract::from_yaml_str("topics: [{key: a}]").unwrap();
         assert!(!c.effective_enveloped(&c.topics[0]));
+    }
+}
+
+#[cfg(test)]
+mod generic_contract_tests {
+    use super::*;
+
+    #[test]
+    fn query_endpoints_and_minimal_payload_contract_need_no_task_model() {
+        let contract = Contract::from_yaml_str(
+            r#"
+services: [reader, provider]
+topics:
+  - key: demo/value
+    description: A measured value
+    payload: { value: f64 }
+  - key: demo/lookup
+    pattern: query
+    endpoints:
+      - { service: reader, role: querier }
+      - { service: provider, role: queryable }
+"#,
+        )
+        .unwrap();
+        assert!(contract.lint().warnings.is_empty());
+        let topic = contract.lookup("demo/lookup").unwrap();
+        assert_eq!(topic.producer_names(), ["reader"]);
+        assert_eq!(topic.consumer_names(), ["provider"]);
+        assert!(
+            matches!(contract.check_payload("demo/value", &serde_json::json!({"value":1.5})),
+            PayloadCheck::Checked(errors) if errors.is_empty())
+        );
     }
 }

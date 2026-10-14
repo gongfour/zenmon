@@ -26,7 +26,7 @@ services: []
 topics:
   - key: call/safety/estop
     request: { active: bool }
-  - key: agv/*/pose
+  - key: sensors/*/pose
 "#;
 
 /// The same without any service.
@@ -38,7 +38,7 @@ encoding:
 types: {}
 services: []
 topics:
-  - key: agv/*/pose
+  - key: sensors/*/pose
 "#;
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -461,7 +461,7 @@ fn a_plain_topic_is_not_announced_as_a_service() {
         zenmon_core::contract::Contract::from_yaml_str(PLAIN_CONTRACT_YAML)
             .expect("fixture parses"),
     );
-    seed_topics(&mut app, &["agv/f001/pose"]);
+    seed_topics(&mut app, &["sensors/f001/pose"]);
     app.tree_selected = app.tree_rows().len() - 1;
     app.handle_key(key(KeyCode::Char('Q')));
 
@@ -528,9 +528,9 @@ fn traffic_move_resets_detail_scroll() {
 
 /// Seed enough keys that the automatic expansion does *not* open everything,
 /// so expand/collapse can be exercised against a genuinely closed tree.
-fn seed_fleet(app: &mut App, vehicles: usize) {
-    for i in 0..vehicles {
-        app.key_tree.insert(&format!("agv/f{i:03}/pose"));
+fn seed_network(app: &mut App, devices: usize) {
+    for i in 0..devices {
+        app.key_tree.insert(&format!("sensors/f{i:03}/pose"));
     }
     app.auto_expand();
     app.refresh_tree_rows();
@@ -540,13 +540,17 @@ fn seed_fleet(app: &mut App, vehicles: usize) {
 fn l_opens_a_branch_and_h_closes_it() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_fleet(&mut app, 30);
-    // `agv` is the only root child, so the automatic opening walked into it and
-    // stopped where the vehicles fan out.
-    assert_eq!(app.tree_rows()[0].path, "agv");
+    seed_network(&mut app, 30);
+    // `sensors` is the only root child, so the automatic opening walked into it and
+    // stopped where the devices fan out.
+    assert_eq!(app.tree_rows()[0].path, "sensors");
 
     app.handle_key(key(KeyCode::Char('h')));
-    assert_eq!(app.tree_rows().len(), 1, "closing agv leaves only its row");
+    assert_eq!(
+        app.tree_rows().len(),
+        1,
+        "closing sensors leaves only its row"
+    );
 
     app.handle_key(key(KeyCode::Char('l')));
     // 30 children is over the fold threshold, so opening shows a summary row.
@@ -561,29 +565,29 @@ fn l_opens_a_branch_and_h_closes_it() {
 fn l_on_a_fold_summary_lists_the_children() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_fleet(&mut app, 30);
+    seed_network(&mut app, 30);
     app.handle_key(key(KeyCode::Char('j'))); // onto the summary row
     assert!(matches!(
         app.selected_row().map(|r| r.kind),
         Some(RowKind::FoldSummary { .. })
     ));
     app.handle_key(key(KeyCode::Char('l')));
-    assert_eq!(app.tree_rows().len(), 31, "agv plus its 30 vehicles");
+    assert_eq!(app.tree_rows().len(), 31, "sensors plus its 30 devices");
 }
 
 #[test]
 fn collapsing_a_branch_also_refolds_it() {
-    // Otherwise reopening a 200-vehicle branch dumps every child back on screen
+    // Otherwise reopening a 200-device branch dumps every child back on screen
     // because it was unfolded once, minutes ago.
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_fleet(&mut app, 30);
+    seed_network(&mut app, 30);
     app.handle_key(key(KeyCode::Char('j')));
     app.handle_key(key(KeyCode::Char('l'))); // unfold
     assert_eq!(app.tree_rows().len(), 31);
 
     app.tree_selected = 0;
-    app.handle_key(key(KeyCode::Char('h'))); // collapse agv
+    app.handle_key(key(KeyCode::Char('h'))); // collapse sensors
     app.handle_key(key(KeyCode::Char('l'))); // and reopen it
     assert_eq!(app.tree_rows().len(), 2, "back to the summary row");
 }
@@ -592,25 +596,25 @@ fn collapsing_a_branch_also_refolds_it() {
 fn h_on_a_closed_branch_climbs_to_the_parent() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_topics(&mut app, &["agv/f1/pose", "agv/f2/pose"]);
-    // Rows: agv/, agv/f1/, agv/f1/pose, agv/f2/, agv/f2/pose
+    seed_topics(&mut app, &["sensors/f1/pose", "sensors/f2/pose"]);
+    // Rows: sensors/, sensors/f1/, sensors/f1/pose, sensors/f2/, sensors/f2/pose
     app.tree_selected = 2; // the pose key under f1
     app.handle_key(key(KeyCode::Char('h')));
-    assert_eq!(app.selected_row().unwrap().path, "agv/f1");
+    assert_eq!(app.selected_row().unwrap().path, "sensors/f1");
     app.handle_key(key(KeyCode::Char('h'))); // f1 is open, so this closes it
     app.handle_key(key(KeyCode::Char('h'))); // now it climbs
-    assert_eq!(app.selected_row().unwrap().path, "agv");
+    assert_eq!(app.selected_row().unwrap().path, "sensors");
 }
 
 #[test]
 fn expand_all_and_collapse_all() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_fleet(&mut app, 30);
+    seed_network(&mut app, 30);
     app.handle_key(key(KeyCode::Char('C')));
     assert_eq!(app.tree_rows().len(), 1);
     app.handle_key(key(KeyCode::Char('E')));
-    // Every branch open: agv, 30 vehicles, and a pose key under each.
+    // Every branch open: sensors, 30 devices, and a pose key under each.
     assert_eq!(app.tree_rows().len(), 61);
 }
 
@@ -633,14 +637,14 @@ fn a_small_namespace_opens_completely() {
 fn a_new_key_never_reopens_what_the_user_closed() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_topics(&mut app, &["agv/f1/pose"]);
+    seed_topics(&mut app, &["sensors/f1/pose"]);
     app.tree_selected = 0;
     app.handle_key(key(KeyCode::Char('C')));
     assert_eq!(app.tree_rows().len(), 1);
 
     // A message on a brand-new key arrives while the tree is closed.
     app.handle_zenoh_message(ZenohMessage {
-        key_expr: "agv/f2/pose".into(),
+        key_expr: "sensors/f2/pose".into(),
         payload: MessagePayload::from_json(&serde_json::json!(null)),
         encoding: String::new(),
         payload_bytes: 0,
@@ -658,8 +662,8 @@ fn a_new_key_never_reopens_what_the_user_closed() {
 fn a_branch_row_is_not_a_queryable_key() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_topics(&mut app, &["agv/f1/pose"]);
-    app.tree_selected = 0; // the `agv/` branch
+    seed_topics(&mut app, &["sensors/f1/pose"]);
+    app.tree_selected = 0; // the `sensors/` branch
     assert_eq!(app.selected_topic_key(), None);
     app.handle_key(key(KeyCode::Char('Q')));
     assert_eq!(app.pending_query, None, "a prefix is not a key to query");
@@ -669,7 +673,7 @@ fn a_branch_row_is_not_a_queryable_key() {
 fn filtering_reaches_inside_a_folded_group() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_fleet(&mut app, 30);
+    seed_network(&mut app, 30);
     app.topic_filter = "f017".into();
     app.refresh_tree_rows();
     assert_eq!(
@@ -677,7 +681,7 @@ fn filtering_reaches_inside_a_folded_group() {
             .iter()
             .map(|r| r.path.as_str())
             .collect::<Vec<_>>(),
-        vec!["agv", "agv/f017", "agv/f017/pose"]
+        vec!["sensors", "sensors/f017", "sensors/f017/pose"]
     );
 }
 
@@ -788,10 +792,10 @@ fn render_traffic_with_data_wide_and_narrow_shows_key() {
         let mut app = App::new("tcp/127.0.0.1:7447".into());
         app.space = Space::Traffic;
         app.connection_state = ConnectionState::Connected("zid".into());
-        app.key_tree.insert("demo/robot/pose");
+        app.key_tree.insert("demo/device/pose");
         app.auto_expand();
         let msg = ZenohMessage {
-            key_expr: "demo/robot/pose".into(),
+            key_expr: "demo/device/pose".into(),
             payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
             encoding: "application/json".into(),
             payload_bytes: 8,
@@ -802,9 +806,9 @@ fn render_traffic_with_data_wide_and_narrow_shows_key() {
             qos: None,
         };
         app.topic_latest
-            .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+            .insert("demo/device/pose".into(), (msg.clone(), Instant::now()));
         app.history.record(&msg);
-        app.topic_hz.insert("demo/robot/pose".into(), 12.0);
+        app.topic_hz.insert("demo/device/pose".into(), 12.0);
 
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
         // Wide → master; narrow default focus is Master → master shows the tree.
@@ -812,7 +816,7 @@ fn render_traffic_with_data_wide_and_narrow_shows_key() {
         let text = buffer_text(terminal.backend().buffer());
         // The master draws one segment per row, not the whole key expression —
         // the hierarchy is what carries the context now.
-        for segment in ["demo/", "robot/", "pose"] {
+        for segment in ["demo/", "device/", "pose"] {
             assert!(
                 text.contains(segment),
                 "segment {} missing at {}x{}: {}",
@@ -836,10 +840,10 @@ fn render_traffic_narrow_detail_pane_does_not_panic() {
     app.space = Space::Traffic;
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
-    app.key_tree.insert("demo/robot/pose");
+    app.key_tree.insert("demo/device/pose");
     app.auto_expand();
     let msg = ZenohMessage {
-        key_expr: "demo/robot/pose".into(),
+        key_expr: "demo/device/pose".into(),
         payload: MessagePayload::from_json(&serde_json::json!({"x": 1})),
         encoding: "application/json".into(),
         payload_bytes: 8,
@@ -850,18 +854,18 @@ fn render_traffic_narrow_detail_pane_does_not_panic() {
         qos: None,
     };
     app.topic_latest
-        .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+        .insert("demo/device/pose".into(), (msg.clone(), Instant::now()));
     app.history.record(&msg);
 
     // Put the cursor on the key itself; rows 0 and 1 are the `demo/` and
-    // `robot/` branches, which get a subtree summary rather than a payload.
+    // `device/` branches, which get a subtree summary rather than a payload.
     app.refresh_tree_rows();
     app.tree_selected = 2;
 
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
     let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("demo/robot/pose"), "detail key missing");
+    assert!(text.contains("demo/device/pose"), "detail key missing");
 }
 
 #[test]
@@ -872,14 +876,14 @@ fn a_branch_selection_shows_a_subtree_summary_not_a_payload() {
     app.space = Space::Traffic;
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
-    app.key_tree.insert("agv/f1/pose");
-    app.key_tree.insert("agv/f2/pose");
+    app.key_tree.insert("sensors/f1/pose");
+    app.key_tree.insert("sensors/f2/pose");
     app.auto_expand();
-    app.topic_hz.insert("agv/f1/pose".into(), 10.0);
-    app.topic_hz.insert("agv/f2/pose".into(), 5.0);
+    app.topic_hz.insert("sensors/f1/pose".into(), 10.0);
+    app.topic_hz.insert("sensors/f2/pose".into(), 5.0);
 
     app.refresh_tree_rows();
-    app.tree_selected = 0; // the `agv/` branch
+    app.tree_selected = 0; // the `sensors/` branch
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
@@ -940,7 +944,7 @@ fn row_fg(buf: &ratatui::buffer::Buffer, needle: &str) -> ratatui::style::Color 
 /// A pair of messages on one key differing in `mode`, `speed` and `error`.
 fn seed_state_change(app: &mut App) {
     let state = |mode: &str, speed: f64, err: serde_json::Value| ZenohMessage {
-        key_expr: "agv/f001/state".into(),
+        key_expr: "sensors/f001/state".into(),
         payload: MessagePayload::from_json(&serde_json::json!({
             "mode": mode, "speed": speed, "load": 0, "battery": 87, "error": err,
         })),
@@ -1009,7 +1013,7 @@ fn a_key_seen_once_says_there_is_no_baseline_rather_than_marking_everything() {
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
     app.handle_zenoh_message(ZenohMessage {
-        key_expr: "agv/f001/state".into(),
+        key_expr: "sensors/f001/state".into(),
         payload: MessagePayload::from_json(&serde_json::json!({"mode": "idle"})),
         encoding: "application/json".into(),
         payload_bytes: 16,
@@ -1039,8 +1043,8 @@ encoding:
 types: {}
 services: []
 topics:
-  - key: agv/*/state
-    description: Vehicle state
+  - key: sensors/*/state
+    description: Device state
 "#,
     )
     .expect("fixture contract parses")
@@ -1070,11 +1074,11 @@ fn a_declared_key_says_so_and_carries_its_description() {
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
     app.contract = Some(test_contract());
-    seed_one(&mut app, "agv/f001/state", "application/json");
+    seed_one(&mut app, "sensors/f001/state", "application/json");
 
     let text = buffer_text(&draw(&mut app, 88, 22));
     assert!(text.contains("contract ✓"), "{text}");
-    assert!(text.contains("Vehicle state"), "{text}");
+    assert!(text.contains("Device state"), "{text}");
 }
 
 #[test]
@@ -1084,7 +1088,7 @@ fn a_key_the_contract_does_not_declare_is_marked_undeclared() {
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
     app.contract = Some(test_contract());
-    seed_one(&mut app, "agv/f001/mystery", "application/json");
+    seed_one(&mut app, "sensors/f001/mystery", "application/json");
 
     let text = buffer_text(&draw(&mut app, 88, 22));
     assert!(text.contains("undeclared"), "{text}");
@@ -1098,7 +1102,7 @@ fn an_encoding_the_contract_did_not_expect_is_called_out() {
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
     app.contract = Some(test_contract());
-    seed_one(&mut app, "agv/f001/state", "text/plain");
+    seed_one(&mut app, "sensors/f001/state", "text/plain");
 
     let text = buffer_text(&draw(&mut app, 88, 22));
     assert!(text.contains("expected application/json"), "{text}");
@@ -1112,7 +1116,7 @@ fn without_a_contract_the_pane_is_unchanged() {
     app.space = Space::Traffic;
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
-    seed_one(&mut app, "agv/f001/state", "application/json");
+    seed_one(&mut app, "sensors/f001/state", "application/json");
 
     let text = buffer_text(&draw(&mut app, 88, 22));
     assert!(!text.contains("contract"), "{text}");
@@ -1124,7 +1128,7 @@ fn without_a_contract_the_pane_is_unchanged() {
 fn seed_draining_battery(app: &mut App, n: i64) {
     for i in 0..n {
         app.handle_zenoh_message(ZenohMessage {
-            key_expr: "agv/f001/battery".into(),
+            key_expr: "sensors/f001/battery".into(),
             payload: MessagePayload::from_json(&serde_json::json!({
                 "percent": 88 - i,
                 "charging": false,
@@ -1170,7 +1174,9 @@ fn choosing_a_field_draws_its_sparkline_with_the_range() {
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.overlay, Overlay::None);
     assert_eq!(
-        app.plot_field.get("agv/f001/battery").map(String::as_str),
+        app.plot_field
+            .get("sensors/f001/battery")
+            .map(String::as_str),
         Some("/percent")
     );
 
@@ -1229,12 +1235,14 @@ fn the_plotted_field_is_remembered_per_key() {
     app.space = Space::Traffic;
     seed_draining_battery(&mut app, 4);
     app.plot_field
-        .insert("agv/f001/battery".into(), "/percent".into());
+        .insert("sensors/f001/battery".into(), "/percent".into());
 
     app.handle_key(key(KeyCode::Char('k')));
     app.handle_key(key(KeyCode::Char('j')));
     assert_eq!(
-        app.plot_field.get("agv/f001/battery").map(String::as_str),
+        app.plot_field
+            .get("sensors/f001/battery")
+            .map(String::as_str),
         Some("/percent")
     );
 
@@ -1249,7 +1257,7 @@ fn shift_p_clears_the_plot() {
     app.space = Space::Traffic;
     seed_draining_battery(&mut app, 4);
     app.plot_field
-        .insert("agv/f001/battery".into(), "/percent".into());
+        .insert("sensors/f001/battery".into(), "/percent".into());
 
     app.handle_key(key(KeyCode::Char('P')));
     assert!(app.plot_field.is_empty());
@@ -1260,7 +1268,7 @@ fn p_on_a_key_with_nothing_numeric_says_so_instead_of_opening_an_empty_list() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     app.handle_zenoh_message(ZenohMessage {
-        key_expr: "agv/f001/mode".into(),
+        key_expr: "sensors/f001/mode".into(),
         payload: MessagePayload::from_json(&serde_json::json!({"mode": "idle"})),
         encoding: "application/json".into(),
         payload_bytes: 16,
@@ -1284,7 +1292,7 @@ fn p_on_a_branch_does_not_open_the_picker() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     seed_draining_battery(&mut app, 3);
-    app.tree_selected = 0; // the `agv/` branch
+    app.tree_selected = 0; // the `sensors/` branch
     app.handle_key(key(KeyCode::Char('p')));
     assert_eq!(app.overlay, Overlay::None);
 }
@@ -1475,7 +1483,7 @@ fn typed_korean_is_left_alone_in_a_publish_payload_and_a_profile_name() {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     app.allow_publish = true;
-    seed_topics(&mut app, &["agv/f001/cmd"]);
+    seed_topics(&mut app, &["sensors/f001/cmd"]);
     app.tree_selected = app.tree_rows().len() - 1;
     app.run_palette_action(PaletteAction::OpenPublish);
     for c in "정지".chars() {
@@ -1504,17 +1512,17 @@ fn the_mapping_reaches_navigation_overlays_too() {
 
 // ---- network filter -------------------------------------------------------
 
-fn fleet_network() -> App {
+fn network_network() -> App {
     let mut app = App::new("test".into());
     app.space = Space::Network;
     app.connection_state = ConnectionState::Connected("z1".into());
     app.nodes.push(make_node("z1", "router"));
     app.nodes.push(make_node("z2", "peer"));
     for (key, alive) in [
-        ("agv/f001/node/planner", true),
-        ("agv/f002/node/planner", false),
-        ("agv/f003/node/planner", true),
-        ("srv/fleet/node/dispatcher", true),
+        ("sensors/f001/node/planner", true),
+        ("sensors/f002/node/planner", false),
+        ("sensors/f003/node/planner", true),
+        ("srv/network/node/dispatcher", true),
     ] {
         app.liveliness_tokens.push(make_token(key, alive));
     }
@@ -1533,17 +1541,17 @@ fn token_keys(app: &App) -> Vec<String> {
 
 #[test]
 fn dead_tokens_sort_first() {
-    // The one that stopped is the finding; on a fleet it is a handful of rows
+    // The one that stopped is the finding; on a network it is a handful of rows
     // among thousands and scrolling to them is the work this removes.
-    let app = fleet_network();
-    assert_eq!(token_keys(&app)[0], "agv/f002/node/planner");
+    let app = network_network();
+    assert_eq!(token_keys(&app)[0], "sensors/f002/node/planner");
 }
 
 #[test]
 fn the_filter_matches_token_keys_and_session_fields() {
-    let mut app = fleet_network();
+    let mut app = network_network();
     app.network_filter = "f002".into();
-    assert_eq!(token_keys(&app), vec!["agv/f002/node/planner"]);
+    assert_eq!(token_keys(&app), vec!["sensors/f002/node/planner"]);
     assert!(!app
         .network_rows()
         .iter()
@@ -1559,10 +1567,10 @@ fn the_filter_matches_token_keys_and_session_fields() {
 fn dead_only_hides_the_live_tokens_and_the_sessions() {
     // A transport session has no alive/dead state to filter on, so showing it
     // under "dead only" would pad the answer with rows that cannot be it.
-    let mut app = fleet_network();
+    let mut app = network_network();
     app.handle_key(key(KeyCode::Char('D')));
     assert!(app.network_dead_only);
-    assert_eq!(token_keys(&app), vec!["agv/f002/node/planner"]);
+    assert_eq!(token_keys(&app), vec!["sensors/f002/node/planner"]);
     assert!(!app
         .network_rows()
         .iter()
@@ -1572,7 +1580,7 @@ fn dead_only_hides_the_live_tokens_and_the_sessions() {
 #[test]
 fn a_filter_that_hides_everything_says_so_rather_than_nothing_is_running() {
     // The most alarming thing this space could say wrongly.
-    let mut app = fleet_network();
+    let mut app = network_network();
     app.network_filter = "zzz".into();
     assert_eq!(app.nodes_empty_reason(), EmptyReason::FilteredOut);
     let text = buffer_text(&draw(&mut app, 100, 20));
@@ -1582,7 +1590,7 @@ fn a_filter_that_hides_everything_says_so_rather_than_nothing_is_running() {
 #[test]
 fn the_header_counts_what_is_on_screen() {
     // A header claiming 4 while showing 1 makes the filter look broken.
-    let mut app = fleet_network();
+    let mut app = network_network();
     app.network_filter = "f002".into();
     let text = buffer_text(&draw(&mut app, 100, 20));
     assert!(text.contains("Liveliness (0/1 alive)"), "{text}");
@@ -1590,7 +1598,7 @@ fn the_header_counts_what_is_on_screen() {
 
 #[test]
 fn the_title_says_when_rows_are_being_hidden() {
-    let mut app = fleet_network();
+    let mut app = network_network();
     app.handle_key(key(KeyCode::Char('D')));
     assert!(buffer_text(&draw(&mut app, 100, 20)).contains("dead only"));
 
@@ -1604,7 +1612,7 @@ fn the_title_says_when_rows_are_being_hidden() {
 
 #[test]
 fn the_cursor_stays_inside_the_list_when_a_filter_shrinks_it() {
-    let mut app = fleet_network();
+    let mut app = network_network();
     app.network_selected = app.network_rows().len() - 1;
     app.handle_key(key(KeyCode::Char('/')));
     for c in "f002".chars() {
@@ -1636,24 +1644,24 @@ fn space_freezes_the_payload_being_read() {
     // thing the user is actually looking at.
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    app.handle_zenoh_message(numbered("agv/f001/state", 1));
+    app.handle_zenoh_message(numbered("sensors/f001/state", 1));
 
     app.handle_key(key(KeyCode::Char(' ')));
     assert!(app.history_paused);
 
-    app.handle_zenoh_message(numbered("agv/f001/state", 2));
-    let held = app.history.get("agv/f001/state").unwrap();
+    app.handle_zenoh_message(numbered("sensors/f001/state", 2));
+    let held = app.history.get("sensors/f001/state").unwrap();
     assert_eq!(held.len(), 1, "history froze");
     assert_eq!(held.latest().unwrap().view, serde_json::json!({"n": 1}));
     assert_eq!(
-        app.topic_latest["agv/f001/state"].0.payload.to_view(),
+        app.topic_latest["sensors/f001/state"].0.payload.to_view(),
         serde_json::json!({"n": 1}),
         "the latest payload froze too"
     );
 
     app.handle_key(key(KeyCode::Char(' ')));
-    app.handle_zenoh_message(numbered("agv/f001/state", 3));
-    assert_eq!(app.history.get("agv/f001/state").unwrap().len(), 2);
+    app.handle_zenoh_message(numbered("sensors/f001/state", 3));
+    assert_eq!(app.history.get("sensors/f001/state").unwrap().len(), 2);
 }
 
 #[test]
@@ -1662,14 +1670,14 @@ fn pausing_does_not_stop_the_rates_or_hide_new_keys() {
     // That the traffic continues — and that a key appeared — is information.
     let mut app = App::new("test".into());
     app.history_paused = true;
-    app.handle_zenoh_message(numbered("agv/f009/pose", 1));
+    app.handle_zenoh_message(numbered("sensors/f009/pose", 1));
 
     assert!(
-        app.key_tree.contains("agv/f009/pose"),
+        app.key_tree.contains("sensors/f009/pose"),
         "the key still shows"
     );
     assert_eq!(app.total_msg_count, 1, "the counters still run");
-    assert_eq!(app.topic_msg_counts["agv/f009/pose"], 1);
+    assert_eq!(app.topic_msg_counts["sensors/f009/pose"], 1);
 }
 
 #[test]
@@ -1678,7 +1686,7 @@ fn the_history_header_says_when_it_is_paused() {
     app.space = Space::Traffic;
     app.pane_focus = PaneFocus::Detail;
     app.connection_state = ConnectionState::Connected("zid".into());
-    app.handle_zenoh_message(numbered("agv/f001/state", 1));
+    app.handle_zenoh_message(numbered("sensors/f001/state", 1));
     app.auto_expand();
     app.refresh_tree_rows();
     app.tree_selected = app.tree_rows().len() - 1;
@@ -1693,10 +1701,10 @@ fn the_history_header_says_when_it_is_paused() {
 fn viewing_app() -> App {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_topics(&mut app, &["agv/f001/battery", "agv/f002/pose"]);
-    app.topic_filter = "agv".into();
+    seed_topics(&mut app, &["sensors/f001/battery", "sensors/f002/pose"]);
+    app.topic_filter = "sensors".into();
     app.plot_field
-        .insert("agv/f001/battery".into(), "/percent".into());
+        .insert("sensors/f001/battery".into(), "/percent".into());
     app.diff_enabled = false;
     app
 }
@@ -1706,8 +1714,8 @@ fn a_view_captures_what_you_were_looking_at() {
     let app = viewing_app();
     let p = app.snapshot_profile("stall");
     assert_eq!(p.name, "stall");
-    assert_eq!(p.filter, "agv");
-    assert_eq!(p.plot_fields["agv/f001/battery"], "/percent");
+    assert_eq!(p.filter, "sensors");
+    assert_eq!(p.plot_fields["sensors/f001/battery"], "/percent");
     assert!(!p.diff_enabled);
     // Sets iterate arbitrarily, so a re-save must not churn the file.
     let mut sorted = p.expanded.clone();
@@ -1721,14 +1729,16 @@ fn loading_a_view_restores_it() {
 
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    seed_topics(&mut app, &["agv/f001/battery", "agv/f002/pose"]);
+    seed_topics(&mut app, &["sensors/f001/battery", "sensors/f002/pose"]);
     app.topic_filter.clear();
     app.diff_enabled = true;
 
     app.apply_profile(&saved);
-    assert_eq!(app.topic_filter, "agv");
+    assert_eq!(app.topic_filter, "sensors");
     assert_eq!(
-        app.plot_field.get("agv/f001/battery").map(String::as_str),
+        app.plot_field
+            .get("sensors/f001/battery")
+            .map(String::as_str),
         Some("/percent")
     );
     assert!(!app.diff_enabled);
@@ -1740,7 +1750,7 @@ fn loading_a_view_stops_the_automatic_expansion() {
     // Otherwise a new key would reopen branches the saved view had closed —
     // loading a view is every bit as deliberate as expanding by hand.
     let mut app = App::new("test".into());
-    seed_topics(&mut app, &["agv/f001/pose"]);
+    seed_topics(&mut app, &["sensors/f001/pose"]);
     let closed = zenmon_core::profile::TuiProfile {
         name: "closed".into(),
         filter: String::new(),
@@ -1793,7 +1803,7 @@ fn the_save_dialog_says_what_it_is_about_to_capture() {
     app.connection_state = ConnectionState::Connected("zid".into());
     app.run_palette_action(PaletteAction::SaveProfile);
     let text = buffer_text(&draw(&mut app, 100, 24));
-    assert!(text.contains("filter 'agv'"), "{text}");
+    assert!(text.contains("filter 'sensors'"), "{text}");
     assert!(text.contains("plotted"), "{text}");
 }
 
@@ -1811,7 +1821,7 @@ fn publishing_app(allow: bool) -> App {
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
     app.allow_publish = allow;
-    seed_topics(&mut app, &["agv/f001/cmd"]);
+    seed_topics(&mut app, &["sensors/f001/cmd"]);
     app.tree_selected = app.tree_rows().len() - 1;
     app
 }
@@ -1835,7 +1845,7 @@ fn guard_1_holds_even_if_something_arms_a_publish_directly() {
     // The flag is checked again at the point of arming, so the guarantee does
     // not rest on every future caller remembering to check first.
     let mut app = publishing_app(false);
-    app.publish_key = "agv/f001/cmd".into();
+    app.publish_key = "sensors/f001/cmd".into();
     app.overlay = Overlay::Publish;
     app.handle_key(ctrl(KeyCode::Enter));
     assert!(app.pending_publish.is_none());
@@ -1883,7 +1893,7 @@ fn guard_4_plain_enter_does_not_send() {
     app.handle_key(ctrl(KeyCode::Enter));
     assert_eq!(
         app.pending_publish,
-        Some(("agv/f001/cmd".to_string(), String::new()))
+        Some(("sensors/f001/cmd".to_string(), String::new()))
     );
 }
 
@@ -1894,17 +1904,17 @@ fn guard_4_the_target_is_named_before_sending() {
     open_publish(&mut app);
     let text = buffer_text(&draw(&mut app, 100, 24));
     assert!(text.contains("will write to"), "{text}");
-    assert!(text.contains("agv/f001/cmd"), "{text}");
+    assert!(text.contains("sensors/f001/cmd"), "{text}");
     assert!(text.contains("Ctrl+Enter"), "{text}");
 }
 
 #[test]
 fn a_wildcard_key_is_refused() {
-    // A wildcard put reaches every matching subscriber — on a fleet, every
-    // vehicle at once — and nothing in the editor makes that intent visible.
+    // A wildcard put reaches every matching subscriber — on a network, every
+    // device at once — and nothing in the editor makes that intent visible.
     let mut app = publishing_app(true);
     open_publish(&mut app);
-    app.publish_key = "agv/*/cmd".into();
+    app.publish_key = "sensors/*/cmd".into();
     app.handle_key(ctrl(KeyCode::Enter));
     assert!(app.pending_publish.is_none());
     let err = app.publish_result.clone().unwrap().unwrap_err();
@@ -1927,7 +1937,7 @@ fn the_editor_prefills_the_selected_key_and_starts_in_the_payload() {
     // where the typing has to happen.
     let mut app = publishing_app(true);
     open_publish(&mut app);
-    assert_eq!(app.publish_key, "agv/f001/cmd");
+    assert_eq!(app.publish_key, "sensors/f001/cmd");
     assert_eq!(app.publish_field, PublishField::Payload);
 }
 
@@ -1956,15 +1966,15 @@ fn a_quiet_keys_history_survives_a_noisy_neighbour() {
         attachment_bytes: None,
         qos: None,
     };
-    app.handle_zenoh_message(msg("agv/quiet/pose", 1));
-    app.handle_zenoh_message(msg("agv/quiet/pose", 2));
+    app.handle_zenoh_message(msg("sensors/quiet/pose", 1));
+    app.handle_zenoh_message(msg("sensors/quiet/pose", 2));
     for i in 0..5_000 {
-        app.handle_zenoh_message(msg("agv/loud/pose", i));
+        app.handle_zenoh_message(msg("sensors/loud/pose", i));
     }
-    assert_eq!(app.history.get("agv/quiet/pose").unwrap().len(), 2);
+    assert_eq!(app.history.get("sensors/quiet/pose").unwrap().len(), 2);
     assert!(app
         .history
-        .get("agv/quiet/pose")
+        .get("sensors/quiet/pose")
         .unwrap()
         .previous()
         .is_some());
@@ -1986,8 +1996,8 @@ fn dump_frames() {
         app.self_zid = Some("a3f19c0011223344".into());
         // Topics + rates.
         for (k, hz) in [
-            ("demo/robot/pose", 12.0),
-            ("demo/robot/battery", 1.0),
+            ("demo/device/pose", 12.0),
+            ("demo/device/battery", 1.0),
             ("demo/sensor/lidar", 30.0),
             ("sys/health", 0.0),
         ] {
@@ -1995,7 +2005,7 @@ fn dump_frames() {
             app.topic_hz.insert(k.into(), hz);
         }
         let msg = ZenohMessage {
-            key_expr: "demo/robot/pose".into(),
+            key_expr: "demo/device/pose".into(),
             payload: MessagePayload::from_json(
                 &serde_json::json!({"x": 1.21, "y": 3.40, "theta": 0.11}),
             ),
@@ -2008,16 +2018,16 @@ fn dump_frames() {
             qos: None,
         };
         app.topic_latest
-            .insert("demo/robot/pose".into(), (msg.clone(), Instant::now()));
+            .insert("demo/device/pose".into(), (msg.clone(), Instant::now()));
         app.history.record(&msg);
         app.total_hz = 43.0;
         // Nodes + services.
         app.nodes.push(make_node("a3f19c0011223344", "router"));
         app.nodes.push(make_node("b2c4ffee00990011", "peer"));
         app.liveliness_tokens
-            .push(make_token("demo/robot/node/action_executor", true));
+            .push(make_token("demo/device/node/action_executor", true));
         app.liveliness_tokens
-            .push(make_token("demo/robot/node/topic_recorder", false));
+            .push(make_token("demo/device/node/topic_recorder", false));
         app.liveliness_tokens
             .push(make_token("sys/node/system_monitor", true));
         app
@@ -2035,7 +2045,7 @@ fn dump_frames() {
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 
-    // A fleet-sized namespace: the case the tree and the fold exist for, and
+    // A network-sized namespace: the case the tree and the fold exist for, and
     // the one no synthetic four-key seed shows anything about.
     {
         let mut app = App::new("tcp/127.0.0.1:7447".into());
@@ -2043,18 +2053,18 @@ fn dump_frames() {
         app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
         for i in 0..200 {
             for (topic, hz) in [("pose", 10.0), ("battery", 1.0), ("state", 1.0)] {
-                let key = format!("agv/f{i:03}/{topic}");
+                let key = format!("sensors/f{i:03}/{topic}");
                 app.key_tree.insert(&key);
                 app.topic_hz.insert(key, hz);
             }
         }
-        app.key_tree.insert("srv/fleet/health");
+        app.key_tree.insert("srv/network/health");
         app.auto_expand();
         app.total_hz = 2400.0;
 
         let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
-        println!("\n===== TRAFFIC 200 vehicles / 601 keys, collapsed =====");
+        println!("\n===== TRAFFIC 200 devices / 601 keys, collapsed =====");
         print!("{}", buffer_grid(terminal.backend().buffer()));
 
         // And the same tree with a filter, which is the documented way into a
@@ -2074,7 +2084,7 @@ fn dump_frames() {
         app.pane_focus = PaneFocus::Detail;
         app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
         let state = |mode: &str, speed: f64, err: serde_json::Value| ZenohMessage {
-            key_expr: "agv/f001/state".into(),
+            key_expr: "sensors/f001/state".into(),
             payload: MessagePayload::from_json(&serde_json::json!({
                 "mode": mode,
                 "speed": speed,
@@ -2115,7 +2125,7 @@ fn dump_frames() {
             // worth looking at rather than a straight ramp.
             let pct = if i < 40 { 88 - i } else { 48 + (i - 40) * 2 };
             app.handle_zenoh_message(ZenohMessage {
-                key_expr: "agv/f001/battery".into(),
+                key_expr: "sensors/f001/battery".into(),
                 payload: MessagePayload::from_json(&serde_json::json!({
                     "percent": pct, "charging": i >= 40, "cell": {"volts": 48.0},
                 })),
@@ -2132,7 +2142,7 @@ fn dump_frames() {
         app.refresh_tree_rows();
         app.tree_selected = app.tree_rows().len() - 1;
         app.plot_field
-            .insert("agv/f001/battery".into(), "/percent".into());
+            .insert("sensors/f001/battery".into(), "/percent".into());
 
         let mut terminal = Terminal::new(TestBackend::new(96, 20)).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
@@ -2176,12 +2186,12 @@ fn dump_frames() {
         app.pane_focus = PaneFocus::Detail;
         app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
         app.contract = Some(zenmon_core::contract::Contract::from_yaml_str(CONTRACT_YAML).unwrap());
-        for k in ["call/safety/estop", "agv/f001/pose"] {
+        for k in ["call/safety/estop", "sensors/f001/pose"] {
             app.key_tree.insert(k);
         }
         app.auto_expand();
         app.refresh_tree_rows();
-        // Rows sort agv/ before call/, so the service key is the last one.
+        // Rows sort sensors/ before call/, so the service key is the last one.
         app.tree_selected = app.tree_rows().len() - 1;
         app.handle_key(key(KeyCode::Char('Q')));
         app.query_payload = r#"{"active":true}"#.into();
@@ -2199,7 +2209,7 @@ fn dump_frames() {
         app.space = Space::Traffic;
         app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
         app.allow_publish = true;
-        for k in ["agv/f001/cmd", "agv/f001/pose"] {
+        for k in ["sensors/f001/cmd", "sensors/f001/pose"] {
             app.key_tree.insert(k);
         }
         app.auto_expand();
@@ -2219,13 +2229,17 @@ fn dump_frames() {
         let mut app = App::new("tcp/127.0.0.1:7447".into());
         app.space = Space::Traffic;
         app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
-        for k in ["agv/f001/battery", "agv/f001/pose", "agv/f002/pose"] {
+        for k in [
+            "sensors/f001/battery",
+            "sensors/f001/pose",
+            "sensors/f002/pose",
+        ] {
             app.key_tree.insert(k);
         }
         app.auto_expand();
-        app.topic_filter = "agv".into();
+        app.topic_filter = "sensors".into();
         app.plot_field
-            .insert("agv/f001/battery".into(), "/percent".into());
+            .insert("sensors/f001/battery".into(), "/percent".into());
         app.refresh_tree_rows();
         app.profile_name_input = "stall-hunt".into();
         app.overlay = Overlay::ProfileSave;
@@ -2236,7 +2250,8 @@ fn dump_frames() {
         print!("{}", buffer_grid(terminal.backend().buffer()));
 
         app.profiles.upsert(app.snapshot_profile("stall-hunt"));
-        app.profiles.upsert(app.snapshot_profile("fleet-overview"));
+        app.profiles
+            .upsert(app.snapshot_profile("network-overview"));
         app.overlay = Overlay::ProfileLoad;
         terminal.draw(|f| app.render(f)).unwrap();
         println!("\n===== TRAFFIC load-view picker =====");
@@ -2249,12 +2264,12 @@ fn dump_frames() {
         let mut app = App::new("tcp/127.0.0.1:7447".into());
         app.space = Space::Traffic;
         app.connection_state = ConnectionState::Connected("a3f19c0011223344".into());
-        seen_ago(&mut app, "agv/f001/pose", 0);
-        seen_ago(&mut app, "agv/f001/battery", 0);
-        seen_ago(&mut app, "agv/f002/pose", 900);
-        seen_ago(&mut app, "agv/f002/battery", 7_845);
-        app.topic_hz.insert("agv/f001/pose".into(), 10.0);
-        app.topic_hz.insert("agv/f001/battery".into(), 1.0);
+        seen_ago(&mut app, "sensors/f001/pose", 0);
+        seen_ago(&mut app, "sensors/f001/battery", 0);
+        seen_ago(&mut app, "sensors/f002/pose", 900);
+        seen_ago(&mut app, "sensors/f002/battery", 7_845);
+        app.topic_hz.insert("sensors/f001/pose".into(), 10.0);
+        app.topic_hz.insert("sensors/f001/battery".into(), 1.0);
         app.auto_expand();
         app.keys_aged_out = 137;
 
@@ -2264,7 +2279,7 @@ fn dump_frames() {
         print!("{}", buffer_grid(terminal.backend().buffer()));
     }
 
-    // A fleet-sized liveliness list, and the same list narrowed to the one
+    // A network-sized liveliness list, and the same list narrowed to the one
     // token that is not alive — the question this space gets asked.
     {
         let mut app = App::new("tcp/127.0.0.1:7447".into());
@@ -2275,7 +2290,7 @@ fn dump_frames() {
             for node in ["planner", "safety", "drive"] {
                 let alive = !(i == 3 && node == "safety");
                 app.liveliness_tokens.push(make_token(
-                    &format!("agv/f{i:03}/node/{node}_a6f6902{i}"),
+                    &format!("sensors/f{i:03}/node/{node}_a6f6902{i}"),
                     alive,
                 ));
             }
@@ -2377,7 +2392,7 @@ fn network_jk_move_and_clamp_selection() {
     app.nodes.push(make_node("z1", "router"));
     app.nodes.push(make_node("z2", "peer"));
     app.liveliness_tokens
-        .push(make_token("fleet/r1/node/a", true));
+        .push(make_token("network/r1/node/a", true));
     // 2 sessions + 1 service = 3 selectable rows.
     assert_eq!(app.network_rows().len(), 3);
     assert_eq!(app.network_selected, 0);
@@ -2414,7 +2429,7 @@ fn network_selection_resolves_session_then_service() {
     app.nodes.push(make_node("z1", "router"));
     app.nodes.push(make_node("z2", "peer"));
     app.liveliness_tokens
-        .push(make_token("fleet/r1/node/a", true));
+        .push(make_token("network/r1/node/a", true));
     assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(0)));
     app.network_selected = 1;
     assert_eq!(app.selected_network_row(), Some(NetworkRow::Session(1)));
@@ -2450,7 +2465,7 @@ fn render_network_with_data_wide_and_narrow_shows_participant() {
         app.connection_state = ConnectionState::Connected("zidrouter0000000".into());
         app.nodes.push(make_node("zidrouter0000000", "router"));
         app.liveliness_tokens
-            .push(make_token("fleet/r1/node/action_executor_ec98a701", true));
+            .push(make_token("network/r1/node/action_executor_ec98a701", true));
 
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
@@ -2777,7 +2792,7 @@ fn network_click_map_marks_headers_and_rows() {
     app.nodes.push(make_node("z1", "router"));
     app.nodes.push(make_node("z2", "peer"));
     app.liveliness_tokens
-        .push(make_token("fleet/r1/node/a", true));
+        .push(make_token("network/r1/node/a", true));
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
@@ -2882,11 +2897,11 @@ fn live(key: &str, join: bool) -> AppEvent {
 fn liveliness_join_leave_rejoin_keeps_one_row_per_key() {
     let mut app = App::new("test".into());
     for i in 0..500 {
-        app.handle_event(live(&format!("fleet/r{i}/alive"), true));
+        app.handle_event(live(&format!("network/r{i}/alive"), true));
     }
-    app.handle_event(live("fleet/r7/alive", false));
-    app.handle_event(live("fleet/r7/alive", true));
-    app.handle_event(live("fleet/r9/alive", false));
+    app.handle_event(live("network/r7/alive", false));
+    app.handle_event(live("network/r7/alive", true));
+    app.handle_event(live("network/r9/alive", false));
 
     assert_eq!(app.liveliness_tokens.len(), 500);
     let alive = |k: &str| {
@@ -2896,8 +2911,8 @@ fn liveliness_join_leave_rejoin_keeps_one_row_per_key() {
             .unwrap()
             .alive
     };
-    assert!(alive("fleet/r7/alive"));
-    assert!(!alive("fleet/r9/alive"));
+    assert!(alive("network/r7/alive"));
+    assert!(!alive("network/r9/alive"));
 }
 
 #[test]
@@ -2984,10 +2999,10 @@ fn a_sessions_detail_lists_its_connection_history() {
     assert!(text.contains("CLOSE") && text.contains("OPEN"));
 }
 
-fn fleet(app: &mut App, vehicles: usize) {
-    for i in 0..vehicles {
+fn network(app: &mut App, devices: usize) {
+    for i in 0..devices {
         for (leaf, hz) in [("pose", 10.0), ("battery", 1.0)] {
-            let key = format!("agv/f{i:03}/{leaf}");
+            let key = format!("sensors/f{i:03}/{leaf}");
             app.handle_zenoh_message(numbered(&key, 0));
             app.topic_hz.insert(key, hz);
         }
@@ -2997,21 +3012,21 @@ fn fleet(app: &mut App, vehicles: usize) {
 #[test]
 fn a_branch_sums_the_rates_below_it() {
     let mut app = App::new("test".into());
-    fleet(&mut app, 3);
+    network(&mut app, 3);
     let rates = app.branch_rates();
-    assert_eq!(rates["agv"], 33.0);
-    assert_eq!(rates["agv/f001"], 11.0);
+    assert_eq!(rates["sensors"], 33.0);
+    assert_eq!(rates["sensors/f001"], 11.0);
     assert!(
-        !rates.contains_key("agv/f001/pose"),
+        !rates.contains_key("sensors/f001/pose"),
         "leaves are not branches"
     );
 }
 
 #[test]
-fn a_fleet_reads_as_one_line_per_kind_of_key() {
+fn a_network_reads_as_one_line_per_kind_of_key() {
     let mut app = App::new("test".into());
-    fleet(&mut app, 200);
-    let groups = app.suffix_groups("agv");
+    network(&mut app, 200);
+    let groups = app.suffix_groups("sensors");
     assert_eq!(
         groups,
         vec![
@@ -3019,19 +3034,19 @@ fn a_fleet_reads_as_one_line_per_kind_of_key() {
             ("*/battery".to_string(), 200, 200.0)
         ]
     );
-    // Under one vehicle nothing repeats, so grouping would only restate it.
-    assert!(app.suffix_groups("agv/f001").is_empty());
+    // Under one device nothing repeats, so grouping would only restate it.
+    assert!(app.suffix_groups("sensors/f001").is_empty());
 }
 
 #[test]
-fn a_fleet_branch_shows_its_total_rate_and_per_kind_lines() {
+fn a_network_branch_shows_its_total_rate_and_per_kind_lines() {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     let mut app = App::new("test".into());
     app.space = Space::Traffic;
-    fleet(&mut app, 200);
+    network(&mut app, 200);
     app.refresh_tree_rows();
-    app.tree_selected = 0; // the agv/ branch
+    app.tree_selected = 0; // the sensors/ branch
 
     let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
@@ -3042,7 +3057,7 @@ fn a_fleet_branch_shows_its_total_rate_and_per_kind_lines() {
     );
     assert!(
         text.contains("*/pose"),
-        "detail groups the fleet by kind of key"
+        "detail groups the network by kind of key"
     );
 }
 

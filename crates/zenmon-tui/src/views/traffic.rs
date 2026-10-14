@@ -269,7 +269,7 @@ fn render_master(app: &mut App, frame: &mut Frame, area: Rect) {
 
 fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
     // A branch names a prefix, not a key, so there is no payload to show. It
-    // gets a subtree summary instead — the "how busy is all of agv/** right
+    // gets a subtree summary instead — the "how busy is all of sensors/** right
     // now" question the flat list could not answer at all.
     if let Some(row) = app.selected_row() {
         if row.kind != RowKind::Leaf {
@@ -482,7 +482,7 @@ fn render_subtree_summary(app: &App, frame: &mut Frame, area: Rect, row: &TreeRo
         Line::from(""),
     ];
 
-    // A fleet reads as one line per kind of key: `*/pose  200 keys  2000 Hz`.
+    // A network reads as one line per kind of key: `*/pose  200 keys  2000 Hz`.
     let groups = app.suffix_groups(&row.path);
     if !groups.is_empty() {
         lines.push(Line::from(Span::styled("by key, across the branch", dim)));
@@ -510,7 +510,7 @@ fn render_subtree_summary(app: &App, frame: &mut Frame, area: Rect, row: &TreeRo
         .filter(|(_, v)| *v > 0.0)
         .collect();
     // Ties break on the key name. `topic_hz` is a HashMap rewritten every
-    // second, so without this the equal-rate keys — which is most of a fleet
+    // second, so without this the equal-rate keys — which is most of a network
     // publishing on a schedule — would reshuffle on every update.
     busiest.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
 

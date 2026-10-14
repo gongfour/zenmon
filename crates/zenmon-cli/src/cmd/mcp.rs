@@ -70,7 +70,7 @@ const KEY: Param = param(
     "key_expr",
     "string",
     true,
-    "Zenoh key expression, e.g. robot/** or robot/*/pose",
+    "Zenoh key expression, e.g. device/** or device/*/pose",
     Arg::Positional,
 );
 const MAX_PAYLOAD: Param = param(

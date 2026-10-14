@@ -93,9 +93,9 @@ topics:
 
   # call: producer is the client (it puts the request on the wire first),
   # consumer is the server — matching how v0.1 contracts read producers/consumers.
-  - key: call/mission/pause
+  - key: call/job/pause
     pattern: call
-    description: Pause mission
+    description: Pause job
     request: {}
     endpoints:
       - service: orchestrator

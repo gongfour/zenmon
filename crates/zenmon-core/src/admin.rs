@@ -179,14 +179,14 @@ mod tests {
         vec![
             ("@/r1/router/subscriber/demo/**".into(), decl(&["c1"])),
             (
-                "@/r1/router/publisher/demo/robot1/pose".into(),
+                "@/r1/router/publisher/demo/device1/pose".into(),
                 decl(&["c2"]),
             ),
             (
-                "@/r1/router/queryable/demo/robot1/params/get".into(),
+                "@/r1/router/queryable/demo/device1/params/get".into(),
                 decl(&["c3"]),
             ),
-            ("@/r1/router/token/demo/robot1/alive".into(), decl(&["c2"])),
+            ("@/r1/router/token/demo/device1/alive".into(), decl(&["c2"])),
             ("@/r1/router/subscriber/other/**".into(), decl(&["c4"])),
             ("@/r1/router".into(), json!({ "sessions": [] })),
             ("@/r1/router/linkstate/routers".into(), json!("graph {}")),
@@ -196,15 +196,18 @@ mod tests {
     #[test]
     fn only_declarations_that_intersect_the_filter_are_kept() {
         let d =
-            declarations_from_replies(&replies(), "demo/robot1/pose", DECLARATION_KINDS).unwrap();
+            declarations_from_replies(&replies(), "demo/device1/pose", DECLARATION_KINDS).unwrap();
         let got: Vec<(&str, &str)> = d
             .iter()
             .map(|d| (d.kind.as_str(), d.key_expr.as_str()))
             .collect();
         assert_eq!(
             got,
-            [("subscriber", "demo/**"), ("publisher", "demo/robot1/pose")],
-            "the subscriber on demo/** receives demo/robot1/pose"
+            [
+                ("subscriber", "demo/**"),
+                ("publisher", "demo/device1/pose")
+            ],
+            "the subscriber on demo/** receives demo/device1/pose"
         );
         assert_eq!(d[0].clients, ["c1"]);
         assert_eq!(d[0].router, "r1");
@@ -214,7 +217,7 @@ mod tests {
     fn kinds_can_be_narrowed_and_non_declarations_are_ignored() {
         let d = declarations_from_replies(&replies(), "**", &["queryable"]).unwrap();
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].key_expr, "demo/robot1/params/get");
+        assert_eq!(d[0].key_expr, "demo/device1/params/get");
         assert_eq!(
             declarations_from_replies(&replies(), "**", DECLARATION_KINDS)
                 .unwrap()

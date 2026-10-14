@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use zenoh::Wait;
 
 /// The test's own Zenoh peer, and the endpoint `zenmon` should connect to.
@@ -680,7 +680,7 @@ fn admin_decls_names_who_subscribes_to_a_key() {
         .spawn()
         .unwrap();
 
-    let key = format!("{p}/robot/pose");
+    let key = format!("{p}/device/pose");
     let mut found = Value::Null;
     for _ in 0..40 {
         let out = run(hub.zenmon(&["--json", "admin", "decls", &key, "--kind", "subscriber"]));
@@ -790,4 +790,57 @@ fn scenario_reports_a_key_that_stops() {
         .expect("a stopped event");
     assert_eq!(stopped["key"], format!("{p}/pose"));
     assert!(stopped["typical_ms"].as_u64().unwrap() >= 40, "{stopped}");
+}
+
+#[test]
+fn scenario_stops_only_on_correlated_put_and_sends_attachment() {
+    let hub = Hub::open();
+    let base = prefix("scenario-correlation");
+    let input = format!("{base}/input");
+    let result = format!("{base}/result");
+    let sub = hub.session.declare_subscriber(&input).wait().unwrap();
+    let session = hub.session.clone();
+    let result_key = result.clone();
+    let worker = thread::spawn(move || {
+        let request = sub
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .expect("trigger arrives");
+        assert_eq!(
+            request.attachment().unwrap().try_to_string().unwrap(),
+            "{\"token\":\"ours\"}"
+        );
+        for (id, token) in [(7, "ours"), (42, "other"), (42, "ours")] {
+            session
+                .put(&result_key, json!({"id":id}).to_string())
+                .attachment(json!({"token":token}).to_string())
+                .wait()
+                .unwrap();
+            thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let out = run(hub.zenmon(&[
+        "--json",
+        "scenario",
+        "--pub",
+        &input,
+        "{}",
+        "--att",
+        "{\"token\":\"ours\"}",
+        "--until-key",
+        &result,
+        "--until-payload",
+        "/id",
+        "42",
+        "--until-attachment",
+        "/token",
+        "\"ours\"",
+        "--for",
+        "5s",
+    ]));
+    worker.join().unwrap();
+    let episode: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(episode["meta"]["ended_reason"], "condition_matched");
+    assert_eq!(episode["topics"][&result]["count"], 3);
+    assert_eq!(episode["timeline"][0]["attachment"]["token"], "ours");
 }

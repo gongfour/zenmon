@@ -34,7 +34,7 @@ pub struct ScenarioEvent {
     /// Decoded payload view.
     pub payload: Value,
     /// True for the synthetic event representing the scenario's own trigger
-    /// (the `--pub` actuation or `--task` request) — the causal origin at
+    /// (a `--pub` publication) — the causal origin at
     /// `t_rel_ms = 0`. Ordinary observed events are `false`.
     pub trigger: bool,
 }
@@ -46,11 +46,6 @@ pub enum TriggerInfo {
     None,
     /// One-shot `--pub` actuation.
     Pub { key_expr: String, bytes: usize },
-    /// A Task request published to `<prefix>/request`.
-    Task {
-        request_key: String,
-        request_bytes: usize,
-    },
 }
 
 impl TriggerInfo {
@@ -62,14 +57,6 @@ impl TriggerInfo {
                 "key_expr": key_expr,
                 "bytes": bytes,
             }),
-            TriggerInfo::Task {
-                request_key,
-                request_bytes,
-            } => json!({
-                "kind": "task",
-                "request_key": request_key,
-                "request_bytes": request_bytes,
-            }),
         }
     }
 }
@@ -77,8 +64,8 @@ impl TriggerInfo {
 /// Why the scenario ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndedReason {
-    /// A message arrived on the task's `<prefix>/response` topic.
-    TaskResponse,
+    /// A PUT matched the user-supplied stop condition.
+    ConditionMatched,
     /// The `--for` window (plus `--settle`) elapsed.
     WindowElapsed,
 }
@@ -86,7 +73,7 @@ pub enum EndedReason {
 impl EndedReason {
     fn as_str(&self) -> &'static str {
         match self {
-            EndedReason::TaskResponse => "task_response",
+            EndedReason::ConditionMatched => "condition_matched",
             EndedReason::WindowElapsed => "window_elapsed",
         }
     }
@@ -675,26 +662,26 @@ mod tests {
     #[test]
     fn meta_reflects_trigger_and_ended_reason() {
         let m = ScenarioMeta {
-            trigger: TriggerInfo::Task {
-                request_key: "myfleet/task/mission/mission/request".to_string(),
-                request_bytes: 42,
+            trigger: TriggerInfo::Pub {
+                key_expr: "demo/task/job/job/request".to_string(),
+                bytes: 42,
             },
             for_ms: 8000,
             settle_ms: 2000,
             observed: vec!["k1".to_string(), "k2".to_string()],
-            ended_reason: EndedReason::TaskResponse,
+            ended_reason: EndedReason::ConditionMatched,
         };
         let ep = build_episode(&m, &[]);
-        assert_eq!(ep["meta"]["trigger"]["kind"], "task");
+        assert_eq!(ep["meta"]["trigger"]["kind"], "pub");
         assert_eq!(
-            ep["meta"]["trigger"]["request_key"],
-            "myfleet/task/mission/mission/request"
+            ep["meta"]["trigger"]["key_expr"],
+            "demo/task/job/job/request"
         );
-        assert_eq!(ep["meta"]["trigger"]["request_bytes"], 42);
+        assert_eq!(ep["meta"]["trigger"]["bytes"], 42);
         assert_eq!(ep["meta"]["for_ms"], 8000);
         assert_eq!(ep["meta"]["settle_ms"], 2000);
         assert_eq!(ep["meta"]["observed"], json!(["k1", "k2"]));
-        assert_eq!(ep["meta"]["ended_reason"], "task_response");
+        assert_eq!(ep["meta"]["ended_reason"], "condition_matched");
     }
 
     #[test]
@@ -718,8 +705,8 @@ mod tests {
 
     #[test]
     fn expand_preset_applies_prefix() {
-        let keys = expand_preset(&preset(&["topic/state", "task/**/response"]), "myfleet");
-        assert_eq!(keys, ["myfleet/topic/state", "myfleet/task/**/response"]);
+        let keys = expand_preset(&preset(&["topic/state", "task/**/response"]), "demo");
+        assert_eq!(keys, ["demo/topic/state", "demo/task/**/response"]);
     }
 
     #[test]
@@ -730,8 +717,8 @@ mod tests {
 
     #[test]
     fn expand_preset_does_not_double_slashes() {
-        let keys = expand_preset(&preset(&["/topic/state"]), "myfleet/");
-        assert_eq!(keys, ["myfleet/topic/state"]);
+        let keys = expand_preset(&preset(&["/topic/state"]), "demo/");
+        assert_eq!(keys, ["demo/topic/state"]);
     }
 
     fn steady(key: &str, times: impl IntoIterator<Item = u64>) -> Vec<ScenarioEvent> {
@@ -788,5 +775,164 @@ mod tests {
             auto,
             vec![json!({ "t_rel_ms": 42, "kind": "deleted", "key": "a/x" })]
         );
+    }
+}
+
+/// Generic completion predicate. No application-specific field names or channels.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StopCondition {
+    key: Option<String>,
+    payload: Option<JsonMatch>,
+    attachment: Option<JsonMatch>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct JsonMatch {
+    pointer: String,
+    value: Value,
+}
+
+impl JsonMatch {
+    fn parse(pair: Option<Vec<String>>) -> crate::Result<Option<Self>> {
+        pair.map(|pair| {
+            let invalid = crate::ZenmonError::invalid_input;
+            if pair.len() != 2 {
+                return Err(invalid("expected JSON pointer and value"));
+            }
+            let pointer = &pair[0];
+            if !pointer.is_empty() && !pointer.starts_with('/') {
+                return Err(invalid("JSON pointer must be empty or start with /"));
+            }
+            let mut chars = pointer.chars();
+            while let Some(ch) = chars.next() {
+                if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
+                    return Err(invalid("JSON pointer escape must be ~0 or ~1"));
+                }
+            }
+            let value = serde_json::from_str(&pair[1]).map_err(|e| {
+                crate::ZenmonError::invalid_input(format!("invalid condition JSON: {e}"))
+            })?;
+            Ok(Self {
+                pointer: pointer.clone(),
+                value,
+            })
+        })
+        .transpose()
+    }
+
+    fn matches(&self, value: &Value) -> bool {
+        value.pointer(&self.pointer) == Some(&self.value)
+    }
+}
+
+impl StopCondition {
+    pub fn new(
+        key: Option<String>,
+        payload: Option<Vec<String>>,
+        attachment: Option<Vec<String>>,
+    ) -> crate::Result<Self> {
+        if key.is_none() && (payload.is_some() || attachment.is_some()) {
+            return Err(crate::ZenmonError::invalid_input(
+                "a stop predicate requires --until-key",
+            ));
+        }
+        if let Some(k) = &key {
+            keyexpr::new(k.as_str()).map_err(|e| {
+                crate::ZenmonError::invalid_input(format!("invalid --until-key: {e}"))
+            })?;
+        }
+        Ok(Self {
+            key,
+            payload: JsonMatch::parse(payload)?,
+            attachment: JsonMatch::parse(attachment)?,
+        })
+    }
+
+    pub fn key(&self) -> Option<&str> {
+        self.key.as_deref()
+    }
+
+    pub fn matches(&self, event: &ScenarioEvent) -> bool {
+        if event.trigger || event.kind != "PUT" {
+            return false;
+        }
+        let Some(key) = self.key() else {
+            return false;
+        };
+        let Ok(observed) = keyexpr::new(&event.key_expr) else {
+            return false;
+        };
+        keyexpr::new(key).is_ok_and(|k| k.includes(observed))
+            && self
+                .payload
+                .as_ref()
+                .is_none_or(|p| p.matches(&event.payload))
+            && self.attachment.as_ref().is_none_or(|p| {
+                event
+                    .attachment
+                    .as_ref()
+                    .is_some_and(|value| p.matches(value))
+            })
+    }
+}
+
+#[cfg(test)]
+mod condition_tests {
+    use super::*;
+
+    #[test]
+    fn completion_requires_key_kind_and_all_correlations() {
+        let condition = StopCondition::new(
+            Some("demo/*/result".into()),
+            Some(vec!["/id".into(), "42".into()]),
+            Some(vec!["/token".into(), "\"ours\"".into()]),
+        )
+        .unwrap();
+        let mut event = ScenarioEvent {
+            t_rel_ms: 0,
+            key_expr: "demo/a/result".into(),
+            attachment: Some(json!({"token":"ours"})),
+            encoding: String::new(),
+            kind: "PUT".into(),
+            payload: json!({"id":42}),
+            trigger: false,
+        };
+        assert!(condition.matches(&event));
+        event.payload = json!({"id":"42"});
+        assert!(!condition.matches(&event));
+        event.payload = json!({"id":42});
+        event.attachment = Some(json!({"token":"other"}));
+        assert!(!condition.matches(&event));
+        event.attachment = None;
+        assert!(!condition.matches(&event));
+        event.attachment = Some(json!({"token":"ours"}));
+        event.kind = "DELETE".into();
+        assert!(!condition.matches(&event));
+        event.kind = "PUT".into();
+        event.key_expr = "elsewhere/result".into();
+        assert!(!condition.matches(&event));
+    }
+
+    #[test]
+    fn invalid_predicates_fail_before_network_and_null_is_not_missing() {
+        for pointer in ["id", "/bad~", "/bad~2"] {
+            assert!(StopCondition::new(
+                Some("a".into()),
+                Some(vec![pointer.into(), "1".into()]),
+                None
+            )
+            .is_err());
+        }
+        assert!(StopCondition::new(
+            Some("a".into()),
+            Some(vec!["/id".into(), "invalid".into()]),
+            None
+        )
+        .is_err());
+        let predicate = JsonMatch::parse(Some(vec!["/a~1b".into(), "null".into()]))
+            .unwrap()
+            .unwrap();
+        assert!(predicate.matches(&json!({"a/b":null})));
+        assert!(!predicate.matches(&json!({})));
     }
 }

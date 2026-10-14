@@ -516,7 +516,7 @@ pub struct App {
     /// matches — turning "what is this key" into a question the tool answers.
     pub contract: Option<zenmon_core::contract::Contract>,
     /// Which field is plotted, per key. Remembered across cursor moves: coming
-    /// back to a vehicle should show the same signal you left it on.
+    /// back to a device should show the same signal you left it on.
     pub plot_field: HashMap<String, String>,
     /// Cursor inside the plot-field picker.
     pub plot_picker_selected: usize,
@@ -550,7 +550,7 @@ pub struct App {
     pub network_filtering: bool,
     /// Show only liveliness tokens that are not alive.
     ///
-    /// The question this space gets asked is "which one died", and on a fleet
+    /// The question this space gets asked is "which one died", and on a network
     /// the answer is a handful of rows among thousands. Sorting dead-first
     /// helps; being able to see nothing else is what actually answers it.
     pub network_dead_only: bool,
@@ -578,7 +578,7 @@ pub struct App {
     /// Deliver every reply rather than only the fastest.
     ///
     /// Zenoh consolidates by default, so when several queryables serve one key
-    /// — a service fanned across a fleet — only one answer is observable. That
+    /// — a service fanned across a network — only one answer is observable. That
     /// is the wrong default when the question is "which of them answered".
     pub query_all_replies: bool,
     pub query_results: Vec<ZenohMessage>,
@@ -625,7 +625,7 @@ pub struct App {
     pub liveliness_tokens: Vec<LivelinessToken>,
     /// Key expression → position in `liveliness_tokens`. The connect-time
     /// history replay delivers every token at once, and a linear search per
-    /// event made that burst quadratic on a large fleet.
+    /// event made that burst quadratic on a large network.
     liveliness_index: HashMap<String, usize>,
     pub liveliness_selected: usize,
     pub liveliness_events: VecDeque<LivelinessEventRecord>,
@@ -1157,9 +1157,9 @@ impl App {
     }
 
     /// Keys below `path` grouped by what follows their first segment under
-    /// it — `agv/f001/pose` and `agv/f002/pose` under `agv` are both `*/pose`
+    /// it — `sensors/f001/pose` and `sensors/f002/pose` under `sensors` are both `*/pose`
     /// — with a key count and summed rate, busiest first. One line for a
-    /// whole fleet's pose, however many vehicles. Empty when grouping would
+    /// whole network's pose, however many devices. Empty when grouping would
     /// not shorten anything.
     pub(crate) fn suffix_groups(&self, path: &str) -> Vec<(String, usize, f64)> {
         let prefix = format!("{path}/");
@@ -1184,7 +1184,7 @@ impl App {
         }
         let mut out: Vec<(String, usize, f64)> =
             groups.into_iter().map(|(s, (n, hz))| (s, n, hz)).collect();
-        // Ties on the name, so equal fleets do not reshuffle every second.
+        // Ties on the name, so equal networks do not reshuffle every second.
         out.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
         out
     }

@@ -114,7 +114,7 @@ pub(crate) fn warn_redundant_namespace<'a>(
 
 /// Resolve a publish/request value argument: `@<path>` reads the value from that
 /// file, `-` reads it from stdin, and anything else is the literal value. Lets
-/// large or dynamically-built payloads (e.g. a VDA5050 mission for `--task`) come
+/// large or dynamically-built payloads (e.g. a VDA5050 job for `--task`) come
 /// from a file instead of an unwieldy inline CLI string.
 pub(crate) fn resolve_payload_arg(s: &str) -> Result<String, ZenmonError> {
     let bytes = resolve_payload_arg_bytes(s)?;
@@ -233,22 +233,22 @@ mod tests {
 
     #[test]
     fn namespace_warns_when_key_already_prefixed() {
-        let w = namespace_redundant_prefix("myfleet/topic/x", Some("myfleet"));
+        let w = namespace_redundant_prefix("demo/topic/x", Some("demo"));
         assert!(w.is_some_and(|m| m.contains("already starts with namespace")));
         // Exact-equal to the namespace also warns.
-        assert!(namespace_redundant_prefix("myfleet", Some("myfleet")).is_some());
+        assert!(namespace_redundant_prefix("demo", Some("demo")).is_some());
     }
 
     #[test]
     fn namespace_no_warn_for_relative_or_absent() {
-        assert!(namespace_redundant_prefix("topic/x", Some("myfleet")).is_none());
-        assert!(namespace_redundant_prefix("myfleet/topic/x", None).is_none());
+        assert!(namespace_redundant_prefix("topic/x", Some("demo")).is_none());
+        assert!(namespace_redundant_prefix("demo/topic/x", None).is_none());
     }
 
     #[test]
     fn namespace_no_false_positive_on_partial_segment() {
-        // "myfleetx" must not be treated as under namespace "myfleet".
-        assert!(namespace_redundant_prefix("myfleetx/topic", Some("myfleet")).is_none());
+        // "demox" must not be treated as under namespace "demo".
+        assert!(namespace_redundant_prefix("demox/topic", Some("demo")).is_none());
     }
 
     #[test]

@@ -244,13 +244,7 @@ fn v2_show_emits_endpoints_and_derived_participants() {
 #[test]
 fn v2_show_treats_call_client_as_producer() {
     let out = zenmon()
-        .args([
-            "--json",
-            "contract",
-            "show",
-            "call/mission/pause",
-            FIXTURE_V2,
-        ])
+        .args(["--json", "contract", "show", "call/job/pause", FIXTURE_V2])
         .output()
         .expect("run zenmon");
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");

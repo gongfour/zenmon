@@ -33,10 +33,10 @@ topics:
     consumers: [orchestrator]
     description: Per-sensor point cloud
 
-  - key: call/mission/pause
+  - key: call/job/pause
     pattern: call
     consumers: [orchestrator]
-    description: Pause mission
+    description: Pause job
     request: {}
     response: {}
 
