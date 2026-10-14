@@ -758,12 +758,17 @@ fn scenario_reports_a_key_that_stops() {
     let p = prefix("stops");
     let session = hub.session.clone();
     let k = format!("{p}/pose");
-    // 20 Hz for ~1.2 s once zenmon is subscribed, then nothing.
+    let ready_key = format!("{p}/ready");
+    let ready = hub.session.declare_subscriber(&ready_key).wait().unwrap();
+    // A matching publisher can see another concurrent test's broad subscriber.
+    // Wait for this scenario's own trigger: it is sent after its subscriptions.
+    // 20 Hz for ~1.2 s, then nothing.
     let feeder = thread::spawn(move || {
         let publisher = session.declare_publisher(k).wait().unwrap();
-        while !publisher.matching_status().wait().unwrap().matching() {
-            thread::sleep(Duration::from_millis(20));
-        }
+        ready
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .expect("scenario ready trigger");
         for i in 0..25 {
             publisher.put(i.to_string()).wait().unwrap();
             thread::sleep(Duration::from_millis(50));
@@ -776,6 +781,9 @@ fn scenario_reports_a_key_that_stops() {
         "scenario",
         "--observe",
         &sel,
+        "--pub",
+        &ready_key,
+        "{}",
         "--for",
         "4s",
         "--no-timeline",
@@ -783,7 +791,9 @@ fn scenario_reports_a_key_that_stops() {
     feeder.join().unwrap();
 
     let episode: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let events = episode["events"].as_array().expect("events present");
+    let events = episode["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("events missing: {episode}"));
     let stopped = events
         .iter()
         .find(|e| e["kind"] == "stopped")
