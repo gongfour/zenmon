@@ -33,6 +33,7 @@ tauri-plugin-updater = "2"
 toml = "1"
 directories = "6"
 semver = "1"
+tempfile = "3"
 
 # Release builds are GUI-subsystem (see main.rs), which means no console and no
 # std handles — these are what reattach one when a terminal launched us.

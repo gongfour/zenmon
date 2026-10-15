@@ -25,6 +25,7 @@ use crate::config::Profile;
 pub enum CaptureState {
     Starting,
     Running,
+    Stopping,
     Idle,
     Failed,
 }
@@ -54,6 +55,7 @@ pub struct CaptureStatus {
     pub started_at_ms: Option<u64>,
     pub last_message_at_ms: Option<u64>,
     pub last_error: Option<String>,
+    pub operation_error: Option<String>,
 }
 
 fn epoch_millis(t: SystemTime) -> Option<u64> {
@@ -73,6 +75,7 @@ impl CaptureStatus {
             started_at_ms: None,
             last_message_at_ms: None,
             last_error: None,
+            operation_error: None,
         }
     }
 
@@ -120,10 +123,15 @@ impl CaptureHandle {
         self.status_rx.borrow().state.is_active()
     }
 
-    /// Await the task's teardown. Only meant to be called after `stop()`,
-    /// from the Quit handler.
-    pub async fn join(self) {
-        let _ = self.join.await;
+    /// Await teardown and retain the final write/close error, including panics.
+    pub async fn join(self) -> CaptureStatus {
+        let result = self.join.await;
+        let mut status = self.status_rx.borrow().clone();
+        if let Err(error) = result {
+            status.state = CaptureState::Failed;
+            status.last_error = Some(format!("capture task failed: {error}"));
+        }
+        status
     }
 }
 
@@ -270,12 +278,52 @@ async fn run_capture(
         if let Some(err) = end.error() {
             s.last_error = Some(err.to_string());
         }
-        s.state = if end.is_error() {
+        s.state = if s.last_error.is_some() {
             CaptureState::Failed
         } else {
             CaptureState::Idle
         };
     });
+}
+
+/// A controllable writer teardown, without a network session or GUI runtime.
+#[cfg(test)]
+pub(crate) fn controlled_test_capture(
+    error: Option<&'static str>,
+) -> (
+    CaptureHandle,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+    let (status_tx, status_rx) = watch::channel(CaptureStatus {
+        state: CaptureState::Running,
+        ..CaptureStatus::idle("default")
+    });
+    let (stopped_tx, stopped_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+    let join = tauri::async_runtime::spawn(async move {
+        stop_rx.changed().await.unwrap();
+        stopped_tx.send(()).unwrap();
+        finish_rx.await.unwrap();
+        status_tx.send_modify(|s| {
+            s.state = if error.is_some() {
+                CaptureState::Failed
+            } else {
+                CaptureState::Idle
+            };
+            s.last_error = error.map(str::to_string);
+        });
+    });
+    (
+        CaptureHandle {
+            stop_tx,
+            status_rx,
+            join,
+        },
+        stopped_rx,
+        finish_tx,
+    )
 }
 
 #[cfg(test)]

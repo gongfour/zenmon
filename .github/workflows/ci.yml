@@ -113,3 +113,5 @@ jobs:
         run: npm run build
       - name: clippy
         run: cargo clippy --locked -p zenmon-tray --all-targets
+      - name: capture lifecycle and settings tests
+        run: ./scripts/test-tray-windows.ps1

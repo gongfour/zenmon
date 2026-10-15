@@ -15,7 +15,7 @@ use zenmon_core::{ZenmonConfig, ZenmonError};
 const SCHEMA_VERSION: u32 = 1;
 const DEFAULT_PROFILE_NAME: &str = "default";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -28,7 +28,7 @@ fn default_schema_version() -> u32 {
     SCHEMA_VERSION
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub selected_profile: String,
     #[serde(default)]
@@ -37,7 +37,7 @@ pub struct AppSettings {
     pub last_capture_running: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     pub name: String,
     pub endpoint: String,
@@ -162,7 +162,7 @@ pub fn load(paths: &Paths) -> AppConfig {
     }
 }
 
-/// Atomic write: `config.toml.tmp` then rename over `config.toml`, so a
+/// Atomic write using a unique temporary file beside `config.toml`, so a
 /// killed process never leaves a half-written file behind.
 pub fn save(paths: &Paths, config: &AppConfig) -> std::io::Result<()> {
     let dir = paths
@@ -174,8 +174,10 @@ pub fn save(paths: &Paths, config: &AppConfig) -> std::io::Result<()> {
     let text = toml::to_string_pretty(config)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
 
-    let tmp = paths.config_file.with_extension("toml.tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, &paths.config_file)?;
+    use std::io::Write;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(text.as_bytes())?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(&paths.config_file).map_err(|e| e.error)?;
     Ok(())
 }

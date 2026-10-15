@@ -7694,6 +7694,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
  "tauri-plugin-updater",
+ "tempfile",
  "tokio",
  "toml 1.1.4+spec-1.1.0",
  "tracing",
