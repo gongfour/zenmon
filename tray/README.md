@@ -259,3 +259,12 @@ cannot be disabled. Therefore:
 - **The settings window's CSS viewport can be narrow** (~450 px on a 200 % DPI
   display), so the form has a stacking breakpoint at 620 px. Check both widths
   when adding rows.
+
+## Tests
+
+Run `cargo test --locked -p zenmon-tray --lib` on macOS. On Windows, run
+`./scripts/test-tray-windows.ps1` from the repository root after `npm run build`
+in `tray/`. The helper embeds the Common Controls v6 dependency in Cargo's unit
+test executable using the Windows SDK manifest tool. Tauri already embeds this
+in the application binary, but not the library test harness. No GUI is launched
+by these lifecycle and persistence tests.
