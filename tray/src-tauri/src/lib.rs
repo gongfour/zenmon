@@ -10,24 +10,22 @@ use tauri::{AppHandle, Manager};
 
 use crate::state::AppState;
 
-/// Stop capture cleanly (flush + Zenoh teardown) before the process exits.
-/// Bounded by the exit that follows, so blocking the menu thread here is fine.
+/// Serialize exit with capture transitions without blocking the UI thread.
 pub fn quit(app: &AppHandle) {
-    let handle = {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        let mut inner = state.lock();
-        inner.config.app.last_capture_running = inner.capture.is_some();
-        if let Err(err) = config::save(&state.paths, &inner.config) {
-            tracing::error!(error = %err, "failed to save config on quit");
+        let _operation = state.operations.lock().await;
+        if state.lock().shutting_down {
+            return;
         }
-        inner.capture.take()
-    };
-
-    if let Some(handle) = handle {
-        handle.stop();
-        tauri::async_runtime::block_on(handle.join());
-    }
-    app.exit(0);
+        if let Err(error) = state::prepare_exit(&app).await {
+            state::report_operation_error(&app, error);
+            state::show_settings(&app);
+            return;
+        }
+        app.exit(0);
+    });
 }
 
 fn init_logging(paths: &config::Paths) {
@@ -81,9 +79,12 @@ pub fn run() {
             let handle = app.handle().clone();
             tray::build(&handle)?;
             if resume {
-                if let Err(err) = state::start_capture(&handle) {
-                    tracing::error!(error = %err, "resume capture on launch failed");
-                }
+                let resume_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = state::start_capture(&resume_handle).await {
+                        state::report_operation_error(&resume_handle, err);
+                    }
+                });
             }
             state::push_status(&handle);
             Ok(())
@@ -113,6 +114,16 @@ pub fn run() {
             commands::install_cli,
             commands::update_cli,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running zenmon-tray");
+        .build(tauri::generate_context!())
+        .expect("error while building zenmon-tray")
+        .run(|app, event| {
+            // Native Quit (including Cmd+Q) must use the same writer teardown
+            // as the tray menu. Our final app.exit() is allowed through.
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if !app.state::<AppState>().lock().shutting_down {
+                    api.prevent_exit();
+                    quit(app);
+                }
+            }
+        });
 }

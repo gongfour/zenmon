@@ -3,7 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-export type CaptureState = "starting" | "running" | "idle" | "failed";
+export type CaptureState = "starting" | "stopping" | "running" | "idle" | "failed";
 
 export interface CaptureStatus {
   state: CaptureState;
@@ -14,6 +14,7 @@ export interface CaptureStatus {
   started_at_ms: number | null;
   last_message_at_ms: number | null;
   last_error: string | null;
+  operation_error: string | null;
 }
 
 export interface Profile {

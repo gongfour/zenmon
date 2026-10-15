@@ -15,8 +15,8 @@ pub fn get_config(app: AppHandle) -> AppConfig {
 }
 
 #[tauri::command]
-pub fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
-    crate::state::replace_config(&app, config)
+pub async fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
+    crate::state::replace_config(&app, config).await
 }
 
 #[tauri::command]
@@ -25,13 +25,13 @@ pub fn get_status(app: AppHandle) -> CaptureStatus {
 }
 
 #[tauri::command]
-pub fn toggle_capture(app: AppHandle) -> Result<(), String> {
-    crate::state::toggle_capture(&app)
+pub async fn toggle_capture(app: AppHandle) -> Result<(), String> {
+    crate::state::toggle_capture(&app).await
 }
 
 #[tauri::command]
-pub fn select_profile(app: AppHandle, name: String) -> Result<(), String> {
-    crate::state::select_profile(&app, &name)
+pub async fn select_profile(app: AppHandle, name: String) -> Result<(), String> {
+    crate::state::select_profile(&app, &name).await
 }
 
 #[tauri::command]

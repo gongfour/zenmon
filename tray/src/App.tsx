@@ -42,6 +42,8 @@ function pillFor(status: CaptureStatus | null): { cls: string; text: string } {
         : { cls: "run", text: "capturing" };
     case "starting":
       return { cls: "warn", text: "connecting" };
+    case "stopping":
+      return { cls: "warn", text: "finishing recording" };
     case "failed":
       return { cls: "stop", text: "failed" };
     default:
@@ -105,6 +107,7 @@ export function App() {
   const [launchOnLogin, setLaunchOnLogin] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(loadMode());
   const [error, setError] = useState<string | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [cli, setCli] = useState<CliStatus | null>(null);
@@ -151,6 +154,9 @@ export function App() {
   const pill = pillFor(status);
   const capturing = status?.state === "running" || status?.state === "starting";
 
+  const transitioning = captureBusy || status?.state === "stopping";
+  const visibleError = error || status?.operation_error;
+
   const patchProfile = (patch: Partial<Profile>) => {
     setConfig({
       ...config,
@@ -159,12 +165,15 @@ export function App() {
   };
 
   const onSave = async () => {
+    setCaptureBusy(true);
     try {
       await saveConfig(config);
       await load();
       setError(null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setCaptureBusy(false);
     }
   };
 
@@ -279,12 +288,12 @@ export function App() {
         </div>
       </div>
 
-      <div className="body">
-        {error && (
-          <div className="note err">
-            <span className="msg">{error}</span>
-          </div>
-        )}
+      {visibleError && (
+        <div className="note err" role="alert" style={{ margin: "12px 24px 0" }}>
+          <span className="msg">{visibleError}</span>
+        </div>
+      )}
+      <fieldset className="body" disabled={transitioning} style={{ border: 0, margin: 0, minWidth: 0 }}>
 
         <div className="pstrip">
           {config.profiles.map((p, i) => (
@@ -636,18 +645,24 @@ export function App() {
             </div>
           )}
         </div>
-      </div>
+      </fieldset>
 
       <div className="footbar">
         <button
           className="btn"
-          onClick={() => toggleCapture().catch((e) => setError(String(e)))}
+          disabled={transitioning}
+          onClick={async () => {
+            setCaptureBusy(true);
+            try { await toggleCapture(); setError(null); }
+            catch (e) { setError(String(e)); }
+            finally { setCaptureBusy(false); }
+          }}
         >
-          {capturing ? "Stop capture" : "Start capture"}
+          {status?.state === "stopping" ? "Finishing recording…" : capturing ? "Stop capture" : "Start capture"}
         </button>
         <button
           className="btn danger"
-          disabled={config.profiles.length <= 1}
+          disabled={transitioning || config.profiles.length <= 1}
           onClick={() => setConfirmDelete(true)}
         >
           Delete profile
@@ -656,10 +671,10 @@ export function App() {
         <button className="btn" onClick={() => hideSettings()}>
           Close
         </button>
-        <button className="btn" disabled={!dirty} onClick={() => saved && setConfig(saved)}>
+        <button className="btn" disabled={!dirty || transitioning} onClick={() => saved && setConfig(saved)}>
           Revert
         </button>
-        <button className="btn primary" disabled={!dirty} onClick={onSave}>
+        <button className="btn primary" disabled={!dirty || transitioning} onClick={onSave}>
           Save
         </button>
       </div>

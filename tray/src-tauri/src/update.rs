@@ -17,7 +17,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
-use crate::config;
 use crate::state::AppState;
 
 /// Event name the frontend listens on for update status pushes.
@@ -236,10 +235,25 @@ pub async fn apply(app: &AppHandle, confirmed: bool) -> Result<(), String> {
     // the installer. On Windows the install step kills this process (the NSIS
     // run uses /P /R and relaunches the app), so "installing" is the last
     // status that reliably lands.
-    stop_capture_for_restart(app).await;
+    let capture_state = app.state::<AppState>();
+    let _operation = capture_state.operations.lock().await;
+    // Capture may have started while downloading. Recheck under the same gate
+    // used by start/stop so the confirmation cannot become stale.
+    let preparation = if crate::state::capture_active(&capture_state.lock()) && !confirmed {
+        Err("capture-running".to_string())
+    } else {
+        crate::state::prepare_exit(app).await
+    };
+    if let Err(error) = preparation {
+        let mut status = UpdateStatus::new("error");
+        status.message = Some(error.clone());
+        push(app, status);
+        return Err(error);
+    }
     push(app, UpdateStatus::new("installing"));
 
     if let Err(e) = update.install(bytes) {
+        capture_state.lock().shutting_down = false;
         let mut status = UpdateStatus::new("error");
         status.message = Some(e.to_string());
         push(app, status);
@@ -249,25 +263,4 @@ pub async fn apply(app: &AppHandle, confirmed: bool) -> Result<(), String> {
     // Only reached on platforms whose installer does not kill the process
     // (not Windows). Restart explicitly so the new binary takes over.
     app.restart();
-}
-
-/// Stop a running capture the way Quit does — flush, close the segment, tear
-/// down the Zenoh session — but record it as *running* so the post-update
-/// relaunch resumes it.
-async fn stop_capture_for_restart(app: &AppHandle) {
-    let handle = {
-        let state = app.state::<AppState>();
-        let mut inner = state.lock();
-        inner.config.app.last_capture_running = inner.capture.is_some();
-        if let Err(err) = config::save(&state.paths, &inner.config) {
-            tracing::error!(error = %err, "failed to save config before update");
-        }
-        inner.capture.take()
-    };
-
-    if let Some(handle) = handle {
-        handle.stop();
-        handle.join().await;
-        crate::state::push_status(app);
-    }
 }

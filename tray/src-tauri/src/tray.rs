@@ -46,23 +46,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             } = event
             {
                 let app = tray.app_handle().clone();
-                if let Err(err) = crate::state::toggle_capture(&app) {
-                    tracing::error!(error = %err, "toggle capture failed");
-                    crate::state::push_status(&app);
-                }
+                dispatch_toggle(app);
             }
         })
         .on_menu_event(|app, event| {
             let id = event.id.as_ref();
             let app = app.clone();
             match id {
-                ID_CAPTURE => {
-                    if let Err(err) = crate::state::toggle_capture(&app) {
-                        tracing::error!(error = %err, "toggle capture failed");
-                        // Reflect the failure instead of leaving the checkmark lying.
-                        crate::state::push_status(&app);
-                    }
-                }
+                ID_CAPTURE => dispatch_toggle(app),
                 ID_SETTINGS => crate::state::show_settings(&app),
                 ID_OPEN_FOLDER => {
                     if let Err(err) = crate::state::open_store_folder(&app) {
@@ -82,9 +73,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 ID_QUIT => crate::quit(&app),
                 other => {
                     if let Some(name) = other.strip_prefix(PROFILE_PREFIX) {
-                        if let Err(err) = crate::state::select_profile(&app, name) {
-                            tracing::error!(error = %err, "select profile failed");
-                        }
+                        let name = name.to_string();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(err) = crate::state::select_profile(&app, &name).await {
+                                crate::state::report_operation_error(&app, err);
+                                crate::state::show_settings(&app);
+                            }
+                        });
                     }
                 }
             }
@@ -92,6 +87,15 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
 
     Ok(())
+}
+
+fn dispatch_toggle(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = crate::state::toggle_capture(&app).await {
+            crate::state::report_operation_error(&app, err);
+            crate::state::show_settings(&app);
+        }
+    });
 }
 
 /// Rebuild and install the menu — for profile add/remove/rename/selection.
@@ -201,13 +205,14 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
     };
     if let Some(item) = capture_item {
         let _ = item.set_checked(status.state.is_active());
+        let _ = item.set_enabled(status.state != CaptureState::Stopping);
     }
 
     if icon_changed {
         let color = match status.state {
             CaptureState::Running if status.is_degraded() => COLOR_WARNING,
             CaptureState::Running => COLOR_ONLINE,
-            CaptureState::Starting => COLOR_WARNING,
+            CaptureState::Starting | CaptureState::Stopping => COLOR_WARNING,
             CaptureState::Failed => COLOR_ERROR,
             CaptureState::Idle => COLOR_IDLE,
         };
@@ -226,10 +231,14 @@ pub fn refresh_visuals(app: &AppHandle, status: &CaptureStatus) {
         (None, CaptureState::Starting) => {
             format!("zenmon-tray — {} · connecting…", status.profile_name)
         }
+        (None, CaptureState::Stopping) => {
+            format!("zenmon-tray — {} · stopping…", status.profile_name)
+        }
         (None, _) => "zenmon-tray — not capturing".to_string(),
     };
     let hint = match status.state {
         CaptureState::Running | CaptureState::Starting => "Click to stop",
+        CaptureState::Stopping => "Finishing recording…",
         CaptureState::Failed => "Click to retry",
         CaptureState::Idle => "Click to start",
     };

@@ -64,6 +64,20 @@ The binary starts hidden — it lives in the system tray:
 - Closing the settings window hides it; only **Quit** exits (capture survives
   closing the window)
 
+Capture transitions finish the current segment and close the Zenoh session
+before starting another capture. While **finishing recording** is shown, capture
+and settings changes are disabled; the window remains responsive. A teardown
+failure stays visible and prevents an automatic restart. Start capture explicitly
+to retry after resolving the error.
+
+Saving preferences or an inactive profile leaves the current capture running.
+Changes to the selected profile restart it only when it was starting or running;
+a failed capture is not restarted by saving settings. Settings are validated and
+atomically saved before being applied. A save failure leaves the prior settings
+and capture intact and is shown in the settings window. If saving succeeds but
+the subsequent capture transition fails, the new settings remain saved and the
+transition error is shown. Quit and self-update use the same serialized teardown.
+
 Logs go to stdout *and* `%LOCALAPPDATA%\zenmon-tray\data\logs\zenmon-tray.log`.
 `RUST_LOG` overrides the default filter (`warn,zenmon_tray=debug,zenmon_core=debug`).
 
